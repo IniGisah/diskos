@@ -138,6 +138,14 @@ today (the DAC just has to already be configured for the rate).
 | Framebuffer virtual | 360×**1080** = triple-buffered 360×360 |
 | **Overlay layers** | `fb0`-`fb3` = **4 hardware LCDC planes** (`/dev/fb0..fb3`) |
 | Backlight | standard `backlight` class, **41 levels (0-40)** |
+| Panel controller | `/dev/lcd_st77916` (Sitronix ST77916) |
+
+**Panel power control (`/dev/lcd_st77916`):**
+- **Suspend (`0x2000ef01`):** commands ST77916 into deep hardware sleep (`SLPIN`).
+- **Resume (`0x2000ef02`):** commands ST77916 to exit sleep (`SLPOUT`).
+- **Power sequencing (stock timing):**
+  - **Sleep:** cut backlight power rail (`bl_power = 4`), write brightness `0`, delay **120ms** for panel discharge, then issue `0x2000ef01`.
+  - **Wake:** issue `0x2000ef02`, delay **50ms** for panel stabilization, restore backlight brightness, then unblank rail (`bl_power = 0`).
 
 **Layer control interface (confirmed via sysfs):** `ingenicfb` exposes `layer0`-`layer3`
 under `/sys/class/graphics/fb0/device/`, each with `enable`, `src_fmt`, `src_size`,
@@ -163,7 +171,15 @@ scaled cover or a dim backdrop under the LVGL UI) with no CPU blend. BUT:
 | Device | node | notes |
 |---|---|---|
 | Touch | `/dev/input/event1` - **cst816t** | single-finger panel, but speaks **MT type-B** protocol (slot/tracking-id/ABS_MT_POSITION_X/Y/TOUCH_MAJOR/PRESSURE; no plain ABS_X/Y). Caps `EV=0xb`, `ABS=0x6618000` (high word). |
-| Keys | `/dev/input/event0` - **x2000_key** | **physical buttons** (GPIO keys) |
+| Keys | `/dev/input/event0` - **x2000_key** | **physical buttons** (GPIO keys; power button is code 259) |
+| Touch control | `/dev/cst816t` | Hynitron CST816T hardware power & mode control |
+
+**Touch controller power states (`/dev/cst816t`):**
+- **Deep Sleep (`0x2000ef03`):** completely halts capacitive scanning and driver IRQs (~0mA draw). Used for stock standby and when Touch to Wake is disabled.
+- **Resume / Low-Power IRQ (`0x2000ef04`):** restores active capacitive scanning. Used awake, and during sleep when Touch to Wake is enabled.
+
+**Power button & player synchronization:**
+`mq_player` reads key 259 from `/dev/input/event0` and checks its internal `screen_on` flag at fixed virtual address `0x82e995` (`1` = awake, `0` = asleep) and `saved_brightness` at `0x82e994`. If `screen_on == 0`, a power press executes the hardware wake sequence; if `1`, it executes sleep. diskOS synchronizes these two bytes directly via `/proc/<pid>/mem` so physical power button wake is always single-press with zero race conditions.
 
 We can synthesize input by writing the 32-bit-ABI `input_event` (16-byte) MT-B sequence to
 `/dev/input/event1` - verified working (used to drive stock's UI pages over serial during RE). diskOS can also read the hardware keys via event0.

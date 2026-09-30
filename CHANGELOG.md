@@ -5,6 +5,25 @@ All notable changes to diskOS are documented here.
 Entries follow the Keep a Changelog format, with Added, Changed, and Fixed categories where applicable.
 diskOS remains beta software; version numbers do not imply broad hardware or feature validation.
 
+## [Unreleased]
+
+### Added
+
+- A **"Touch to Wake"** toggle under **Settings -> Display** (default: **Off** for maximum battery life). When disabled, the touch controller is placed into full hardware deep sleep (0mA) matching stock standby; when enabled, tapping the dark screen wakes the device.
+- Authentic procedural vinyl record placeholder on the screensaver when playing tracks without album art, preventing a pitch-black screen.
+
+### Changed
+
+- Screen sleep now executes the exact stock hardware power-sequencing: CST816T deep sleep (`0x2000ef03`), backlight rail cut (`bl_power = 4`), 120ms controller discharge delay, and ST77916 LCD panel sleep (`0x2000ef01`).
+- Screen wake executes stock resume sequence: ST77916 exit sleep (`0x2000ef02`), 50ms stabilization delay, backlight restoration, and CST816T resume (`0x2000ef04`).
+- Screen off timeout now operates independently when the screensaver is set to Off.
+
+### Fixed
+
+- Single-press physical power button wake: synchronized `mq_player`'s internal `screen_on` flag directly via process memory, eliminating double-press wake and key-injection race conditions.
+- Prevented blind touches on a dark screen from clicking or pausing UI controls underneath by disabling LVGL's touch input device while the screen is off and draining finger release on wake.
+- Fixed auto-sleep triggering a false manual power-button blank event in the backlight poll loop.
+
 ## [1.1.3] - 2026-09-24
 
 A safety release. The stock FiiO player, which diskOS runs alongside, tries to unmount the microSD
