@@ -36,6 +36,7 @@
 #include "playstate.h"
 #include "sdio.h"
 #include "art.h"
+#include "modelock.h"
 
 static lv_indev_t *g_touch = NULL;
 static int         g_screen_off = 0;   /* mirrors (bl_state==2) each main-loop iteration; read by the
@@ -436,8 +437,11 @@ static int source_send(int mode){
             if(ipc_send_cmd("0642000C0002") < 0) return -1;
             return ipc_send_cmd("0657000C0008");
         case 2:
-            if(ipc_send_cmd("0818000C0000") < 0 || ipc_send_cmd("0642000C0000") < 0) return -1;
-            return ipc_send_cmd("0657000C0006");
+            /* For Bluetooth Receiving Mode (Mode 2), we keep mq_player paused in
+             * local mode so it does NOT lock BlueALSA or conflict with bluealsa-aplay.
+             * The Bluetooth daemon stack and bluealsa-aplay handle routing. */
+            if(ipc_send_cmd("0642000C0000") < 0) return -1;
+            return ipc_send_cmd("0657000C0008");
         case 3:
             if(ipc_send_cmd("0642000C0001") < 0) return -1;
             return ipc_send_cmd("0657000C0008");
@@ -469,6 +473,7 @@ int ui_set_source_mode(int mode){
         g_sd_phase = SD_DRAIN; g_sd_deadline = lv_tick_get() + 20000;
         art_cancel();
         pthread_mutex_unlock(&g_sd_mode_mu);
+        modelock_open(3);
         return 0;
     }
     if(g_sd_phase == SD_HOST){
@@ -476,6 +481,8 @@ int ui_set_source_mode(int mode){
         g_sd_return_mode = mode; g_sd_phase = SD_WAIT_LOCAL;
         g_sd_deadline = lv_tick_get() + 20000;
         if(source_send(mode) < 0){ storage_unknown("return request failed"); return -1; }
+        if(mode == 0) modelock_close();
+        else modelock_open(mode);
         return 0;
     }
     int was_playing = g_playing;
@@ -483,12 +490,18 @@ int ui_set_source_mode(int mode){
     if(source_send(mode) < 0){ ui_toast("Couldn't switch mode"); return -1; }
     g_source_mode = mode;
     if(mode == 0 && was_playing) ipc_send_cmd("0201000C0000");
+    if(mode == 1 || mode == 2 || mode == 3){
+        modelock_open(mode);
+    } else {
+        modelock_close();
+    }
     return 0;
 }
 static void storage_resume_local(void){
     if(unlink(SD_EXPORT_MARKER) != 0 && errno != ENOENT){ storage_unknown("cannot clear handoff state"); return; }
     if(!sd_io_resume()){ storage_unknown("local mount changed during return"); return; }
     atomic_store(&g_sd_writable, 1); g_sd_phase = SD_LOCAL; g_source_mode = g_sd_return_mode;
+    if(g_sd_return_mode == 0) modelock_close();
     g_sd_reissue = 0;
     albumwall_prewarm_seed();
     fprintf(stderr, "storage: local mount confirmed; SD readers and artwork cache resumed\n"); fflush(stderr);
@@ -752,6 +765,9 @@ int ui_set_volume(int vol){
     char f[16]; snprintf(f, sizeof f, "0715000C%04X", vol);
     int rc = ipc_send_cmd(f);
     fprintf(stderr,"set volume %d -> %s (rc=%d)\n", vol, f, rc); fflush(stderr);
+    if(modelock_is_active() && modelock_get_mode() == 2){
+        bt_rx_sync_volume(vol);
+    }
     return rc;   /* 0 = queued OK, -1 = send failed (caller can retry) */
 }
 /* Play a library list. The player builds the list itself (drop LIST_SONG_0 then
@@ -987,7 +1003,7 @@ void ui_play_book(const char *path, long resume_ms){
      * Local analog route only (never a BT A2DP path). */
     if(ui_get_source_mode() == 0 && !g_route_mac[0]){
         ipc_send_cmd("0657000C0008");                      /* LOCALPLAYER work-mode (fixes NO_WORK_MODE). NOT 0666:
-                                                            * we're already on the local route (gated above), and a
+                                                            * we're already on the local/DAC route (gated above), and a
                                                             * redundant out_dev re-init pauses the stream ~1.5s in. */
     }
     if(ipc_send_cmd("0102000C0004") != 0){ ui_toast("Couldn't start book"); return; }   /* Single play-mode is REQUIRED for clean EOF isolation; if it can't be set, don't start the book unguarded */
@@ -1793,9 +1809,6 @@ static int uac_bound(void){
     for(size_t i = 0; i < n; i++) if(b[i] > ' ') return 1;      /* non-blank UDC -> bound */
     return 0;
 }
-/* M17: detect the source mode from the REAL USB gadget state, not our intent mirror: Storage =
- * storage_demo exported, USB-DAC = uac_demo bound, else no USB gadget (Local; BT sink is
- * gadget-invisible so it reads as Local here). */
 int ui_detect_source_mode(void){
     if(sd_exported_to_host()) return 3;
     if(uac_bound())           return 1;
@@ -2441,6 +2454,11 @@ int main(int argc, char **argv){
     settings_apply_startup();   /* restore saved brightness */
     wifi_init_intent();         /* seed wifi_on intent from stock WIFI_STATUS (first run only) */
     fprintf(stderr,"step:screens_init\n");fflush(stderr); screens_init();
+    int boot_sm = ui_detect_source_mode();
+    if(boot_sm == 1 || boot_sm == 3){
+        g_source_mode = boot_sm;
+        modelock_open(boot_sm);
+    }
     home_set_settings_click_cb(go_settings);
     library_set_song_click_cb(on_song_play);   /* tap a song -> play it */
     search_set_song_click_cb(on_search_play);   /* search result -> play in all-songs scope (no stale drill ctx) */
@@ -2644,6 +2662,9 @@ int main(int argc, char **argv){
                 if(screen_current()==SCR_SAVER) screen_back();
                 ui_show_volume(st.volume);
             }
+            if(modelock_is_active() && modelock_get_mode() == 2){
+                bt_rx_sync_volume(st.volume);
+            }
         }
         /* the metadata 'state' field is unreliable (reports 0 while playing); infer play/pause from
          * whether position is advancing. One source of truth in playstate.c (host-tested); matches the
@@ -2839,6 +2860,16 @@ int main(int argc, char **argv){
                     int vert = ady > adx*2, horiz = adx > ady*2;
                     if(lvgl_owned || ui_np_fsart_active()){
                         /* swallow - LVGL handled (or will handle) the open/close */
+                    } else if(cur == SCR_MODELOCK || s_press_scr == SCR_MODELOCK){
+                        /* On lockdown mode, allow top pull-down to open Quick Settings (status bar) */
+                        if((sy < 140 && dy > 20 && ady > (adx / 2)) || (sy < 80 && dy > 15)){
+                            screen_show(SCR_QUICK);
+                            quicksettings_refresh(playing);
+                        } else if(sx < 120 && dx > 25 && adx > ady){
+                            /* swipe back gesture prompts exit confirmation */
+                            modelock_prompt_exit();
+                        }
+                        /* swallow all other nav gestures in lockdown mode */
                     } else if(!seek_consumed){
                     if(cur==SCR_QUICK && vert && dy<0 && ady>=g_swipe_thresh && dt<700){
                         screen_back();                       /* swipe up closes quick settings */
