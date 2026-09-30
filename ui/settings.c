@@ -296,17 +296,10 @@ void ui_backlight(int v){
         FILE *f = fopen("/sys/class/backlight/backlight/brightness", "w");
         if(f){ fprintf(f, "%d", v); fclose(f); }
         else  fprintf(stderr, "backlight brightness open failed: %s\n", strerror(errno));
-        FILE *p = fopen("/sys/class/backlight/backlight/bl_power", "w");
-        if(p){ fprintf(p, "0"); fclose(p); }
-        else  fprintf(stderr, "backlight bl_power open failed: %s\n", strerror(errno));
-    } else {
-        FILE *p = fopen("/sys/class/backlight/backlight/bl_power", "w");
-        if(p){ fprintf(p, "4"); fclose(p); }
-        else  fprintf(stderr, "backlight bl_power open failed: %s\n", strerror(errno));
-        FILE *f = fopen("/sys/class/backlight/backlight/brightness", "w");
-        if(f){ fprintf(f, "0"); fclose(f); }
-        else  fprintf(stderr, "backlight brightness open failed: %s\n", strerror(errno));
     }
+    FILE *p = fopen("/sys/class/backlight/backlight/bl_power", "w");
+    if(p){ fprintf(p, "%d", v ? 0 : 4); fclose(p); }
+    else  fprintf(stderr, "backlight bl_power open failed: %s\n", strerror(errno));
 }
 static void apply_brightness(int v){ if(v < 1) v = 1; ui_backlight(v); }
 void settings_apply_startup(void){

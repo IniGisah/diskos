@@ -2840,7 +2840,7 @@ int main(int argc, char **argv){
                     if(lvgl_owned || ui_np_fsart_active()){
                         /* swallow - LVGL handled (or will handle) the open/close */
                     } else if(!seek_consumed){
-                    if(cur==SCR_QUICK && ((vert && dy<0 && ady>=g_swipe_thresh && dt<700) || (dy < -25 && ady > adx))){
+                    if(cur==SCR_QUICK && vert && dy<0 && ady>=g_swipe_thresh && dt<700){
                         screen_back();                       /* swipe up closes quick settings */
                     } else if(cur!=SCR_QUICK && cur!=SCR_SAVER && sy<40 &&
                               vert && dy>0 && dy>=g_swipe_thresh && dt<700){
@@ -2928,18 +2928,16 @@ int main(int argc, char **argv){
          * brightness==0 && bl_power==0 is unambiguously a player-side blank. Catch it on a slow poll,
          * fully power the rail down (bl_power=4) and sync bl_state=2 so only a touch wakes. When the
          * player raises brightness again (a second power press), bring the panel back to match. */
-        if(lv_tick_elaps(last_blpoll) >= 50){
+        if(lv_tick_elaps(last_blpoll) >= 250){
             last_blpoll = lv_tick_get();
             int cbr = read_int_file("/sys/class/backlight/backlight/brightness");
             int cbp = read_int_file("/sys/class/backlight/backlight/bl_power");
             if(cbr == 0 && cbp == 0){
                 /* player blanked via brightness-only -> cut the rail. Won't re-fire (bl_power now 4). */
                 ui_backlight(0); bl_state = 2; player_blanked = 1;
-                if(screen_current() == SCR_SAVER) screen_back();
-            } else if((player_blanked || bl_state == 2) && cbr > 0){
-                /* player or power press restored brightness -> restore the panel immediately. */
+            } else if(player_blanked && cbr > 0){
+                /* player un-blanked (2nd power press restored brightness) -> restore the panel. */
                 ui_backlight(cbr); bl_state = 0; last_activity = lv_tick_get(); player_blanked = 0;
-                if(screen_current() == SCR_SAVER) screen_back();
             }
         }
 
@@ -3006,7 +3004,7 @@ int main(int argc, char **argv){
             uint32_t off_at = manual ? (uint32_t)(screenoff_extra > 0 ? screenoff_extra : 10)*1000
                                      : (uint32_t)(saver_timeout+screenoff_extra)*1000;
             if(bl_state==1 && (manual || screenoff_extra > 0) && idle > off_at){
-                ui_backlight(0); bl_state = 2; player_blanked = 1;
+                ui_backlight(0); bl_state = 2;
                 /* screen fully off -> STOP the screensaver. Leaving SCR_SAVER: (a) satisfies "the
                  * saver stops when the screen turns off"; (b) pops back to the screen shown BEFORE
                  * the saver, so a later wake lands there, not on the saver; (c) makes saver_anim_cb
@@ -3028,7 +3026,13 @@ int main(int argc, char **argv){
         g_bl_idle = (bl_state >= 1);   /* prewarm worker reads this: only work while dimmed/off */
         int busy = lv_anim_count_running() > 0 || prev_ts == LV_INDEV_STATE_PRESSED;
         if(bl_state == 2){
-            wait = 100;
+            /* deep idle (panel off): sleep ~5x/s REGARDLESS of any running animation. Nothing is
+             * visible, so a stray infinite anim (e.g. a Wi-Fi/BT scan glyph left spinning, or the
+             * saver's own motion) must NOT drop us to the 5ms 'busy' cap and spin the CPU at 200Hz -
+             * that was the real reason "screen off" wasn't saving power. Wake stays reliable because
+             * the raw evdev fd (drained every loop, above) holds a real finger-press in its kernel
+             * queue across the 200ms sleep; we no longer rely on catching an LVGL press-edge. */
+            wait = 200;
         } else {
             uint32_t cap = busy ? 5 : 30;
             if(wait > cap) wait = cap;
