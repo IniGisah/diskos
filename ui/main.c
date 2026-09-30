@@ -21,6 +21,7 @@
 #include <sys/stat.h>
 #include <dirent.h>      /* mkdir() for the SD mount point */
 #include <linux/input.h>   /* EVIOCGKEY / KEY_MAX for the boot-time Vol-Up override */
+#include <sys/time.h>
 #include <net/if.h>
 #include "lvgl/lvgl.h"
 #include "fb_pan.h"
@@ -53,6 +54,125 @@ static int         g_touch_raw = -1;   /* a 2nd, RAW read-only fd on the touch e
 static volatile int g_manual_sleep = 0;
 static uint32_t g_manual_sleep_at = 0;
 void ui_request_sleep(void){ g_manual_sleep = 1; g_manual_sleep_at = lv_tick_get(); }
+
+/* Find mq_player's process ID by scanning /proc/<pid>/comm (fast, zero shell overhead) */
+static int get_mq_player_pid(void){
+    static int cached_pid = -1;
+    if(cached_pid > 0){
+        char comm_path[32];
+        snprintf(comm_path, sizeof(comm_path), "/proc/%d/comm", cached_pid);
+        FILE *f = fopen(comm_path, "r");
+        if(f){
+            char comm[32] = {0};
+            if(fgets(comm, sizeof(comm), f) && strstr(comm, "mq_player")){
+                fclose(f);
+                return cached_pid;
+            }
+            fclose(f);
+        }
+    }
+    cached_pid = -1;
+    DIR *d = opendir("/proc");
+    if(!d) return -1;
+    struct dirent *de;
+    while((de = readdir(d)) != NULL){
+        if(de->d_name[0] >= '1' && de->d_name[0] <= '9'){
+            char path[64];
+            snprintf(path, sizeof(path), "/proc/%s/comm", de->d_name);
+            FILE *f = fopen(path, "r");
+            if(f){
+                char comm[32] = {0};
+                if(fgets(comm, sizeof(comm), f) && strstr(comm, "mq_player")){
+                    cached_pid = atoi(de->d_name);
+                    fclose(f);
+                    break;
+                }
+                fclose(f);
+            }
+        }
+    }
+    closedir(d);
+    return cached_pid;
+}
+
+/* Synchronize mq_player's internal screen_on (0x82e995) and saved_brightness (0x82e994)
+ * so that when the physical power button is pressed, mq_player's input thread executes
+ * the exact matching action (wake on press 1 if screen is off; sleep if screen is on) */
+static void sync_player_screen_state(int on, int brightness){
+    int pid = get_mq_player_pid();
+    if(pid <= 0) return;
+    char path[32];
+    snprintf(path, sizeof(path), "/proc/%d/mem", pid);
+    int fd = open(path, O_RDWR);
+    if(fd >= 0){
+        unsigned char data[2];
+        data[0] = (unsigned char)(brightness > 0 ? brightness : ui_get_brightness());
+        data[1] = on ? 1 : 0;
+        pwrite(fd, data, 2, 0x82e994);
+        close(fd);
+    }
+}
+
+/* Real hardware screen turn-off matching stock firmware (0x4de1bc):
+ * 1. CST816T: Deep hardware sleep (0x2000ef03, 0mA) unless Touch to Wake is enabled on auto-sleep.
+ * 2. Backlight: Cut power rail (bl_power=4) and set brightness 0.
+ * 3. 120ms delay: ST77916 power sequencing timing required by panel controller.
+ * 4. ST77916: Enter sleep mode (0x2000ef01 SUSPEND_CMD).
+ * 5. Touch indev: Disabled in LVGL so dark screen never registers blind clicks.
+ * 6. mq_player: Sync internal screen_on=0 so physical power button wakes on first press. */
+static void hardware_screen_sleep(int is_auto_sleep){
+    int touch_wake_ok = cfg_get_int("touch_wake", 0);
+    int fd_touch = open("/dev/cst816t", O_RDWR | O_NONBLOCK);
+    if(fd_touch >= 0){
+        if(!touch_wake_ok || !is_auto_sleep){
+            /* Full hardware deep sleep (0mA) - touch controller stops scanning */
+            ioctl(fd_touch, 0x2000ef03);
+        } else {
+            /* Keep touch IRQ enabled so touch-to-wake works */
+            ioctl(fd_touch, 0x2000ef04);
+        }
+        close(fd_touch);
+    }
+    ui_backlight(0);
+    usleep(120000); /* 120ms stock panel power sequencing delay */
+    int fd_lcd = open("/dev/lcd_st77916", O_RDWR | O_NONBLOCK);
+    if(fd_lcd >= 0){
+        ioctl(fd_lcd, 0x2000ef01);
+        close(fd_lcd);
+    }
+    /* Disable UI touch processing in LVGL so dark screen never registers blind clicks */
+    if(g_touch) lv_indev_enable(g_touch, false);
+    /* Sync mq_player internal state */
+    sync_player_screen_state(0, ui_get_brightness());
+}
+
+/* Real hardware screen turn-on matching stock firmware (0x4dde48):
+ * 1. ST77916: Exit sleep mode (0x2000ef02 RESUME_CMD).
+ * 2. 50ms delay: Panel stabilization delay.
+ * 3. Backlight: Restore brightness and unblank rail (bl_power=0).
+ * 4. CST816T: Resume touch controller hardware (0x2000ef04).
+ * 5. mq_player: Sync internal screen_on=1 and saved_brightness.
+ * 6. Touch indev: Wait for finger release before re-enabling so wake tap is swallowed. */
+static void hardware_screen_wake(int brightness){
+    int fd_lcd = open("/dev/lcd_st77916", O_RDWR | O_NONBLOCK);
+    if(fd_lcd >= 0){
+        ioctl(fd_lcd, 0x2000ef02);
+        close(fd_lcd);
+    }
+    usleep(50000); /* 50ms stock panel wake stabilization */
+    int br = (brightness > 0) ? brightness : ui_get_brightness();
+    ui_backlight(br);
+    int fd_touch = open("/dev/cst816t", O_RDWR | O_NONBLOCK);
+    if(fd_touch >= 0){
+        ioctl(fd_touch, 0x2000ef04);
+        close(fd_touch);
+    }
+    sync_player_screen_state(1, br);
+    if(g_touch){
+        lv_indev_wait_release(g_touch);
+        lv_indev_enable(g_touch, true);
+    }
+}
 static lv_obj_t   *g_dbgdot = NULL;
 static int         g_dbg = 0;          /* show tap dot (only if /usr/data/touch_dbg) */
 
@@ -2560,6 +2680,7 @@ int main(int argc, char **argv){
     int bl_state = 0;   /* 0 = normal, 1 = saver-dim, 2 = off */
     uint32_t last_blpoll = 0;   /* PW-10 backlight-rail poll cadence */
     int player_blanked = 0;     /* PW-10: we forced bl_power=4 because the player blanked via brightness=0 */
+    int manual_btn_off = 0;     /* screen turned off explicitly by physical power button */
     unsigned last_vol_seq = 0;
     /* Start the boot splash HERE - after all the blocking startup init (hwclock, bt_boot_restore,
      * IPC connect, etc.). Created earlier, its time-based animation would elapse during that
@@ -2757,7 +2878,7 @@ int main(int argc, char **argv){
             last_activity = lv_tick_get();   /* using an app counts as activity */
         }
 
-        if(g_touch){
+        if(g_touch && bl_state != 2){
             lv_indev_state_t ts = lv_indev_get_state(g_touch);
             lv_point_t p; lv_indev_get_point(g_touch, &p);
             if(kbinput_active()){
@@ -2922,22 +3043,33 @@ int main(int argc, char **argv){
         }
 
         /* PW-10: the player owns the power button (event0) and blanks the screen by writing
-         * brightness=0 while leaving bl_power=0 (FB_BLANK_UNBLANK) - the panel is black but the LED
-         * rail is still powered (device-measured 2026-09-02: power-off -> br 6->0, bl_power stays 0).
-         * diskOS never writes brightness=0 itself (ui_backlight(0) writes ONLY bl_power=4), so
-         * brightness==0 && bl_power==0 is unambiguously a player-side blank. Catch it on a slow poll,
-         * fully power the rail down (bl_power=4) and sync bl_state=2 so only a touch wakes. When the
-         * player raises brightness again (a second power press), bring the panel back to match. */
-        if(lv_tick_elaps(last_blpoll) >= 250){
+         * brightness=0 while leaving bl_power=0 (FB_BLANK_UNBLANK).
+         * Catch player-side blanks on a poll, power down the panel and sync bl_state=2.
+         * When the player restores brightness (power button press), restore the hardware panel. */
+        if(lv_tick_elaps(last_blpoll) >= (bl_state == 2 ? 100 : 250)){
             last_blpoll = lv_tick_get();
             int cbr = read_int_file("/sys/class/backlight/backlight/brightness");
             int cbp = read_int_file("/sys/class/backlight/backlight/bl_power");
-            if(cbr == 0 && cbp == 0){
-                /* player blanked via brightness-only -> cut the rail. Won't re-fire (bl_power now 4). */
-                ui_backlight(0); bl_state = 2; player_blanked = 1;
-            } else if(player_blanked && cbr > 0){
-                /* player un-blanked (2nd power press restored brightness) -> restore the panel. */
-                ui_backlight(cbr); bl_state = 0; last_activity = lv_tick_get(); player_blanked = 0;
+            if(bl_state != 2 && cbr == 0 && cbp == 0){
+                /* player blanked via physical power button while awake -> sync hardware sleep */
+                bl_state = 2;
+                player_blanked = 1;
+                manual_btn_off = 1;
+                if(g_touch) lv_indev_enable(g_touch, false);
+                /* Put CST816T to deep sleep (0x2000ef03) to ensure 0mA pocket standby */
+                int fd_touch = open("/dev/cst816t", O_RDWR | O_NONBLOCK);
+                if(fd_touch >= 0){ ioctl(fd_touch, 0x2000ef03); close(fd_touch); }
+                int fd_lcd = open("/dev/lcd_st77916", O_RDWR | O_NONBLOCK);
+                if(fd_lcd >= 0){ ioctl(fd_lcd, 0x2000ef01); close(fd_lcd); }
+                if(screen_current() == SCR_SAVER) screen_back();
+            } else if((player_blanked || bl_state == 2) && cbr > 0){
+                /* power button pressed to wake (player restored brightness) -> restore hardware screen */
+                hardware_screen_wake(cbr);
+                bl_state = 0;
+                player_blanked = 0;
+                manual_btn_off = 0;
+                last_activity = lv_tick_get();
+                if(screen_current() == SCR_SAVER) screen_back();
             }
         }
 
@@ -2956,11 +3088,21 @@ int main(int argc, char **argv){
         if(g_touch_raw >= 0){
             char rb[512]; int any = 0;
             while(read(g_touch_raw, rb, sizeof rb) > 0) any = 1;
+            int touch_wake_ok = cfg_get_int("touch_wake", 0);
             if(any && bl_state){
-                last_activity = lv_tick_get();
-                ui_backlight(ui_get_brightness()); bl_state = 0;
-                player_blanked = 0;   /* touch woke it; don't let the PW-10 poll re-restore */
-                if(screen_current() == SCR_SAVER) screen_back();
+                if(bl_state == 2 && (!touch_wake_ok || manual_btn_off)){
+                    /* Touch to wake is disabled or screen was turned off manually with power button.
+                     * Ignore touch event while screen is off. */
+                } else {
+                    last_activity = lv_tick_get();
+                    hardware_screen_wake(ui_get_brightness());
+                    bl_state = 0;
+                    player_blanked = 0;
+                    manual_btn_off = 0;
+                    woke = 1;
+                    prev_ts = LV_INDEV_STATE_RELEASED;
+                    if(screen_current() == SCR_SAVER) screen_back();
+                }
             }
         }
         if(kbinput_active()) last_activity = lv_tick_get();
@@ -2975,7 +3117,7 @@ int main(int argc, char **argv){
         int sstyle    = cfg_get_int("saver_style", 0);
         int art_saver = (sstyle == 0 || sstyle == 4);
         int saver_ok  = (!art_saver || playing);
-        if(saver_timeout > 0 || manual){
+        if(saver_timeout > 0 || screenoff_extra > 0 || manual){
             /* manual sleep runs its dim/off countdown from the tile tap, independent of the
              * (possibly disabled) auto-saver timer */
             uint32_t idle = manual ? lv_tick_elaps(g_manual_sleep_at) : lv_tick_elaps(last_activity);
@@ -2999,18 +3141,16 @@ int main(int argc, char **argv){
                 if(dim > 6 && !(in_saver && saver_wants_bright())) dim = 6;
                 ui_backlight(dim); bl_state = 1;
             }
-            /* full off after the screen-off delay. Manual sleep uses the configured Screen Off
-             * delay when set, else a 10s default so the tile actually powers the panel down. */
-            uint32_t off_at = manual ? (uint32_t)(screenoff_extra > 0 ? screenoff_extra : 10)*1000
-                                     : (uint32_t)(saver_timeout+screenoff_extra)*1000;
-            if(bl_state==1 && (manual || screenoff_extra > 0) && idle > off_at){
-                ui_backlight(0); bl_state = 2;
-                /* screen fully off -> STOP the screensaver. Leaving SCR_SAVER: (a) satisfies "the
-                 * saver stops when the screen turns off"; (b) pops back to the screen shown BEFORE
-                 * the saver, so a later wake lands there, not on the saver; (c) makes saver_anim_cb
-                 * a no-op (it self-gates on screen_current()==SCR_SAVER) so the analog seconds hand
-                 * stops. SAVER transitions are instant (no slide) - one cheap repaint behind a dark
-                 * panel. Guard on ==SCR_SAVER: a merely-dimmed non-saver screen has nothing to pop. */
+            /* full off after the screen-off delay. Manual sleep dims briefly (500ms) for
+             * visual feedback, then powers the panel down immediately (not 2 minutes). */
+            uint32_t off_at = manual ? 500
+                                     : (uint32_t)(saver_timeout + screenoff_extra)*1000;
+            if(bl_state <= 1 && (manual || screenoff_extra > 0) && idle > off_at){
+                hardware_screen_sleep(1);
+                bl_state = 2;
+                player_blanked = 1;
+                manual_btn_off = 0;   /* auto-sleep or sleep tile, NOT physical button */
+                /* screen fully off -> STOP the screensaver. */
                 if(screen_current()==SCR_SAVER) screen_back();
             }
         }
@@ -3026,13 +3166,8 @@ int main(int argc, char **argv){
         g_bl_idle = (bl_state >= 1);   /* prewarm worker reads this: only work while dimmed/off */
         int busy = lv_anim_count_running() > 0 || prev_ts == LV_INDEV_STATE_PRESSED;
         if(bl_state == 2){
-            /* deep idle (panel off): sleep ~5x/s REGARDLESS of any running animation. Nothing is
-             * visible, so a stray infinite anim (e.g. a Wi-Fi/BT scan glyph left spinning, or the
-             * saver's own motion) must NOT drop us to the 5ms 'busy' cap and spin the CPU at 200Hz -
-             * that was the real reason "screen off" wasn't saving power. Wake stays reliable because
-             * the raw evdev fd (drained every loop, above) holds a real finger-press in its kernel
-             * queue across the 200ms sleep; we no longer rely on catching an LVGL press-edge. */
-            wait = 200;
+            /* screen off: poll at 100ms for responsive wake while minimizing CPU wakeups */
+            wait = 100;
         } else {
             uint32_t cap = busy ? 5 : 30;
             if(wait > cap) wait = cap;
