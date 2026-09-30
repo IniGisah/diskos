@@ -5,15 +5,22 @@
 #include <stdio.h>
 
 /* Working Mode (audio source) picker - mirrors stock's "Working mode" list. Tapping a mode replays
- * the captured V2.28 switch sequence via ui_set_source_mode() and marks it selected.
- * 0=Local 1=USB-DAC 2=BT-Receiving 3=USB-Storage. */
+ * the captured switch sequence via ui_set_source_mode() and marks it selected.
+ * 0=Local 1=USB-DAC 4=USB-DAC-Output 2=BT-Receiving 3=USB-Storage. */
 
-typedef struct { const char *name, *sub; } modeinfo_t;
+typedef struct {
+    int mode;
+    const char *name;
+    const char *sub;
+    const char *toast;
+} modeinfo_t;
+
 static const modeinfo_t MODES[] = {
-    { "Local Playback",      "Play from the microSD card" },
-    { "USB DAC",             "Be a USB sound card for a PC" },
-    { "Bluetooth Receiving", "Play audio sent from a phone" },
-    { "USB Storage",         "Open the card on a computer" },
+    { 0, "Local Playback",      "Play from the microSD card",          "Switching to local playback" },
+    { 1, "USB DAC",             "Be a USB sound card for a PC",        "Switching to USB DAC" },
+    { 4, "USB DAC Output",      "Output audio to an external USB DAC", "Switching to USB DAC output" },
+    { 2, "Bluetooth Receiving", "Play audio sent from a phone",        "Switching to Bluetooth receiving" },
+    { 3, "USB Storage",         "Open the card on a computer",         "Switching to USB storage" },
 };
 #define N_MODES ((int)(sizeof(MODES)/sizeof(MODES[0])))
 
@@ -22,12 +29,13 @@ static lv_obj_t *g_row[N_MODES];     /* per-row button (for the selected highlig
 
 static void mark_selected_mode(int cur){
     for(int i=0;i<N_MODES;i++){
-        if(g_check[i]){ lv_label_set_text(g_check[i], i==cur ? LV_SYMBOL_OK : "");
+        int m = MODES[i].mode;
+        if(g_check[i]){ lv_label_set_text(g_check[i], m==cur ? LV_SYMBOL_OK : "");
                         lv_obj_set_style_text_color(g_check[i], ui_current_accent(), 0); }  /* track accent changes */
         if(g_row[i]){   /* selected row gets an accent ring + slightly lifted fill */
-            lv_obj_set_style_border_width(g_row[i], i==cur ? 2 : 0, 0);
+            lv_obj_set_style_border_width(g_row[i], m==cur ? 2 : 0, 0);
             lv_obj_set_style_border_color(g_row[i], ui_current_accent(), 0);
-            lv_obj_set_style_bg_color(g_row[i], lv_color_hex(i==cur ? 0x242426 : 0x1C1C1E), 0);
+            lv_obj_set_style_bg_color(g_row[i], lv_color_hex(m==cur ? 0x242426 : 0x1C1C1E), 0);
         }
     }
 }
@@ -41,12 +49,13 @@ static uint32_t g_last_switch = 0;   /* debounce: a switch takes a few seconds t
  * window we settle to the selection best-effort (matches the honest "Switching..." toast). */
 static void mark_pending(int m){
     for(int i=0;i<N_MODES;i++){
-        if(g_check[i]){ lv_label_set_text(g_check[i], i==m ? LV_SYMBOL_REFRESH : "");
+        int row_m = MODES[i].mode;
+        if(g_check[i]){ lv_label_set_text(g_check[i], row_m==m ? LV_SYMBOL_REFRESH : "");
                         lv_obj_set_style_text_color(g_check[i], ui_current_accent(), 0); }
         if(g_row[i]){   /* highlight the row being switched to */
-            lv_obj_set_style_border_width(g_row[i], i==m ? 2 : 0, 0);
+            lv_obj_set_style_border_width(g_row[i], row_m==m ? 2 : 0, 0);
             lv_obj_set_style_border_color(g_row[i], ui_current_accent(), 0);
-            lv_obj_set_style_bg_color(g_row[i], lv_color_hex(i==m ? 0x242426 : 0x1C1C1E), 0);
+            lv_obj_set_style_bg_color(g_row[i], lv_color_hex(row_m==m ? 0x242426 : 0x1C1C1E), 0);
         }
     }
 }
@@ -66,7 +75,7 @@ static void settle_cb(lv_timer_t *t){
      * mutate the intent mirror (g_source_mode) - it also guards coldplug, and a transient mid-transition
      * sample must not flip that guard. */
     int show = (intended >= 0) ? intended : ui_get_source_mode();
-    if(intended == 0 || intended == 1 || intended == 3){   /* USB gadget modes are readback-confirmable */
+    if(intended == 0 || intended == 1 || intended == 3 || intended == 4){   /* USB modes are readback-confirmable */
         int actual = ui_detect_source_mode();
         show = actual;
         if(actual != intended) ui_toast("Mode didn't switch");
@@ -78,7 +87,9 @@ static void settle_cb(lv_timer_t *t){
 
 static void row_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
-    int m = (int)(uintptr_t)lv_event_get_user_data(e);
+    int idx = (int)(uintptr_t)lv_event_get_user_data(e);
+    if(idx < 0 || idx >= N_MODES) return;
+    int m = MODES[idx].mode;
     /* Serialise: ignore taps while the previous switch is still applying (the player's gadget
      * state-machine is asynchronous). NB we do NOT early-return on "same mode" - re-issuing must
      * always be allowed so Local works as a recover even if our cached mode is stale. */
@@ -89,11 +100,7 @@ static void row_cb(lv_event_t *e){
         mark_pending(m);      /* async switch in flight: show "switching", not a confirmed selection */
         if(g_settle) lv_timer_del(g_settle);
         g_settle = lv_timer_create(settle_cb, 500, NULL);   /* settle to the checkmark after the switch window */
-        /* honest wording: the frames are queued; the async switch completes a moment later. */
-        static const char *msg[N_MODES] = {
-            "Switching to local playback", "Switching to USB DAC",
-            "Switching to Bluetooth receiving", "Switching to USB storage" };
-        ui_toast(msg[m]);
+        ui_toast(MODES[idx].toast);
     }
 }
 
