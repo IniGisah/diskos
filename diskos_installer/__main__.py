@@ -75,8 +75,10 @@ def _set_phase(st, phase):
 def cmd_doctor(args):
     ui.step("diskOS installer - doctor")
     o, a = platform_probe.host()
+    dname = platform_probe.distro_name()
+    host_desc = f"{o}-{a}" + (f" ({dname})" if dname else "")
     ui.info(f"version    : {__version__}")
-    ui.info(f"host       : {o}-{a} ({'supported' if platform_probe.is_supported() else 'UNSUPPORTED'})")
+    ui.info(f"host       : {host_desc} ({'supported' if platform_probe.is_supported() else 'UNSUPPORTED'})")
     ui.info(f"state dir  : {state.state_dir()}")
 
     def _tool_ok(path, need_exec):

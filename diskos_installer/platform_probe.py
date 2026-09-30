@@ -43,6 +43,40 @@ def is_supported():
     return o in ("linux", "macos")
 
 
+def distro_info():
+    """Return dict of /etc/os-release fields on Linux, or empty dict."""
+    if platform.system().lower() != "linux":
+        return {}
+    if hasattr(platform, "freedesktop_os_release"):
+        try:
+            return platform.freedesktop_os_release()
+        except OSError:
+            pass
+    try:
+        data = {}
+        with open("/etc/os-release", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    data[k] = v.strip('"\'')
+        return data
+    except Exception:
+        return {}
+
+
+def distro_name():
+    """Human-readable OS or distribution name, e.g. 'CachyOS Linux', 'Arch Linux', 'Ubuntu 24.04', 'macOS'."""
+    sysname = platform.system().lower()
+    if sysname == "darwin":
+        ver = platform.mac_ver()[0]
+        return f"macOS {ver}".strip() if ver else "macOS"
+    if sysname == "linux":
+        info = distro_info()
+        return info.get("PRETTY_NAME") or info.get("NAME") or "Linux"
+    return platform.system()
+
+
 def _bundled_libusb_backend():
     """A pyusb libusb1 backend pointed at OUR bundled libusb, so USB enumeration
     works in the frozen app even when the system has no libusb. Returns a backend

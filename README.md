@@ -145,12 +145,23 @@ environment and installs two Python dependencies into it; nothing is installed s
 ./install.sh
 ```
 
-The setup check will tell you if either system component is missing:
+The setup check will tell you if any optional or required system components are missing:
 
-- **Tk / tkinter:** needed only by the graphical installer. Debian/Ubuntu:
-  `sudo apt install python3-tk`
-- **libusb-1.0:** used to detect the device in mask-ROM mode. Debian/Ubuntu:
-  `sudo apt install libusb-1.0-0`
+- **Tk / tkinter:** needed only by the graphical installer.
+  - Arch / CachyOS: `sudo pacman -S tk`
+  - Debian / Ubuntu: `sudo apt install python3-tk`
+  - Fedora: `sudo dnf install python3-tkinter`
+  - macOS: `brew install python-tk`
+- **libusb-1.0:** used to detect the device in mask-ROM mode.
+  - Arch / CachyOS: `sudo pacman -S libusb`
+  - Debian / Ubuntu: `sudo apt install libusb-1.0-0`
+  - Fedora: `sudo dnf install libusbx`
+  - macOS: `brew install libusb`
+- **squashfs-tools:** used to unpack and pack firmware images (LZO-capable).
+  - Arch / CachyOS: `sudo pacman -S squashfs-tools`
+  - Debian / Ubuntu: `sudo apt install squashfs-tools`
+  - Fedora: `sudo dnf install squashfs-tools`
+  - macOS: `brew install squashfs`
 
 After setup, run commands through `./diskos-installer`; it selects the local environment for you.
 

@@ -22,10 +22,19 @@ trap 'rm -rf "$WORK"' EXIT
 cd "$WORK"
 
 echo "==> fetching libusb source"
-apt-get source libusb-1.0 >/dev/null 2>&1 || {
-  echo "ERROR: 'apt-get source libusb-1.0' failed - enable deb-src or fetch libusb 1.0.x manually." >&2
-  exit 3; }
-cd libusb-1.0-*/
+if ! command -v apt-get >/dev/null 2>&1 || ! apt-get source libusb-1.0 >/dev/null 2>&1; then
+  LIBUSB_VER="1.0.27"
+  LIBUSB_URL="https://github.com/libusb/libusb/releases/download/v${LIBUSB_VER}/libusb-${LIBUSB_VER}.tar.bz2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -sSL "$LIBUSB_URL" | tar -xj
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- "$LIBUSB_URL" | tar -xj
+  else
+    echo "ERROR: failed to fetch libusb source (apt-get source, curl, or wget required)" >&2
+    exit 3
+  fi
+fi
+cd libusb-1.0*/
 
 echo "==> configuring libusb (static, no udev)"
 ./configure --disable-udev --enable-static --disable-shared \

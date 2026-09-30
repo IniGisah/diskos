@@ -125,9 +125,10 @@ def native(name, required=True):
     if name in _SYSTEM_FALLBACK:
         raise PreflightError(
             f"tool '{name}' not found in vendor/{tag} or PATH", code="E102",
-            action="install squashfs-tools with LZO support (Debian/Ubuntu: "
-                   "sudo apt install squashfs-tools), or build the bundled tools with "
-                   f"{native_build_script('squashfs')} from the diskOS source")
+            action="install squashfs-tools with LZO support (Arch/CachyOS: "
+                   "sudo pacman -S squashfs-tools, Debian/Ubuntu: "
+                   "sudo apt install squashfs-tools, Fedora: sudo dnf install squashfs-tools), "
+                   f"or build the bundled tools with {native_build_script('squashfs')} from the diskOS source")
     if name == "usbboot":
         raise PreflightError(
             f"bundled tool 'usbboot' not found for {tag}", code="E102",

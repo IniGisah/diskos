@@ -38,6 +38,7 @@ for c in python3 python; do
 done
 if [ -z "$PY" ]; then
     echo "error: Python 3.8+ not found." >&2
+    echo "  Arch/CachyOS:  sudo pacman -S python" >&2
     echo "  Debian/Ubuntu: sudo apt install python3 python3-venv" >&2
     echo "  Fedora:        sudo dnf install python3" >&2
     echo "  macOS:         brew install python3   (or install from python.org)" >&2
@@ -52,6 +53,7 @@ if [ ! -x "$HERE/.venv/bin/python" ] && [ ! -x "$HERE/.venv/Scripts/python.exe" 
         echo "error: could not create the virtual environment:" >&2
         sed 's/^/  /' "$ERRTMP" >&2 2>/dev/null || true
         echo "  Debian/Ubuntu often needs: sudo apt install python3-venv" >&2
+        echo "  Arch/CachyOS: python includes venv in core package (reinstall: sudo pacman -S python)" >&2
         exit 1
     fi
 else
@@ -74,6 +76,7 @@ if "$VENV_PY" -c 'import tkinter' 2>/dev/null; then
 else
     echo "  note: tkinter NOT found - the GRAPHICAL installer will not run (the CLI still works)."
     echo "        To enable the GUI, install your system's Tk package, then re-run this script:"
+    echo "          Arch/CachyOS:  sudo pacman -S tk"
     echo "          Debian/Ubuntu: sudo apt install python3-tk"
     echo "          Fedora:        sudo dnf install python3-tkinter"
     echo "          macOS:         brew install python-tk   (or use python.org's Python, which bundles Tk)"
@@ -84,9 +87,32 @@ if "$VENV_PY" -c 'import ctypes.util,sys; sys.exit(0 if ctypes.util.find_library
     echo "  ok: libusb-1.0 present - device detection will work"
 else
     echo "  note: libusb-1.0 NOT found - the tool cannot detect the device until you install it:"
+    echo "          Arch/CachyOS:  sudo pacman -S libusb"
     echo "          Debian/Ubuntu: sudo apt install libusb-1.0-0"
     echo "          Fedora:        sudo dnf install libusbx"
     echo "          macOS:         brew install libusb"
+fi
+
+# squashfs-tools (needed to unpack and build firmware images)
+TAG=$("$VENV_PY" -c 'import sys; sys.path.insert(0, "."); from diskos_installer import platform_probe; print(platform_probe.host_tag())' 2>/dev/null || true)
+if [ -n "$TAG" ] && [ -x "$HERE/vendor/$TAG/mksquashfs" ] && [ -x "$HERE/vendor/$TAG/unsquashfs" ]; then
+    echo "  ok: bundled squashfs-tools present"
+elif command -v mksquashfs >/dev/null 2>&1 && command -v unsquashfs >/dev/null 2>&1; then
+    echo "  ok: system squashfs-tools present on PATH"
+else
+    echo "  note: squashfs-tools NOT found - needed to unpack and build firmware images:"
+    echo "          Arch/CachyOS:  sudo pacman -S squashfs-tools"
+    echo "          Debian/Ubuntu: sudo apt install squashfs-tools"
+    echo "          Fedora:        sudo dnf install squashfs-tools"
+    echo "          macOS:         brew install squashfs"
+fi
+
+# usbboot (custom Ingenic mask-ROM uploader)
+if [ -n "$TAG" ] && [ -x "$HERE/vendor/$TAG/usbboot" ]; then
+    echo "  ok: bundled usbboot present"
+else
+    echo "  note: usbboot not built yet (needed to flash in mask-ROM mode)."
+    echo "        Build it once with: bash build/build-usbboot-static.sh"
 fi
 
 echo
