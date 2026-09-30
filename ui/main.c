@@ -351,6 +351,7 @@ int ui_get_source_mode(void){ return g_source_mode; }
 static int sd_exported_to_host(void);
 static int coldplug_mounted(void);
 static int rmguard_dir_ok(const char *dir);
+static int usb_audio_out_detected(void);
 static _Atomic int g_sd_writable = 1;
 static _Atomic int g_sd_writers = 0;
 static _Atomic int g_sd_hold = 0;
@@ -776,6 +777,9 @@ static int g_book_single_mode = 0;  /* 1 while a book has forced Single play-mod
 static uint32_t g_book_noadopt_until = 0;  /* after an explicit play, don't let book_tick adopt the (possibly still-reported) old book during the transition */
 void ui_play_list(int list_type, const char *name, int pos1){
     if(!ui_local_playback_allowed()){ ui_toast("Return to local playback first"); return; }
+    if(ui_get_source_mode() == 4 && !usb_audio_out_detected()){
+        ui_toast("USB DAC not connected"); return;
+    }
     /* A music list play (not a custom playlist, type 5) makes the stock player build its queue from the
      * UNFILTERED SONG table. If a .m4b hasn't migrated out yet, it would leak into that queue - so ensure
      * migration first, and refuse the play (rather than queue a book) if it still can't complete. */
@@ -984,6 +988,9 @@ void ui_book_user_seeked(long target_ms){
 /* Play an audiobook (v1: single-file .m4b) and resume at resume_ms (0 = start). */
 void ui_play_book(const char *path, long resume_ms){
     if(!ui_local_playback_allowed()){ ui_toast("Return to local playback first"); return; }
+    if(ui_get_source_mode() == 4 && !usb_audio_out_detected()){
+        ui_toast("USB DAC not connected"); return;
+    }
     if(!path || !*path) return;
     /* The path must round-trip the player's 256-byte track path AND survive the a2 frame's JSON
      * re-escape (the decoder reserves 4 bytes), or st.path won't match and resume/checkpoint would
@@ -1831,6 +1838,9 @@ int ui_detect_source_mode(void){
     if(uac_bound())           return 1;
     if(usb_audio_out_detected()) return 4;
     return (atomic_load(&g_source_mode) == 4) ? 4 : 0;
+}
+int ui_usb_dac_connected(void){
+    return usb_audio_out_detected();
 }
 /* May the V2.40 worker direct-mount the card RIGHT NOW? Checked (under g_sd_mode_mu) immediately before
  * EACH mount attempt: absolute cold-boot window (fail-closed on unreadable uptime) AND the card is not

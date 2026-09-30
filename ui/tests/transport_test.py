@@ -38,6 +38,9 @@ static void set_label_text_changed(const char *obj,const char *s){(void)obj;snpr
 static int scanner_active(void){return scan_busy;}
 static int sd_io_allowed(void){return sd_allowed;}
 static int scanner_start(void){scans++;return scan_fail?-1:0;}
+static int source_mode=0, dac_connected=1;
+static int ui_get_source_mode(void){return source_mode;}
+static int ui_usb_dac_connected(void){return dac_connected;}
 int ui_pp_icon_playing(int real);
 '''
 tests=r'''
@@ -62,6 +65,16 @@ int main(void){
     assert(ui_transport_command("0201000C0001")<0);
     assert(commands==sent && seeks==0);
     puts("PASS no optimistic success on IPC failure and no commands during USB ownership");
+
+    local=1; source_mode=4; dac_connected=0; sent=commands;
+    assert(ui_transport_command("0201000C0000")<0);
+    assert(!strcmp(toast,"USB DAC not connected") && commands==sent);
+    assert(ui_transport_command("0201000C0001")<0 && commands==sent);
+    assert(ui_transport_command("0201000C0002")<0 && commands==sent);
+    dac_connected=1; send_fail=0;
+    assert(ui_transport_command("0201000C0000")==0 && commands==sent+1);
+    source_mode=0; sent=commands;
+    puts("PASS commands blocked when USB DAC unplugged in DAC output mode");
 
     local=1; send_fail=0; book=1; state.position_ms=10000;state.duration_ms=20000;
     assert(ui_transport_command("0201000C0002")==0 && requested_seek==0);

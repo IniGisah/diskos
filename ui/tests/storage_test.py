@@ -69,6 +69,7 @@ static int ipc_send_cmd(const char *s){
     }
     return 0;
 }
+static __attribute__((unused)) int usb_audio_out_detected(void){ return 1; }
 '''
     tests = r'''
 static int sd_exported_to_host(void){ return test_exported; }

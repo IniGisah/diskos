@@ -291,6 +291,7 @@ leave the device mask-ROM-recoverable instead of continuing. Wide field testing 
   developer builds.
 - **USB Storage:** always eject safely on the computer before switching back to Local. If diskOS
   cannot confirm who owns the card, it keeps its card features off and asks for a reboot.
+- **USB DAC Output (Mode 4):** If the external USB DAC is disconnected while in USB DAC Output mode, on-screen playback controls safely block playback and display a warning toast. However, pressing the physical side play/pause button while the DAC is disconnected causes the stock audio engine (`mq_player`, which directly reads the hardware keys) to enter an error loop searching for the missing sound card. Reconnect the USB DAC or switch back to Local playback before pressing the physical play button.
 - **Card after cold boot:** the card mounts a few seconds after startup. If diskOS reports that card
   access is unavailable, its library and artwork stay off for that boot.
 - **Cover flow artwork:** albums without cached art show placeholders. Playing a track with artwork

@@ -48,6 +48,7 @@ int  ui_source_switch_pending(void);
 int  ui_source_switch_failed(void);
 int ui_local_playback_allowed(void);
 int  ui_detect_source_mode(void);          /* detect actual mode from USB gadget/ALSA state (0/1/3/4; BT reads as 0) */
+int  ui_usb_dac_connected(void);           /* 1 if external USB DAC is connected (card1/snd-usb-audio detected) */
 void npmenu_set(const track_state_t *st, int playing, const void *thumb_src);
 void npmenu_close_transients(void);   /* dismiss lv_layer_top popups on navigation */
 void ui_set_favorite(int on);   /* love/unlove the current song (0104) */
