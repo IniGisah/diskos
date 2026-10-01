@@ -561,7 +561,8 @@ static int source_send(int mode){
             return ipc_send_cmd("0657000C0008");
         case 2:
             /* For Bluetooth Receiving Mode (Mode 2), we keep mq_player paused in
-             * local mode so it does NOT lock BlueALSA or conflict with bluealsa-aplay.
+             * local mode so it does NOT lock BlueALSA or tear down Bluetooth when
+             * switching outputs between 3.5mm and external USB DAC.
              * The Bluetooth daemon stack and bluealsa-aplay handle routing. */
             if(ipc_send_cmd("0642000C0000") < 0) return -1;
             return ipc_send_cmd("0657000C0008");

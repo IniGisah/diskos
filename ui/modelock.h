@@ -20,5 +20,7 @@ int  modelock_get_mode(void);
 void bt_rx_play_pause(void);
 void bt_rx_next(void);
 void bt_rx_prev(void);
+void bt_rx_set_usb_out(int enable);
+int  bt_rx_get_usb_out(void);
 void bt_rx_sync_volume(int vol);
 void modelock_prompt_exit(void);

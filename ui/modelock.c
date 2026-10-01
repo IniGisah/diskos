@@ -34,10 +34,15 @@ static lv_obj_t *g_bt_track_title;
 static lv_obj_t *g_bt_track_sub;
 static lv_obj_t *g_bt_codec_badge;
 static lv_obj_t *g_bt_codec_lbl;
+static lv_obj_t *g_btn_output;
+static lv_obj_t *g_lbl_output;
 static lv_obj_t *g_btn_prev;
 static lv_obj_t *g_btn_pp;
 static lv_obj_t *g_btn_next;
 static lv_obj_t *g_lbl_pp;
+
+/* Output routing state */
+static int g_bt_usb_out = 0;
 
 /* Exit confirmation modal */
 static lv_obj_t *g_exit_modal = NULL;
@@ -217,7 +222,11 @@ static void *bt_rx_worker(void *arg){
         if(found){
             /* Maintain audio router daemon whenever connected */
             if(exec_cmd_capture("pgrep bluealsa-aplay 2>/dev/null", buf, sizeof buf, 150) <= 0){
-                system("killall -9 bluealsa-aplay 2>/dev/null; ( sleep 0.4; bluealsa-aplay -D plughw:0,3 >/dev/null 2>&1 ) &");
+                if(g_bt_usb_out){
+                    system("killall -9 bluealsa-aplay 2>/dev/null; ( sleep 0.4; bluealsa-aplay -D plughw:1,0 >/dev/null 2>&1 ) &");
+                } else {
+                    system("killall -9 bluealsa-aplay 2>/dev/null; ( sleep 0.4; bluealsa-aplay -D plughw:0,3 >/dev/null 2>&1 ) &");
+                }
             }
         }
 
@@ -345,7 +354,31 @@ void bt_rx_sync_volume(int vol){
     if(vol < 0) vol = 0;
     if(vol > 120) vol = 120;
     g_bt_cached_vol = vol;
-    /* Internal CS43131 uses hardware MCU analog volume via ui_set_volume */
+
+    if(!g_bt_usb_out) return; /* Internal CS43131 uses hardware MCU analog volume */
+
+    int v127 = (vol * 127) / 120;
+    int pct = (vol * 100) / 120;
+    char dbus_mac[32] = {0};
+    pthread_mutex_lock(&g_bt_mu);
+    if(g_bt_state.connected && g_bt_state.dbus_mac[0]){
+        snprintf(dbus_mac, sizeof dbus_mac, "%s", g_bt_state.dbus_mac);
+    }
+    pthread_mutex_unlock(&g_bt_mu);
+
+    char cmd[384];
+    if(dbus_mac[0]){
+        snprintf(cmd, sizeof cmd,
+            "( bluealsa-cli volume /org/bluealsa/hci0/dev_%s/a2dpsnk/source %d %d 2>/dev/null || "
+            "bluealsa-cli volume /org/bluealsa/hci0/dev_%s/a2dp-sink/source %d %d 2>/dev/null ; "
+            "amixer -c 1 sset 'PCM' %d 2>/dev/null || amixer -c 1 sset 'Master' %d%% 2>/dev/null ) &",
+            dbus_mac, v127, v127, dbus_mac, v127, v127, vol, pct);
+    } else {
+        snprintf(cmd, sizeof cmd,
+            "( amixer -c 1 sset 'PCM' %d 2>/dev/null || amixer -c 1 sset 'Master' %d%% 2>/dev/null ) &",
+            vol, pct);
+    }
+    system(cmd);
 }
 
 /* UI poll timer: updates LVGL labels and button icons on main thread */
@@ -415,7 +448,123 @@ static void modelock_poll_cb(lv_timer_t *t){
     bt_disc_spin(st.connected && st.is_playing);
 }
 
+#define SGM41513_DEV "/dev/sgm41513"
+#define SGM41513_OTG_ON  0x2000492c
+#define SGM41513_OTG_OFF 0x20004928
 
+static void sgm41513_set_otg(int enable){
+    int fd = open(SGM41513_DEV, O_RDWR);
+    if(fd < 0) fd = open(SGM41513_DEV, O_RDONLY);
+    if(fd >= 0){
+        ioctl(fd, enable ? SGM41513_OTG_ON : SGM41513_OTG_OFF);
+        close(fd);
+    }
+}
+
+/* Route BT receiver audio to USB DAC output (or back to internal DAC) */
+void bt_rx_set_usb_out(int enable){
+    g_bt_usb_out = enable ? 1 : 0;
+    if(g_bt_usb_out){
+        /* 1. Stop current aplay cleanly */
+        system("killall -9 bluealsa-aplay 2>/dev/null");
+
+        /* 2. Directly power external USB DAC via battery PMIC OTG 5V boost. */
+        sgm41513_set_otg(1);
+
+        /* 3. Switch Ingenic X2000 USB controller to host role */
+        system("echo host > /sys/class/usb_role/13500000.otg_new-role-switch/role");
+
+        /* Retrieve current volume to apply to USB DAC once enumerated */
+        track_state_t tst; memset(&tst, 0, sizeof tst);
+        ipc_get_state(&tst);
+        int vol = (tst.volume > 0) ? tst.volume : g_bt_cached_vol;
+        if(vol < 0) vol = 0; if(vol > 120) vol = 120;
+        int v127 = (vol * 127) / 120;
+        int pct = (vol * 100) / 120;
+
+        char dbus_mac[32] = {0};
+        pthread_mutex_lock(&g_bt_mu);
+        if(g_bt_state.connected && g_bt_state.dbus_mac[0]){
+            snprintf(dbus_mac, sizeof dbus_mac, "%s", g_bt_state.dbus_mac);
+        }
+        pthread_mutex_unlock(&g_bt_mu);
+
+        /* 4. Stream Bluetooth audio directly to USB DAC (card 1) via bluealsa-aplay.
+         * Give USB host controller and DAC 0.8s to enumerate as Card 1.
+         * Crucial: Attenuate Card 1 mixer and set BlueALSA softvolume BEFORE/AS playback starts
+         * so audio starts at the current volume without blasting at 100%. */
+        char cmd[512];
+        if(dbus_mac[0]){
+            snprintf(cmd, sizeof cmd,
+                "( sleep 0.8; "
+                "amixer -c 1 sset 'PCM' %d 2>/dev/null || amixer -c 1 sset 'Master' %d%% 2>/dev/null; "
+                "bluealsa-cli volume /org/bluealsa/hci0/dev_%s/a2dpsnk/source %d %d 2>/dev/null || "
+                "bluealsa-cli volume /org/bluealsa/hci0/dev_%s/a2dp-sink/source %d %d 2>/dev/null; "
+                "bluealsa-aplay -D plughw:1,0 >/dev/null 2>&1 ) &",
+                vol, pct, dbus_mac, v127, v127, dbus_mac, v127, v127);
+        } else {
+            snprintf(cmd, sizeof cmd,
+                "( sleep 0.8; "
+                "amixer -c 1 sset 'PCM' %d 2>/dev/null || amixer -c 1 sset 'Master' %d%% 2>/dev/null; "
+                "bluealsa-aplay -D plughw:1,0 >/dev/null 2>&1 ) &",
+                vol, pct);
+        }
+        system(cmd);
+
+        if(g_lbl_output) lv_label_set_text(g_lbl_output, LV_SYMBOL_AUDIO " USB DAC");
+        if(g_btn_output){
+            lv_obj_set_style_border_color(g_btn_output, ui_current_accent(), 0);
+            lv_obj_set_style_text_color(g_lbl_output, ui_current_accent(), 0);
+        }
+        ui_toast("BT Audio -> USB DAC Output");
+    } else {
+        /* Route back to internal CS43131 DAC (3.5mm) */
+        /* 1. Stop current aplay on USB DAC */
+        system("killall -9 bluealsa-aplay 2>/dev/null");
+
+        /* 2. Switch USB role back to none and disable OTG 5V boost */
+        system("echo none > /sys/class/usb_role/13500000.otg_new-role-switch/role");
+        sgm41513_set_otg(0);
+
+        /* 3. Restore 100% digital volume on BlueALSA so CS43131 analog gain applies cleanly */
+        char dbus_mac[32] = {0};
+        pthread_mutex_lock(&g_bt_mu);
+        if(g_bt_state.connected && g_bt_state.dbus_mac[0]){
+            snprintf(dbus_mac, sizeof dbus_mac, "%s", g_bt_state.dbus_mac);
+        }
+        pthread_mutex_unlock(&g_bt_mu);
+        if(dbus_mac[0]){
+            char rcmd[256];
+            snprintf(rcmd, sizeof rcmd,
+                "( bluealsa-cli volume /org/bluealsa/hci0/dev_%s/a2dpsnk/source 127 127 2>/dev/null || "
+                "bluealsa-cli volume /org/bluealsa/hci0/dev_%s/a2dp-sink/source 127 127 2>/dev/null ) &",
+                dbus_mac, dbus_mac);
+            system(rcmd);
+        }
+
+        /* 4. Restore analog volume to internal CS43131 via mq_player */
+        track_state_t tst; memset(&tst, 0, sizeof tst);
+        ipc_get_state(&tst);
+        int vol = (tst.volume > 0) ? tst.volume : g_bt_cached_vol;
+        ui_set_volume(vol);
+
+        /* 5. Start bluealsa-aplay to plughw:0,3 after 0.5s to let ALSA Card 0 DMA release cleanly */
+        system("( sleep 0.5; killall -9 bluealsa-aplay 2>/dev/null; sleep 0.1; bluealsa-aplay -D plughw:0,3 >/dev/null 2>&1 ) &");
+
+        if(g_lbl_output) lv_label_set_text(g_lbl_output, LV_SYMBOL_VOLUME_MAX " 3.5mm");
+        if(g_btn_output){
+            lv_obj_set_style_border_color(g_btn_output, lv_color_hex(0x3A3A3C), 0);
+            lv_obj_set_style_text_color(g_lbl_output, lv_color_hex(0x8E8E93), 0);
+        }
+        ui_toast("BT Audio -> Internal 3.5mm");
+    }
+}
+int bt_rx_get_usb_out(void){ return g_bt_usb_out; }
+
+static void output_toggle_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    bt_rx_set_usb_out(!g_bt_usb_out);
+}
 
 /* Event handler for Transport buttons */
 static void transport_btn_cb(lv_event_t *e){
@@ -551,7 +700,23 @@ void modelock_create(lv_obj_t *root){
     lv_obj_set_size(g_cont_bt, 360, 224);
     lv_obj_clear_flag(g_cont_bt, LV_OBJ_FLAG_SCROLLABLE);
 
+    /* Output route toggle button (Internal 3.5mm vs USB DAC) */
+    g_btn_output = lv_button_create(g_cont_bt);
+    lv_obj_remove_style_all(g_btn_output);
+    lv_obj_set_size(g_btn_output, 102, 26);
+    lv_obj_set_pos(g_btn_output, 240, 14);
+    lv_obj_set_style_radius(g_btn_output, 13, 0);
+    lv_obj_set_style_bg_color(g_btn_output, lv_color_hex(0x1C1C1E), 0);
+    lv_obj_set_style_bg_opa(g_btn_output, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_btn_output, 1, 0);
+    lv_obj_set_style_border_color(g_btn_output, lv_color_hex(0x3A3A3C), 0);
+    lv_obj_add_event_cb(g_btn_output, output_toggle_cb, LV_EVENT_CLICKED, NULL);
 
+    g_lbl_output = lv_label_create(g_btn_output);
+    lv_label_set_text(g_lbl_output, LV_SYMBOL_VOLUME_MAX " 3.5mm");
+    lv_obj_center(g_lbl_output);
+    lv_obj_set_style_text_font(g_lbl_output, ui_font_cjk(12), 0);
+    lv_obj_set_style_text_color(g_lbl_output, lv_color_hex(0x8E8E93), 0);
 
     /* Vinyl disc visual */
     g_bt_disc = lv_obj_create(g_cont_bt);
@@ -821,8 +986,12 @@ void modelock_open(int mode){
             "bt-agent -c NoInputNoOutput -d 2>/dev/null &"
         );
 
-        /* Start audio routing to internal 3.5mm DAC */
-        system("killall -9 bluealsa-aplay 2>/dev/null; ( sleep 0.4; bluealsa-aplay -D plughw:0,3 >/dev/null 2>&1 ) &");
+        /* Start audio routing based on current output setting */
+        if(g_bt_usb_out){
+            bt_rx_set_usb_out(1);
+        } else {
+            system("killall -9 bluealsa-aplay 2>/dev/null; ( sleep 0.4; bluealsa-aplay -D plughw:0,3 >/dev/null 2>&1 ) &");
+        }
 
         /* Start background worker thread if not running */
         if(!g_worker_run){
@@ -852,7 +1021,9 @@ void modelock_close(void){
     g_lock_mode = 0;
     exit_modal_close();
     bt_disc_spin(0);
-
+    if(g_bt_usb_out){
+        bt_rx_set_usb_out(0);
+    }
     system("killall -9 bluealsa-aplay 2>/dev/null &");
     if(g_poll_timer){
         lv_timer_del(g_poll_timer);
