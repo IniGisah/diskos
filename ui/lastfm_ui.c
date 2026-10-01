@@ -12,6 +12,8 @@
  * A 500ms timer rebuilds the body only when the state signature changes, and stops the
  * setup web server whenever we leave the screen. Round-screen-aware header (clear corners). */
 #include "screens.h"
+#include "theme.h"
+#include "theme_kit.h"
 #include "lastfm.h"
 #include <stdio.h>
 #include <string.h>
@@ -23,37 +25,57 @@ static int g_sig = -12345;
 static void go_back(lv_event_t *e){ (void)e; lastfm_setup_stop(); screen_back(); }   /* POP the stack like every other back button - screen_show(SCR_APPS) forward-pushed LASTFM, so a later Back resurfaced it (lastfm opened only from Apps, so back -> Apps) */
 
 
-static lv_obj_t *body_label(const char *txt, const lv_font_t *font, uint32_t color){
+static lv_obj_t *body_label(const char *txt, const lv_font_t *font, theme_color_role_t color){
     lv_obj_t *l = lv_label_create(g_body);
-    lv_label_set_text(l, txt);
+    /* its line breaks suit a face that fits them; in a wider face it is wrapped again here, at spaces only, as full
+     * lines (no word left alone, and "Last.fm" is never split at its dot as LVGL's own wrap would) */
+    char buf[192]; lv_snprintf(buf, sizeof buf, "%s", txt);
+    lv_point_t sz; lv_text_get_size(&sz, buf, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    if(sz.x > 250){
+        for(char *c = buf; *c; c++) if(*c == '\n') *c = ' ';
+        char *line = buf, *last_sp = NULL;
+        for(char *c = buf; ; c++){
+            if(*c == ' ' || *c == 0){
+                char keep = *c; *c = 0;
+                lv_point_t w; lv_text_get_size(&w, line, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+                *c = keep;
+                if(w.x > 250 && last_sp){ *last_sp = '\n'; line = last_sp + 1; }
+                if(!*c) break;
+                last_sp = c;
+            }
+        }
+    }
+    lv_label_set_text(l, buf);
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(l, 250);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(l, font, 0);
-    lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+    lv_obj_set_style_text_color(l, theme_color(color), 0);
     return l;
 }
 static lv_obj_t *body_button(const char *txt, lv_event_cb_t cb){
     lv_obj_t *b = lv_button_create(g_body);
     lv_obj_set_height(b, 44); lv_obj_set_width(b, 190);
     lv_obj_set_style_radius(b, 22, 0);
-    lv_obj_set_style_bg_color(b, lv_color_hex(0xD51007), 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);     /* no LVGL default-theme drop shadow: every other button is flat */
+    lv_obj_set_style_bg_color(b, TC(FIXED_LASTFM), 0);
     lv_obj_set_ext_click_area(b, 6);
-    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
+    ui_on(b, cb, LV_EVENT_CLICKED, NULL, "lastfm_ui.cb", UI_CORE);
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, txt);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(l, TF(UI_18), 0);
+    lv_obj_set_style_text_color(l, TC(FIXED_ON_LASTFM), 0);   /* brand red is fixed, so is its text */
     lv_obj_center(l);
     return b;
 }
 static void body_qr(const char *url){
     lv_obj_t *qr = lv_qrcode_create(g_body);
     lv_qrcode_set_size(qr, 156);
-    lv_qrcode_set_dark_color(qr, lv_color_black());
-    lv_qrcode_set_light_color(qr, lv_color_white());
+    lv_qrcode_set_dark_color(qr, TC(FIXED_QR_DARK));
+    lv_qrcode_set_light_color(qr, TC(FIXED_QR_LIGHT));
     lv_qrcode_update(qr, url, (uint32_t)strlen(url));
     lv_obj_set_style_border_width(qr, 5, 0);
-    lv_obj_set_style_border_color(qr, lv_color_white(), 0);
+    lv_obj_set_style_border_color(qr, TC(FIXED_QR_LIGHT), 0);
 }
 
 static void on_setup(lv_event_t *e){ (void)e; lastfm_setup_start(); g_sig=-1; }
@@ -71,7 +93,7 @@ static void rebuild(void){
 
     if(lastfm_connected()){
         char b[180]; snprintf(b, sizeof b, "Connected as\n%s", lastfm_username());
-        body_label(b, &lv_font_montserrat_20, 0xFFFFFF);
+        body_label(b, TF(UI_20), THEME_CLR_TEXT_PRIMARY);
         /* Scrobbling on/off */
         lv_obj_t *row = lv_obj_create(g_body);
         lv_obj_remove_style_all(row); lv_obj_set_size(row, 210, 40);
@@ -79,44 +101,44 @@ static void rebuild(void){
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_t *rl = lv_label_create(row);
         lv_label_set_text(rl, "Scrobbling");
-        lv_obj_set_style_text_font(rl, &lv_font_montserrat_18, 0);
-        lv_obj_set_style_text_color(rl, lv_color_hex(0xC7C7CC), 0);
+        lv_obj_set_style_text_font(rl, TF(UI_18), 0);
+        lv_obj_set_style_text_color(rl, TC(TEXT_SECONDARY), 0);
         lv_obj_t *sw = lv_switch_create(row);
         if(lastfm_enabled()) lv_obj_add_state(sw, LV_STATE_CHECKED);
-        lv_obj_set_style_bg_color(sw, lv_color_hex(0xD51007), LV_PART_INDICATOR | LV_STATE_CHECKED);
-        lv_obj_add_event_cb(sw, on_toggle, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_set_style_bg_color(sw, TC(FIXED_LASTFM), LV_PART_INDICATOR | LV_STATE_CHECKED);
+        ui_on(sw, on_toggle, LV_EVENT_VALUE_CHANGED, NULL, "lastfm_ui.on_toggle.value", UI_CORE);
         int q = lastfm_queue_count();
         if(q > 0){ char qb[48]; snprintf(qb,sizeof qb,"%d scrobble%s queued", q, q==1?"":"s");
-                   body_label(qb, &lv_font_montserrat_14, 0x8E8E93); }
+                   body_label(qb, TF(UI_14), THEME_CLR_TEXT_MUTED); }
         body_button("Disconnect", on_disconnect);
     }
     else if(st==LFM_AUTH_WAIT && lastfm_auth_url()[0]){
-        body_label("Scan, then tap \"Allow\"\non last.fm", &lv_font_montserrat_18, 0xFFFFFF);
+        body_label("Scan, then tap \"Allow\"\non last.fm", TF(UI_18), THEME_CLR_TEXT_PRIMARY);
         body_qr(lastfm_auth_url());
-        body_label("Waiting for approval...", &lv_font_montserrat_14, 0x8E8E93);
+        body_label("Waiting for approval...", TF(UI_14), THEME_CLR_TEXT_MUTED);
     }
     else if(st==LFM_AUTH_TOKEN){
-        body_label("Connecting...", &lv_font_montserrat_20, 0xFFFFFF);
+        body_label("Connecting...", TF(UI_20), THEME_CLR_TEXT_PRIMARY);
     }
     else if(lastfm_setup_url()[0]){
-        body_label("Scan with your phone\nto enter your Last.fm key", &lv_font_montserrat_18, 0xFFFFFF);
+        body_label("Scan with your phone\nto enter your Last.fm key", TF(UI_18), THEME_CLR_TEXT_PRIMARY);
         body_qr(lastfm_setup_url());
-        body_label("Same Wi-Fi as this player", &lv_font_montserrat_14, 0x8E8E93);
+        body_label("Same Wi-Fi as this player", TF(UI_14), THEME_CLR_TEXT_MUTED);
     }
     else if(st==LFM_AUTH_ERR){
-        body_label("Couldn't connect.\nTry again.", &lv_font_montserrat_18, 0xFFFFFF);
+        body_label("Couldn't connect.\nTry again.", TF(UI_18), THEME_CLR_TEXT_PRIMARY);
         body_button(lastfm_has_creds()?"Retry":"Set up", lastfm_has_creds()?on_connect:on_setup);
     }
     else if(lastfm_has_creds()){
-        body_label("Authorize this player\non your Last.fm account", &lv_font_montserrat_18, 0xFFFFFF);
+        body_label("Authorize this player\non your Last.fm account", TF(UI_18), THEME_CLR_TEXT_PRIMARY);
         body_button("Connect account", on_connect);
         body_button("Re-enter keys", on_setup);
     }
     else {
-        body_label("Scrobble the songs you play\nto your Last.fm profile", &lv_font_montserrat_18, 0xFFFFFF);
+        body_label("Scrobble the songs you play\nto your Last.fm profile", TF(UI_18), THEME_CLR_TEXT_PRIMARY);
         body_button("Set up", on_setup);
         body_label("Beta: connect flow not fully\ntested yet. Key setup uses your\nlocal Wi-Fi (plain HTTP).",
-                   &lv_font_montserrat_14, 0x8E8E93);
+                   TF(UI_14), THEME_CLR_TEXT_MUTED);
     }
 }
 

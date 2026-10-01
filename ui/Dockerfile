@@ -1,34 +1,30 @@
-# diskOS UI build environment - pins the musl mipsel cross-toolchain so `mq_ui` builds reproducibly.
+# diskOS UI build environment - builds the pinned mipsel musl cross compiler from source, then builds `mq_ui`.
 #
-# The published binary builds with a static mipsel-linux-musl GCC 11.2.x (from musl.cc). SQLite's
-# amalgamation compiles cleanly against it (verified with and without _GNU_SOURCE / _FILE_OFFSET_BITS).
-# The "musl fighting SQLite on fcntl64" failures people hit are a TOOLCHAIN mismatch, not a flag
-# problem - this image removes the variable by pinning the exact toolchain (by SHA-256).
+# The compiler is musl-cross-make at a fixed commit with toolchain/mcm-config.mak (GCC 11.2.0, musl 1.2.6,
+# binutils 2.44), targeting the stock firmware's float ABI (MIPS32r2, FP64, NaN2008). musl-cross-make checks every
+# downloaded source tarball against its own pinned hashes, so the toolchain cannot drift silently.
 #
-# Build the image:   docker build -t diskos-ui-builder .
+# Build the image:   docker build -t diskos-ui-builder .        (from this ui/ directory; builds GCC: takes a while)
 # Build the UI:       docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/src" diskos-ui-builder
-#   Run from the ui/ directory. The `-u` keeps the built mq_ui/*.o owned by you, not root.
-#   LVGL is vendored at ui/lvgl, so no extra checkout is needed; the static mipsel `mq_ui` lands here.
-#
-# The toolchain host binaries are 32-bit x86 (i386), so this is an amd64 image - the FROM pins that.
-# On Apple Silicon / ARM, Docker runs it under emulation automatically (slower, but works).
+#   The `-u` keeps the built mq_ui/*.o owned by you, not root. LVGL is vendored at ui/lvgl.
+#   The static mipsel `mq_ui` lands in the current directory, plus the helpers: make diskos-artdec diskos-bootprobe
 
-FROM --platform=linux/amd64 debian:12-slim
+FROM debian:12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl ca-certificates make \
+        build-essential ca-certificates git wget xz-utils bzip2 patch rsync file \
     && rm -rf /var/lib/apt/lists/*
 
-# Static musl mipsel cross-toolchain (GCC 11.2.1, i386 host binaries, statically linked - the exact
-# family diskOS is built with). Pinned by SHA-256: if musl.cc changes the tarball the build fails
-# loudly instead of drifting - update the checksum here when you intentionally bump the toolchain.
-ARG TC_URL=https://musl.cc/mipsel-linux-musl-cross.tgz
-ARG TC_SHA256=82626533bf7e677c225e7cbedf1d5b0d6bc60c3daaf28249e54f0eb805d89b13
-RUN curl -fsSL "$TC_URL" -o /tmp/tc.tgz \
-    && echo "$TC_SHA256  /tmp/tc.tgz" | sha256sum -c - \
-    && tar -xzf /tmp/tc.tgz -C /opt \
-    && rm /tmp/tc.tgz
-ENV CROSS=/opt/mipsel-linux-musl-cross/bin/mipsel-linux-musl-
+ARG MCM_URL=https://github.com/richfelker/musl-cross-make.git
+ARG MCM_COMMIT=227df8b99103f9c59f6570babf892978e293082f
+COPY toolchain/mcm-config.mak /tmp/mcm-config.mak
+RUN git clone "$MCM_URL" /tmp/mcm \
+    && cd /tmp/mcm && git checkout --detach "$MCM_COMMIT" \
+    && test "$(git rev-parse HEAD)" = "$MCM_COMMIT" \
+    && cp /tmp/mcm-config.mak config.mak \
+    && make -j"$(nproc)" && make install \
+    && cd / && rm -rf /tmp/mcm /tmp/mcm-config.mak
+ENV CROSS=/opt/mipsel-n2008-musl-cross/bin/mipsel-linux-musl-
 
 WORKDIR /src
 # Default: build mq_ui from the mounted ui/ tree. Fails clearly if the source isn't mounted.

@@ -2,6 +2,7 @@
 /* Copyright (C) 2026 diskOS contributors */
 #include "sdio.h"
 #include "artcache.h"
+#include "art.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -19,10 +20,12 @@
  * cached files auto-invalidate: it's mixed into the fingerprint -> all keys change ->
  * miss -> re-decode. v2 = axis-wash backdrop (was gblur). v3 = 2x2 smooth colour gradient.
  * v4 = blurred cover art (gblur sigma 28). v5 = sharper blur (sigma 14). v6 = sigma 19. */
-#define ART_RECIPE_VER 6
+#define ART_RECIPE_VER 7   /* 7: diskos-artdec replaces the stock ffmpeg recipe (orientation, alpha, blur changed) */
 
 /* fingerprint = FNV-1a(path + size + mtime) -> 16 hex chars. Changes if the file
- * is replaced/edited, so a stale cache entry simply misses (and is orphaned). */
+ * is replaced/edited, so a stale cache entry simply misses (and is orphaned).
+ * NO inode: exfat/vfat hand out inode numbers from a counter when a file is looked up, so the same file gets
+ * a new number after every mount or icache eviction - a key built on it misses the whole cache every boot. */
 static int fingerprint(const char *track, char *out, int cap){
     struct stat stt;
     if(!track || stat(track, &stt) != 0) return -1;
@@ -32,6 +35,7 @@ static int fingerprint(const char *track, char *out, int cap){
     uint64_t sz=(uint64_t)stt.st_size, mt=(uint64_t)stt.st_mtime;
     for(int i=0;i<8;i++){ h ^= (sz>>(i*8))&0xff; h *= 1099511628211ULL; }
     for(int i=0;i<8;i++){ h ^= (mt>>(i*8))&0xff; h *= 1099511628211ULL; }
+    art_sidecar_signature(track, &h);                       /* sidecar covers replaced/added/removed -> new key */
     snprintf(out, cap, "%016llx", (unsigned long long)h);
     return 0;
 }
@@ -48,7 +52,10 @@ static void fsync_parent_dir(const char *path){
     fsync(fd);                                         /* errors (incl. unsupported) are non-fatal */
     close(fd);
 }
-static int file_ok(const char *p){ struct stat s; return stat(p,&s)==0 && s.st_size>100; }
+/* A cache entry is used only if it has the exact layout a fresh decode must have (see art_bmp_valid). */
+#define CV_OK(p) art_bmp_valid(p, 148)
+#define TH_OK(p) art_bmp_valid(p, 42)
+#define BG_OK(p) art_bmp_valid(p, 360)
 static void cache_paths(const char *fp, char *cv, char *th, char *bg, int cap){
     snprintf(cv,cap,"%s/%s/c.bmp",CACHE_ROOT,fp);
     snprintf(th,cap,"%s/%s/t.bmp",CACHE_ROOT,fp);
@@ -91,13 +98,13 @@ static int enough_free(void){
 static int artcache_has_leased(const char *track){
     char fp[24]; if(fingerprint(track,fp,sizeof fp)!=0) return 0;
     char cv[600],th[600],bg[600]; cache_paths(fp,cv,th,bg,600);
-    return file_ok(cv) && file_ok(th) && file_ok(bg);
+    return CV_OK(cv) && TH_OK(th) && BG_OK(bg);
 }
 
 static int artcache_get_leased(const char *track, const char *cover_out, const char *thumb_out, const char *bg_out){
     char fp[24]; if(fingerprint(track,fp,sizeof fp)!=0) return -1;
     char cv[600],th[600],bg[600]; cache_paths(fp,cv,th,bg,600);
-    if(!(file_ok(cv) && file_ok(th) && file_ok(bg))) return -1;
+    if(!(CV_OK(cv) && TH_OK(th) && BG_OK(bg))) return -1;
     /* copy cache -> the worker's /tmp output paths (fast vs ffmpeg) */
     if(copy_file(cv,cover_out)!=0) return -1;
     if(copy_file(th,thumb_out)!=0) return -1;
@@ -108,7 +115,7 @@ static int artcache_get_leased(const char *track, const char *cover_out, const c
 static int artcache_get_thumb_leased(const char *track, const char *thumb_out){
     char fp[24]; if(fingerprint(track,fp,sizeof fp)!=0) return -1;
     char cv[600],th[600],bg[600]; cache_paths(fp,cv,th,bg,600);
-    if(!file_ok(th)) return -1;          /* thumb not cached (or truncated) */
+    if(!TH_OK(th)) return -1;            /* thumb not cached (or damaged) */
     if(copy_file(th,thumb_out)!=0) return -1;
     return 0;
 }
@@ -118,7 +125,7 @@ static int artcache_get_thumb_leased(const char *track, const char *thumb_out){
 static int artcache_cover_path_leased(const char *track, char *out, int cap){
     char fp[24]; if(fingerprint(track,fp,sizeof fp)!=0) return -1;
     char cv[600],th[600],bg[600]; cache_paths(fp,cv,th,bg,600);
-    if(!file_ok(cv)) return -1;
+    if(!CV_OK(cv)) return -1;
     snprintf(out, cap, "%s", cv);
     return 0;
 }
@@ -128,7 +135,7 @@ static int artcache_cover_path_leased(const char *track, char *out, int cap){
 static int artcache_get_cover_leased(const char *track, const char *cover_out){
     char fp[24]; if(fingerprint(track,fp,sizeof fp)!=0) return -1;
     char cv[600],th[600],bg[600]; cache_paths(fp,cv,th,bg,600);
-    if(!file_ok(cv)) return -1;
+    if(!CV_OK(cv)) return -1;
     if(copy_file(cv,cover_out)!=0) return -1;
     return 0;
 }
@@ -138,8 +145,11 @@ static int artcache_get_cover_leased(const char *track, const char *cover_out){
 static _Atomic unsigned g_ac_gen;
 unsigned artcache_gen(void){ return atomic_load(&g_ac_gen); }
 
-static void artcache_put_leased(const char *track, const char *cover, const char *thumb, const char *bg){
+/* fp_before: the key captured BEFORE the decode. If the track or its sidecar covers changed while decoding, the
+ * key is different now and the (old) pixels are not stored under the new identity. NULL = no such check. */
+static void artcache_put_leased(const char *track, const char *fp_before, const char *cover, const char *thumb, const char *bg){
     char fp[24]; if(fingerprint(track,fp,sizeof fp)!=0) return;
+    if(fp_before && strcmp(fp, fp_before) != 0) return;
     if(!enough_free()) return;
     if(!sd_write_begin()) return;   /* M18: card is host-owned or an export is in progress -> skip the SD write */
     char dir[600];
@@ -191,6 +201,17 @@ int artcache_cover_path(const char *track, char *out, int cap){
 
 void artcache_put(const char *track, const char *cover, const char *thumb, const char *bg){
     if(!sd_io_begin()) return;
-    artcache_put_leased(track, cover, thumb, bg);
+    artcache_put_leased(track, NULL, cover, thumb, bg);
+    sd_io_end();
+}
+int artcache_key(const char *track, char *out, int cap){
+    if(cap < 24 || !sd_io_begin()) return -1;
+    int r = fingerprint(track, out, cap);
+    sd_io_end();
+    return r;
+}
+void artcache_put_if(const char *track, const char *fp_before, const char *cover, const char *thumb, const char *bg){
+    if(!sd_io_begin()) return;
+    artcache_put_leased(track, fp_before, cover, thumb, bg);
     sd_io_end();
 }

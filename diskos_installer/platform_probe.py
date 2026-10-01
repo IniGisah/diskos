@@ -126,6 +126,62 @@ def _maskrom_count_lsusb():
     return sum(1 for ln in out.splitlines() if "a108:eaef" in ln.lower())
 
 
+def maskrom_nodes(sys_root="/sys/bus/usb/devices", dev_root="/dev/bus/usb"):
+    """Linux: the /dev/bus/usb/BBB/DDD node of every device in mask-ROM mode, found through sysfs (no libusb).
+    Returns a list (possibly empty), or None when sysfs is not there (not Linux)."""
+    import os
+    if not os.path.isdir(sys_root):
+        return None
+    nodes = []
+    for d in sorted(os.listdir(sys_root)):
+        base = os.path.join(sys_root, d)
+        try:
+            with open(os.path.join(base, "idVendor")) as f:
+                vid = int(f.read().strip(), 16)
+            with open(os.path.join(base, "idProduct")) as f:
+                pid = int(f.read().strip(), 16)
+            if (vid, pid) != (MASKROM_VID, MASKROM_PID):
+                continue
+            with open(os.path.join(base, "busnum")) as f:
+                bus = int(f.read().strip())
+            with open(os.path.join(base, "devnum")) as f:
+                dev = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        nodes.append(os.path.join(dev_root, "%03d" % bus, "%03d" % dev))
+    return nodes
+
+
+USB_ACCESS_FIX = ("install the udev rule once: `sudo cp udev/70-diskos-maskrom.rules /etc/udev/rules.d/ && "
+                  "sudo udevadm control --reload-rules && sudo udevadm trigger`, then unplug and replug the device. "
+                  "Without a desktop login session (e.g. over SSH), add GROUP=\"<group>\" to that rule "
+                  "using a group available on your system (for example plugdev on Debian or uucp on Arch), "
+                  "add your user to that group, then log out and back in. "
+                  "Do not run the installer with sudo.")
+
+
+def maskrom_access(sys_root="/sys/bus/usb/devices", dev_root="/dev/bus/usb"):
+    """Can this user OPEN the mask-ROM device, the way usbboot will? Seeing it (maskrom_count) is not enough: on
+    Linux the node is root-only until the udev rule grants access (GitHub #10: counted, then usbboot failed E301).
+    Returns ("ok"|"denied"|"unknown", detail). "unknown" = not Linux, no device, or an unexpected error."""
+    import errno
+    import os
+    nodes = maskrom_nodes(sys_root, dev_root)
+    if nodes is None:
+        return "unknown", "not checked on this system"
+    if not nodes:
+        return "unknown", "no device in mask-ROM mode"
+    for node in nodes:
+        try:
+            fd = os.open(node, os.O_RDWR)
+        except OSError as e:
+            if e.errno in (errno.EACCES, errno.EPERM):
+                return "denied", node
+            return "unknown", "%s: %s" % (node, e.strerror)
+        os.close(fd)
+    return "ok", ", ".join(nodes)
+
+
 def maskrom_count():
     """How many devices are currently in mask-ROM mode. Prefers pyusb, falls back
     to lsusb, returns -1 if neither is available (caller should warn)."""

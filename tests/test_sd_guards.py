@@ -281,7 +281,9 @@ class ReadinessGateTests(unittest.TestCase):
 
     def test_marker_is_written_only_through_disarm(self):
         text = (Path(__file__).resolve().parents[1] / 'payload' / 'S97diskos_install').read_text()
-        self.assertIn('ready() { override_on && : > /tmp/.diskos_ready', text)
+        self.assertIn('ready() {', text)
+        self.assertIn('    : > /tmp/.diskos_ready 2>/dev/null', text)
+        self.assertIn('    override_on || return 1', text)
         self.assertIn('disarm() { ready;', text)
         # the marker must live on tmpfs, so that it can only ever mean "this boot"
         self.assertNotIn('/usr/data/.diskos_ready', text)
@@ -289,7 +291,7 @@ class ReadinessGateTests(unittest.TestCase):
 
 _STOCK_FIIO_INIT = Path(os.environ.get(
     'DISKOS_STOCK_FIIO_INIT',
-    Path(__file__).resolve().parents[2] / 'analysis/firmware-audit-2026-09-05/stock-v240/usr/project/fiio_init.sh'))
+    Path(__file__).resolve().parents[2] / 'research/analysis/firmware-audit-2026-09-05/stock-v240/usr/project/fiio_init.sh'))
 
 
 @unittest.skipUnless(_STOCK_FIIO_INIT.is_file(), 'needs a pristine stock fiio_init.sh (not shipped in this repo)')
@@ -317,7 +319,7 @@ class BootHookValidatorOnRealFirmwareTests(unittest.TestCase):
         out = self.patched()
         self.assertEqual(out, self.patched())
         t = out.decode()
-        self.assertLess(t.index(imagebuild._GUARD_PATH_LINE), t.index('/usr/data/mq_ui &'))
+        self.assertLess(t.index(imagebuild._GUARD_PATH_LINE), t.index('diskos_ui_start &'))
         self.assertLess(t.index(imagebuild._GUARD_PATH_LINE), t.index('    mq_ui &'))
 
     def test_pristine_base_is_the_pinned_one_and_others_are_refused(self):
@@ -351,8 +353,8 @@ class BootHookValidatorOnRealFirmwareTests(unittest.TestCase):
             'launch through $PROCESS_MQ_UI': t.replace(tail, '$PROCESS_MQ_UI &\n' + tail, 1),
             'gate words hidden in a comment': t.replace(tail, 'if false; then :; fi # ' + sel +
                                                         ' [ -f /tmp/.diskos_ready ]\n/usr/data/mq_ui &\n' + tail, 1),
-            'single CR folds the gated if into a comment': t.replace('completing.\nif ' + sel,
-                                                                     'completing.\rif ' + sel, 1),
+            'single CR folds the gated elif into a comment': t.replace(imagebuild._OTA_BRANCH_END + 'elif ' + sel,
+                                                                       imagebuild._OTA_BRANCH_END.rstrip('\n') + '\relif ' + sel, 1),
         }
         for name, v in variants.items():
             with self.subTest(variant=name):
@@ -367,7 +369,7 @@ class BootHookValidatorOnRealFirmwareTests(unittest.TestCase):
     def test_cr_and_invalid_utf8_are_caught_by_the_sanity_check_alone(self):
         """Independent of the exact comparison: these must fail even if the expected bytes were wrong."""
         out = self.patched()
-        for bad in (out.replace(b'completing.\nif ', b'completing.\rif ', 1), out + b'\xff'):
+        for bad in (out.replace(imagebuild._OTA_BRANCH_END.encode() + b'elif ', imagebuild._OTA_BRANCH_END.rstrip('\n').encode() + b'\relif ', 1), out + b'\xff'):
             with self.assertRaises(imagebuild.BuildError):
                 imagebuild._validate_boot_hook(bad)
 
@@ -407,7 +409,7 @@ class DecisionFileCheckTests(unittest.TestCase):
 
     def test_all_boot_decision_files_are_listed_and_shipped(self):
         names = {n for _, n in imagebuild._BOOT_DECISION_FILES}
-        self.assertEqual(names, {'S96diskos_select', 'S97diskos_install', 'diskos-selected', 'diskos-bootprobe'})
+        self.assertEqual(names, {'S96diskos_select', 'S97diskos_install', 'diskos-selected', 'diskos-bootprobe', 'diskos-launch'})
         for n in names:
             p = Path(__file__).resolve().parents[1] / 'payload' / n
             self.assertTrue(p.is_file(), n)
@@ -467,9 +469,16 @@ class BootHookExecutionTests(unittest.TestCase):
                     d.write_text(f'#!/bin/sh\necho DISKOS_{name} >> {log}\n')
                     d.chmod(0o755)
             block = (block or self.launch_block()).replace('/usr/data/', str(data) + '/')
+            # the witnesses exit at once; a real UI stays up. Disable the ran-normally window (covered by
+            # test_ota_boot.HookFallbackTests, which runs the same block with UIs that stay up).
+            block = block.replace('-ge %d ]' % imagebuild._NORMAL_RUN_SECS, '-ge 0 ]')
             self.assertNotIn('/usr/data/', block)
             (t / 'block.sh').write_text('sleep() { :; }\nCOREDUMP_FLAG=' + coredump + '\n' + block + 'wait\n')
-            setup = ['mount -t tmpfs none /tmp', 'mount -t tmpfs none /opt']
+            setup = ['mount -t tmpfs none /tmp', 'mount -t tmpfs none /opt', 'mkdir -p /opt/diskos/bin',
+                     # stand-in for the read-only launcher (a MIPS binary that cannot run on this host): it just
+                     # execs its first argument, so the launch witnesses below still prove WHICH build was chosen
+                     "printf '#!/bin/sh\\nexec \"$@\"\\n' > /opt/diskos/bin/diskos-launch",
+                     'chmod 755 /opt/diskos/bin/diskos-launch']
             if helper:
                 helper_src = Path(__file__).resolve().parents[1] / 'payload' / 'diskos-selected'
                 setup += ['mkdir -p /opt/diskos/bin', f'cp {helper_src} /opt/diskos/bin/diskos-selected',
@@ -516,9 +525,9 @@ class BootHookExecutionTests(unittest.TestCase):
         """Negative control: with the coredump branch's selection/readiness removed, the stock and not-ready
         coredump cases above launch diskOS - so those cases really exercise that branch's gate."""
         blk = self.launch_block()
-        old = 'elif ' + imagebuild._SELECT_LINE + ' && [ -f /tmp/.diskos_ready ] && '
+        old = 'elif ' + imagebuild._SELECT_LINE + ' && [ -f /tmp/.diskos_ready ] && [ "$COREDUMP_FLAG"'
         self.assertEqual(blk.count(old), 1)
-        ungated = blk.replace(old, 'elif ')
+        ungated = blk.replace(old, 'elif [ "$COREDUMP_FLAG"')
         for kw in (dict(record='stock\n'), dict(record='diskos\n', ready=False)):
             with self.subTest(**kw):
                 got = self.boot(coredump='1', data_files=('mq_ui',), block=ungated, **kw)

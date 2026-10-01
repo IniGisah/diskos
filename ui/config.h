@@ -18,5 +18,6 @@ int         cfg_set_str_deferred(const char *key, const char *v);  /* in-memory 
 /* returns 1 (and clears) if any cfg write failed since the last call - so the UI
  * can surface a "couldn't save" toast instead of losing the change silently. */
 int         cfg_take_save_error(void);
+int         cfg_remove_if(int (*match)(const char *key));  /* drop every key match() accepts, one atomic save; 0 ok, -1 nothing changed, -2 saved file changed but durability unconfirmed */
 
 #endif

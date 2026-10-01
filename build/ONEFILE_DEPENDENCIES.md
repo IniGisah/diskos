@@ -2,7 +2,7 @@
 
 > **Scope note:** this inventory describes a **self-built PyInstaller onefile**. The **published
 > diskOS release does NOT ship that onefile** - it distributes source and runs from your own Python
-> (see [`NOTICE.md`](NOTICE.md) / [`licenses/THIRD_PARTY_BUNDLED.md`](licenses/THIRD_PARTY_BUNDLED.md)),
+> (see [`NOTICE.md`](../NOTICE.md) / [`licenses/THIRD_PARTY_BUNDLED.md`](../licenses/THIRD_PARTY_BUNDLED.md)),
 > so these bundled libraries are not redistributed by this project. This file is retained for anyone
 > who chooses to build and redistribute the onefile themselves (they take on these obligations).
 
@@ -16,7 +16,7 @@ bundle them.
 ## Copyleft - obligations to satisfy (priority)
 | Library | Bundled as | License | Obligation |
 |---|---|---|---|
-| **libudev** (systemd) | `libudev.so.1` | **LGPL-2.1** | ship license text + §6 relink materials (or drop it) |
+| **libudev** (systemd) | `libudev.so.1` | **LGPL-2.1** | ship license text + section 6 relink materials (or drop it) |
 | **FreeType** | `libfreetype.so.6` | **FTL or GPLv2 (dual)** | ship FTL text (permissive path) + attribution |
 | **libcap** | `libcap.so.2` | BSD-3 / GPLv2 (dual) | permissive path: BSD text |
 

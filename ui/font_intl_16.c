@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: OFL-1.1 */
+/* Glyph data converted from Noto Sans (SIL OFL 1.1); licence text: licenses/OFL-1.1-NotoSans.txt */
 /*******************************************************************************
  * Size: 16 px
  * Bpp: 4

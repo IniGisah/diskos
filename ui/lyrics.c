@@ -1,27 +1,47 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
+#include "theme.h"
 #include "sdio.h"
 #include "ipc.h"
 #include "musicdb.h"
+#include "config.h"
+#include "lrc.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 #include <errno.h>
 
-/* Lyrics view: fetches lyrics online from lrclib.net by track + artist (no API
- * key), falling back to a sibling .lrc on the SD card. The blocking wget runs on
- * a detached thread; the result is applied on the main thread by lyrics_poll(). */
+/* Lyrics view: a sibling .lrc on the SD card first, then lyrics stored inside the audio file (lrc.h), then - unless
+ * Settings > Display > Online Lyrics is off - lrclib.net by track + artist (no API key). The blocking
+ * work runs on a detached thread; the result is applied on the main thread by lyrics_poll(). Timed lyrics (a .lrc,
+ * or lrclib's syncedLyrics) show one row per line: the line at the playback position is highlighted and kept in
+ * the middle, unless the user has just scrolled. Untimed lyrics show as one block of text. */
 
 static lv_obj_t *g_scroll;
-static lv_obj_t *g_text;
+static lv_obj_t *g_text;           /* plain lyrics / status messages */
+static lv_obj_t *g_lines_box;      /* timed lyrics: one label per line (hidden otherwise) */
+
+#define LY_MAXL 400
+static lrc_line_t g_ll[LY_MAXL];   /* the timed lines on screen (main thread only) */
+static char g_ltext[16384];        /* their text */
+static char g_lplain[16384];       /* untimed rendering of a .lrc */
+static int g_nll = 0;              /* timed lines shown; 0 = block-text mode */
+static int g_lcur = -2;            /* highlighted line (-1 = before the first, -2 = not drawn yet) */
+static int g_holding = 0;          /* the user scrolled: no auto-scroll until g_hold_until */
+static uint32_t g_hold_until = 0;
+static int32_t g_scroll_target = -1; /* the scroll position last asked for (-1 = none) */
+static unsigned g_last_pos_seq = 0;
+static long g_pos_base = 0;        /* last reported position (a1 frames arrive about once a second) */
+static uint32_t g_pos_tick = 0;    /* ...and when it arrived, to interpolate between frames */
 
 /* worker->main handoff guarded by a mutex (volatile gives no cross-thread memory
  * ordering - on the dual-core X2000 the main thread could see g_lready set before the
  * g_lbuf writes are visible). The lock release/acquire pairs publish with consume. */
 static pthread_mutex_t g_ly_mu = PTHREAD_MUTEX_INITIALIZER;
-static char g_lbuf[8192];          /* result text (lyrics or message)  (see handoff note) */
+static char g_lbuf[16384];         /* result text (lyrics or message)  (see handoff note) */
+static int g_lkind = 0;            /* what g_lbuf holds: 0 = a message, 1 = plain lyrics, 2 = LRC text (guarded) */
 static int g_lready = 0;           /* a fetch finished                 (guarded) */
 static int g_linflight = 0;        /* a fetch thread is running        (guarded) */
 static int g_lphase = 0;           /* 0=checking local .lrc, 1=searching online (guarded) */
@@ -35,7 +55,7 @@ static char g_path[256];                       /* current track path (main threa
  * the worker as its arg, so the worker never reads the g_req / g_q_title / g_q_artist /
  * g_path globals directly (they are main-thread-only; a re-open could otherwise race
  * the worker's reads of them). */
-typedef struct { unsigned req; char title[512], artist[512], path[256]; } ly_job_t;  /* enc query, see g_q_* */
+typedef struct { unsigned req; int online; char title[512], artist[512], path[256]; } ly_job_t;  /* enc query, see g_q_* */
 
 
 static void urlenc(const char *s, char *out, int cap)
@@ -61,18 +81,13 @@ static void derive_lrc(const char *audio, char *out, int cap)
     else { int n = (int)strlen(out); snprintf(out + n, cap - n, ".lrc"); }
 }
 
-/* strip [..] timestamp/metadata groups from an .lrc, into out */
-static int strip_lrc(FILE *f, char *out, int cap)
+/* read a whole .lrc (up to cap-1 bytes; a longer file is cut at its last complete line) */
+static int read_lrc(FILE *f, char *out, int cap)
 {
-    int len = 0; char line[512];
-    while(fgets(line, sizeof line, f) && len < cap - 256){
-        char *p = line;
-        while(*p==' '||*p=='\t') p++;
-        while(*p=='['){ char *c = strchr(p, ']'); if(!c) break; p = c + 1; }
-        char *nl = strpbrk(p, "\r\n"); if(nl) *nl = 0;
-        if(*p) len += snprintf(out + len, cap - len, "%s\n", p);
-    }
-    return len;
+    size_t n = fread(out, 1, (size_t)cap - 1, f);
+    out[n] = 0;
+    if(n == (size_t)cap - 1){ char *nl = strrchr(out, '\n'); if(nl) nl[1] = 0; }
+    return (int)strlen(out);
 }
 
 /* parse 4 hex digits -> value, or -1 if any is not hex */
@@ -97,12 +112,35 @@ static int utf8_enc(unsigned cp, char *out, int cap){
     out[0]=(char)(0xF0|(cp>>18)); out[1]=(char)(0x80|((cp>>12)&0x3F)); out[2]=(char)(0x80|((cp>>6)&0x3F)); out[3]=(char)(0x80|(cp&0x3F)); return 4;
 }
 
-/* pull the first "plainLyrics":"..." JSON string out of resp into out (unescaped) */
-static int json_plain_lyrics(const char *resp, char *out, int cap)
+/* the first top-level result object of an lrclib search reply ("[{...},{...}]"): [*b, *e) - quotes and escapes are
+ * followed so a brace or quote inside a value can't end it early. 0 if there is none (or it is cut off). */
+static int json_first_object(const char *resp, const char **b, const char **e)
 {
-    const char *p = strstr(resp, "\"plainLyrics\":\"");
+    const char *p = strchr(resp, '{');
     if(!p) return 0;
-    p += 15;
+    int depth = 0, instr = 0;
+    for(const char *q = p; *q; q++){
+        if(instr){
+            if(*q == '\\'){ if(!q[1]) return 0; q++; }
+            else if(*q == '"') instr = 0;
+        } else if(*q == '"') instr = 1;
+        else if(*q == '{') depth++;
+        else if(*q == '}' && --depth == 0){ *b = p; *e = q + 1; return 1; }
+    }
+    return 0;
+}
+
+/* pull the `key` JSON string ("key":"...") of the FIRST search result out of resp into out (unescaped); only a key
+ * of that object counts, whatever order its fields come in */
+static int json_lyrics(const char *resp, const char *key, char *out, int cap)
+{
+    char pat[40]; snprintf(pat, sizeof pat, "\"%s\":\"", key);
+    out[0] = 0;
+    const char *ob, *oe;
+    if(!json_first_object(resp, &ob, &oe)) return 0;
+    const char *p = strstr(ob, pat);
+    if(!p || p + strlen(pat) > oe) return 0;
+    p += strlen(pat);
     int len = 0;
     while(*p && len < cap - 2){
         if(*p == '\\'){
@@ -152,17 +190,30 @@ static void *lyrics_thread(void *arg)
     static char resp[32768];           /* single worker at a time (inflight guard) -> static ok */
     resp[0] = 0;
     g_lbuf[0] = 0;                      /* sole writer until we publish; main reads after the lock */
+    g_lkind = 0;
 
     /* 1) local sibling .lrc FIRST - instant for offline users who sideloaded lyrics (no 12s wait) */
     if(job->path[0] && sd_io_begin()){
         char lrc[320]; derive_lrc(job->path, lrc, sizeof lrc);
         FILE *f = fopen(lrc, "r");
-        if(f){ strip_lrc(f, g_lbuf, sizeof g_lbuf); fclose(f); }
+        if(f){ read_lrc(f, g_lbuf, sizeof g_lbuf); fclose(f); }
+        sd_io_end();
+        g_lkind = 2;
+    }
+
+    /* 2) lyrics inside the audio file (ID3 USLT/SYLT, Vorbis comments, MP4 (c)lyr): still on the card, no network */
+    if(!g_lbuf[0] && job->path[0] && sd_io_begin()){
+        FILE *f = fopen(job->path, "rb");
+        if(f){
+            int synced = 0;
+            if(lyr_embedded_read(f, g_lbuf, sizeof g_lbuf, &synced) > 0) g_lkind = synced ? 2 : 1;
+            fclose(f);
+        }
         sd_io_end();
     }
 
-    /* 2) fall back to online (lrclib) by track + artist */
-    if(!g_lbuf[0] && job->title[0]){
+    /* 3) fall back to online (lrclib) by track + artist, unless the user turned it off */
+    if(!g_lbuf[0] && job->title[0] && job->online){
         pthread_mutex_lock(&g_ly_mu); g_lphase = 1; pthread_mutex_unlock(&g_ly_mu);   /* -> poll shows "Searching online..." */
         if(job->artist[0])
             snprintf(cmd, sizeof cmd,
@@ -174,12 +225,18 @@ static void *lyrics_thread(void *arg)
         FILE *f = popen(cmd, "r");
         if(f){ int n = fread(resp, 1, sizeof(resp)-1, f); resp[n>0?n:0] = 0; pclose(f); }
         else fprintf(stderr, "lyrics popen failed: %s\n", strerror(errno));
-        json_plain_lyrics(resp, g_lbuf, sizeof g_lbuf);
-        if(f && !g_lbuf[0]) fprintf(stderr, "lyrics: lrclib returned no plainLyrics for '%s'\n", job->title);
+        g_lkind = 2;
+        if(!json_lyrics(resp, "syncedLyrics", g_lbuf, sizeof g_lbuf)){
+            g_lkind = 1;
+            json_lyrics(resp, "plainLyrics", g_lbuf, sizeof g_lbuf);
+        }
+        if(f && !g_lbuf[0]) fprintf(stderr, "lyrics: lrclib returned no lyrics for '%s'\n", job->title);
     }
 
-    if(!g_lbuf[0])
+    if(!g_lbuf[0]){
         snprintf(g_lbuf, sizeof g_lbuf, "No lyrics found.");
+        g_lkind = 0;
+    }
 
     /* publish atomically (pairs with lyrics_poll's lock so g_lbuf is visible) */
     pthread_mutex_lock(&g_ly_mu);
@@ -207,6 +264,7 @@ static void start_fetch(void)
         return;
     }
     job->req = g_req;
+    job->online = cfg_get_int("online_lyrics", 1);   /* Settings > Display > Online Lyrics (on unless turned off) */
     snprintf(job->title,  sizeof job->title,  "%s", g_q_title);
     snprintf(job->artist, sizeof job->artist, "%s", g_q_artist);
     snprintf(job->path,   sizeof job->path,   "%s", g_path);
@@ -217,6 +275,85 @@ static void start_fetch(void)
         pthread_mutex_lock(&g_ly_mu); g_linflight = 0; pthread_mutex_unlock(&g_ly_mu);
         if(g_text) lv_label_set_text(g_text, "Lyrics unavailable.");
     }
+}
+
+/* block-text mode: one label (status messages, untimed lyrics) */
+static void show_text(const char *txt)
+{
+    g_nll = 0; g_lcur = -2;
+    if(g_lines_box){ lv_obj_clean(g_lines_box); lv_obj_add_flag(g_lines_box, LV_OBJ_FLAG_HIDDEN); }
+    if(g_text){ lv_obj_remove_flag(g_text, LV_OBJ_FLAG_HIDDEN); lv_label_set_text(g_text, txt); }
+    if(g_scroll) lv_obj_scroll_to_y(g_scroll, 0, LV_ANIM_OFF);
+}
+
+/* timed mode: one label per line in g_ll; returns 0 (and leaves the view alone) if the text isn't timed */
+static int show_timed(const char *lrc)
+{
+    int synced = 0;
+    int n = lrc_parse(lrc, g_ll, LY_MAXL, g_ltext, sizeof g_ltext, g_lplain, sizeof g_lplain, &synced);
+    if(!synced || !g_lines_box){
+        show_text(g_lplain[0] ? g_lplain : "No lyrics found.");
+        return 0;
+    }
+    lv_obj_clean(g_lines_box);
+    for(int i = 0; i < n; i++){
+        lv_obj_t *l = lv_label_create(g_lines_box);
+        lv_obj_set_width(l, 280);
+        lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_font(l, TF(USER_16), 0);
+        lv_obj_set_style_text_color(l, TC(TEXT_MUTED), 0);
+        lv_label_set_text(l, g_ltext[g_ll[i].text] ? g_ltext + g_ll[i].text : " ");   /* an empty timed line is a pause */
+    }
+    g_nll = n; g_lcur = -2; g_holding = 0; g_scroll_target = -1;
+    if(g_text) lv_obj_add_flag(g_text, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(g_lines_box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_update_layout(g_scroll);
+    lv_obj_scroll_to_y(g_scroll, 0, LV_ANIM_OFF);
+    return 1;
+}
+
+/* the playback position now: the last reported one, plus the time since it arrived while playing (capped) */
+static long lyrics_position(void)
+{
+    track_state_t st; ipc_get_state(&st);
+    uint32_t now = lv_tick_get();
+    if(st.pos_seq != g_last_pos_seq || st.position_ms != g_pos_base){   /* a new report (or a seeded/first one) */
+        g_last_pos_seq = st.pos_seq; g_pos_base = st.position_ms; g_pos_tick = now;
+    }
+    long est = g_pos_base;
+    if(ui_is_playing()){ uint32_t d = now - g_pos_tick; est += d > 1500 ? 1500 : (long)d; }
+    return est;
+}
+
+/* highlight the line at the playback position and keep it in the middle */
+static void lyrics_follow(void)
+{
+    if(!g_nll || !g_lines_box) return;
+    int idx = lrc_index_at(g_ll, g_nll, lyrics_position());
+    if(idx != g_lcur){
+        if(g_lcur >= 0 && g_lcur < g_nll) lv_obj_set_style_text_color(lv_obj_get_child(g_lines_box, g_lcur), TC(TEXT_MUTED), 0);
+        g_lcur = idx;
+        if(idx >= 0) lv_obj_set_style_text_color(lv_obj_get_child(g_lines_box, idx), TC(TEXT_LYRICS), 0);
+    }
+    if(g_lcur < 0) return;
+    if(g_holding && (int32_t)(lv_tick_get() - g_hold_until) < 0) return;   /* the user is reading elsewhere */
+    if(g_holding){ g_holding = 0; g_scroll_target = -1; }                   /* hold over: come back to the line */
+    /* checked every poll, not only when the line changes: the first layout after a rebuild can still be settling */
+    lv_obj_update_layout(g_scroll);
+    lv_obj_t *l = lv_obj_get_child(g_lines_box, g_lcur);
+    lv_area_t la, sa;                               /* on-screen: how far the line's middle is from the view's middle */
+    lv_obj_get_coords(l, &la); lv_obj_get_coords(g_scroll, &sa);
+    int32_t y = lv_obj_get_scroll_y(g_scroll) + (la.y1 + la.y2) / 2 - (sa.y1 + sa.y2) / 2;
+    if(y < 0) y = 0;
+    if(y != g_scroll_target){ g_scroll_target = y; lv_obj_scroll_to_y(g_scroll, y, LV_ANIM_ON); }
+}
+
+static void scroll_cb(lv_event_t *e)
+{
+    lv_event_code_t c = lv_event_get_code(e);
+    if(c == LV_EVENT_PRESSED || (c == LV_EVENT_SCROLL_BEGIN && lv_indev_active()))
+        { g_holding = 1; g_hold_until = lv_tick_get() + 4000; }
 }
 
 void lyrics_open(void)
@@ -240,12 +377,11 @@ void lyrics_open(void)
     urlenc(title,  g_q_title,  sizeof g_q_title);
     urlenc(artist, g_q_artist, sizeof g_q_artist);
 
-    lv_label_set_text(g_text, "Checking SD card...");
-    lv_obj_scroll_to_y(g_scroll, 0, LV_ANIM_OFF);
+    show_text("Checking SD card...");
     screen_show(SCR_LYRICS);
 
     if(g_q_title[0]) start_fetch();
-    else             lv_label_set_text(g_text, "No track playing.");
+    else             show_text("No track playing.");
 }
 
 void lyrics_poll(lv_timer_t *t)
@@ -259,6 +395,9 @@ void lyrics_poll(lv_timer_t *t)
         track_state_t st; ipc_get_state(&st);
         if(st.path[0] && strcmp(st.path, g_path) != 0){ lyrics_open(); return; }
     }
+    int on = screen_current() == SCR_LYRICS;
+    if(t) lv_timer_set_period(t, (on && g_nll) ? 200 : 500);   /* follow timed lines closely only while they show */
+    if(on) lyrics_follow();
     int ready = 0, inflight, phase; unsigned done = 0;
     pthread_mutex_lock(&g_ly_mu);
     if(g_lready){ g_lready = 0; ready = 1; done = g_done_req; }
@@ -272,8 +411,8 @@ void lyrics_poll(lv_timer_t *t)
     if(done == g_req){
         /* result is for the current track; g_lbuf is visible (published under the lock)
          * and no worker is running, so reading it here is race-free. */
-        lv_label_set_text(g_text, g_lbuf);
-        lv_obj_scroll_to_y(g_scroll, 0, LV_ANIM_OFF);
+        if(g_lkind == 2){ if(show_timed(g_lbuf) && on) lyrics_follow(); }
+        else show_text(g_lbuf);
     } else if(g_q_title[0]){
         /* finished fetch was for a superseded track - fetch the current one
          * (start_fetch no-ops if a newer fetch is already running). */
@@ -284,7 +423,7 @@ void lyrics_poll(lv_timer_t *t)
 
 void lyrics_create(lv_obj_t *root)
 {
-    lv_obj_set_style_bg_color(root, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
 
     ui_header(root, "Lyrics");   /* shared standard header */
@@ -301,7 +440,21 @@ void lyrics_create(lv_obj_t *root)
     lv_obj_set_width(g_text, 280);
     lv_label_set_long_mode(g_text, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(g_text, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_text, ui_font_cjk(16), 0);   /* CJK lyrics render via Source Han Sans fallback */
-    lv_obj_set_style_text_color(g_text, lv_color_hex(0xE5E5EA), 0);
+    lv_obj_set_style_text_font(g_text, TF(USER_16), 0);   /* CJK lyrics render via Source Han Sans fallback */
+    lv_obj_set_style_text_color(g_text, TC(TEXT_LYRICS), 0);
     lv_label_set_text(g_text, "");
+
+    g_lines_box = lv_obj_create(g_scroll);
+    lv_obj_remove_style_all(g_lines_box);
+    lv_obj_set_width(g_lines_box, 280);
+    lv_obj_set_height(g_lines_box, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(g_lines_box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(g_lines_box, 10, 0);
+    lv_obj_set_style_pad_top(g_lines_box, 100, 0);       /* the first and last lines can reach the middle */
+    lv_obj_set_style_pad_bottom(g_lines_box, 110, 0);
+    lv_obj_remove_flag(g_lines_box, LV_OBJ_FLAG_CLICKABLE);   /* presses go to the scroller (manual-scroll hold) */
+    lv_obj_add_flag(g_lines_box, LV_OBJ_FLAG_HIDDEN);
+    g_nll = 0; g_lcur = -2;
+    lv_obj_add_event_cb(g_scroll, scroll_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(g_scroll, scroll_cb, LV_EVENT_SCROLL_BEGIN, NULL);
 }

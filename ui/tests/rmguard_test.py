@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Exercise the actual launcher helpers with temporary host paths, never /usr/data.
 
 Extracting the helpers keeps this regression test linked to main.c without linking

@@ -7,7 +7,7 @@
 # What this does NOT install (they come from your system, not from us):
 #   - Python 3 itself            (install via your OS package manager if missing)
 #   - Tk/tkinter                 (only needed for the GRAPHICAL installer; CLI works without it)
-#   - libusb-1.0                 (needed to talk to the device in mask-ROM mode)
+#   - libusb-1.0                 (needed if no bundled copy is present)
 # The script checks for these and tells you exactly what to install if any are missing.
 set -eu
 
@@ -75,26 +75,33 @@ if "$VENV_PY" -c 'import tkinter' 2>/dev/null; then
     echo "  ok: tkinter present - the graphical installer will work"
 else
     echo "  note: tkinter NOT found - the GRAPHICAL installer will not run (the CLI still works)."
-    echo "        To enable the GUI, install your system's Tk package, then re-run this script:"
+    echo "        To enable the GUI, install Tk for this Python, then re-run this script:"
     echo "          Arch/CachyOS:  sudo pacman -S tk"
     echo "          Debian/Ubuntu: sudo apt install python3-tk"
     echo "          Fedora:        sudo dnf install python3-tkinter"
-    echo "          macOS:         brew install python-tk   (or use python.org's Python, which bundles Tk)"
+    echo "          macOS:         brew install python-tk@$("$PY" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+    echo "                         (or use python.org's Python, which bundles Tk)"
 fi
 
 # libusb-1.0 backend for pyusb (needed to see the device in mask-ROM mode).
-if "$VENV_PY" -c 'import ctypes.util,sys; sys.exit(0 if ctypes.util.find_library("usb-1.0") else 1)' 2>/dev/null; then
+TAG=$("$VENV_PY" -c 'from diskos_installer import platform_probe; print(platform_probe.host_tag())' 2>/dev/null || true)
+BUNDLED_LIBUSB=0
+for f in "$HERE/vendor/$TAG/lib/"libusb-1.0*.dylib "$HERE/vendor/$TAG/lib/"libusb-1.0.so*; do
+    [ -f "$f" ] && BUNDLED_LIBUSB=1
+done
+if [ "$BUNDLED_LIBUSB" -eq 1 ]; then
+    echo "  ok: bundled libusb-1.0 present - device detection will use it"
+elif "$VENV_PY" -c 'import ctypes.util,sys; sys.exit(0 if ctypes.util.find_library("usb-1.0") else 1)' 2>/dev/null; then
     echo "  ok: libusb-1.0 present - device detection will work"
 else
     echo "  note: libusb-1.0 NOT found - the tool cannot detect the device until you install it:"
     echo "          Arch/CachyOS:  sudo pacman -S libusb"
     echo "          Debian/Ubuntu: sudo apt install libusb-1.0-0"
-    echo "          Fedora:        sudo dnf install libusbx"
+    echo "          Fedora:        sudo dnf install libusb1"
     echo "          macOS:         brew install libusb"
 fi
 
 # squashfs-tools (needed to unpack and build firmware images)
-TAG=$("$VENV_PY" -c 'import sys; sys.path.insert(0, "."); from diskos_installer import platform_probe; print(platform_probe.host_tag())' 2>/dev/null || true)
 if [ -n "$TAG" ] && [ -x "$HERE/vendor/$TAG/mksquashfs" ] && [ -x "$HERE/vendor/$TAG/unsquashfs" ]; then
     echo "  ok: bundled squashfs-tools present"
 elif command -v mksquashfs >/dev/null 2>&1 && command -v unsquashfs >/dev/null 2>&1; then
@@ -112,7 +119,11 @@ if [ -n "$TAG" ] && [ -x "$HERE/vendor/$TAG/usbboot" ]; then
     echo "  ok: bundled usbboot present"
 else
     echo "  note: usbboot not built yet (needed to flash in mask-ROM mode)."
-    echo "        Build it once with: bash build/build-usbboot-static.sh"
+    case "$TAG" in
+        macos-*) echo "        Build it once with: bash vendor/setup-macos.sh" ;;
+        linux-*) echo "        Build it once with: bash build/build-usbboot-static.sh" ;;
+        *) echo "        See build/NATIVE_TOOLS.md for supported host builds." ;;
+    esac
 fi
 
 echo

@@ -3,7 +3,9 @@
 /* toast.c - transient bottom-of-screen message for completion feedback.
  * ui_toast("Imported 3 playlists") shows a pill on lv_layer_top that auto-dismisses.
  * Non-blocking, non-clickable (doesn't eat touches). Replaces any prior toast. */
+#include "i18n.h"
 #include "screens.h"
+#include "theme.h"
 
 static lv_obj_t   *g_toast;
 static lv_timer_t *g_toast_timer;
@@ -24,12 +26,13 @@ int ui_toast_hint(const char *msg)
 void ui_toast(const char *msg)
 {
     if(!msg) return;
+    msg = tr(msg);   /* the interface language; text with no entry (a name, a count) shows as given */
     if(g_toast){ lv_obj_delete_async(g_toast); g_toast = NULL; }
     if(g_toast_timer){ lv_timer_delete(g_toast_timer); g_toast_timer = NULL; }
 
     g_toast = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(g_toast);
-    lv_obj_set_style_bg_color(g_toast, lv_color_hex(0x2C2C2E), 0);
+    lv_obj_set_style_bg_color(g_toast, TC(SURFACE_RAISED), 0);
     lv_obj_set_style_bg_opa(g_toast, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(g_toast, 16, 0);
     lv_obj_set_style_pad_all(g_toast, 12, 0);
@@ -44,8 +47,8 @@ void ui_toast(const char *msg)
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(l, 204);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(l, ui_font_cjk(16), 0);   /* some toasts embed a filename/name: chain (issue #3) */
-    lv_obj_set_style_text_color(l, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(l, TF(USER_16), 0);   /* some toasts embed a filename/name: chain (issue #3) */
+    lv_obj_set_style_text_color(l, TC(TEXT_PRIMARY), 0);
 
     g_toast_timer = lv_timer_create(toast_hide_cb, 2200, NULL);
 }

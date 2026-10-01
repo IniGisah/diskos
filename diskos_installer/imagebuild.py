@@ -19,7 +19,7 @@ import zipfile
 from . import bundle
 from .reporter import CLIReporter
 
-IMG_SIZE = 100663296         # diskOS image size: 768 NAND blocks (~96 MiB) - fits v2.40's 88 MB rootfs and covers v2.09/v2.28. The NAND writer (my_write5) MUST be built for this many blocks (NLOGBLOCKS=768); the flasher's writer-capacity check (dbg[6]) enforces it so a mismatched writer can't silently truncate. Written to the start of the mtd2 rootfs partition (128 MB); the RO squashfs need not fill it.
+IMG_SIZE = 100663296         # diskOS image size: 768 NAND blocks (~96 MiB) - fits v2.40's 88 MB rootfs and covers v2.09/v2.28. The NAND writer (my_write6) MUST be built for this many blocks (NLOGBLOCKS=768); the flasher checks the pinned writer's descriptor and dbg[6] so a mismatched writer can't silently truncate. Written to the start of the mtd2 rootfs partition (128 MB); the RO squashfs need not fill it.
 
 # Known-good stock rootfs.squashfs, verified out-of-band (NOT trusting the in-zip OTA manifest,
 # which an attacker could modify consistently). A tested firmware whose extracted rootfs does not
@@ -30,19 +30,19 @@ PINNED_ROOTFS = {
     "228": ("0ffd877bca2c69ddff9ca70f4494da0d9e580c18d0f587e2c6d9921f2db82bd2", 72957952),
     "209": ("f1e3c69fb0e88b923c135558e01f4387a661f68839c8118e8ad490bdc9fc74e6", 75919360),
     "240": ("b479e159db5134325819b5f6e5a54388f3adefae373a4ee60680f02d5dcf0bb8", 88420352),
-    # V2.57 pinned but NOT yet in TESTED_FW: a build on it needs DISKOS_ALLOW_UNTESTED_FW=1 and stays
-    # unqualified until on-device init/artwork/BT/gain/USB-DAC testing passes (fits the 768-block image).
+    # V2.57: qualified 2026-09-28 on a real V2.57 Disc (installed-base probe x2, gate good/wrong-base/wrong-image,
+    # production flash verified, first boot installed the embedded UI); fits the 768-block image.
     "257": ("111e4dd7ee3d7ff91ba7e61181690be7ffd22bd1bbd13ad513f5f015ffb302ae", 80596992),
 }
 # Firmware versions diskOS has been flash-tested against. Others have DIFFERENT command-tag
 # meanings, so diskOS built on them can send wrong commands and misbehave/reboot.
 # v2.40's 88 MB rootfs needs IMG_SIZE=96 MB + the 768-block writer (see IMG_SIZE note).
-TESTED_FW = {"209", "228", "240"}
-# Firmware diskOS may be INSTALLED on in this release: the three stock versions it supports. Only their exact
+TESTED_FW = {"209", "228", "240", "257"}
+# Firmware diskOS may be INSTALLED on in this release: the four stock versions it supports. Only their exact
 # pinned images are accepted (validate_stock_rootfs(..., allow_override=False) on install/build), and there is no
-# override. V2.57 is pinned for research but NOT supported. TESTED_FW governs validation of saved stock images
-# for restore.
-INSTALL_FW = {"209", "228", "240"}
+# override. On the Disc the writer's base gate additionally proves the kernel + recovery are that version's.
+# TESTED_FW governs validation of saved stock images for restore.
+INSTALL_FW = {"209", "228", "240", "257"}
 
 
 def require_installable(mver):
@@ -320,6 +320,93 @@ def _copyfile(src, dst):
 # --- fiio_init.sh boot-hook patch (python-native, single-match-or-refuse) ----
 _OLD_IF = 'if [ "$COREDUMP_FLAG" == "1" ]; then'
 _LAUNCH = _OLD_IF + "\n    /usr/data/mq_ui &"
+# Read-only launcher (OTA builds only): hashes /usr/data/mq_ui against what S97 verified this boot, copies the very
+# bytes it hashed into a private in-RAM file and execs that (closes the verify-then-exec race); walks trial -> good ->
+# good.prev -> flashed -> stock in-process. Source: src/launcher/diskos_launch.c (build/build-launcher.sh).
+#
+# NO CHANGE FOR USERS WHO NEVER UPDATE: the boot path they run is exactly the v1.1.3 one (`/usr/data/mq_ui &` in the
+# hook). The launcher is used only when S97 selected a signed, non-flashed build for THIS boot (BUILD=trial|good|prev
+# in /tmp/.diskos_run, which S97 writes before the hook runs). The OTA additions are two clearly delimited pieces
+# (helpers, and one extra leading branch); removing them and turning that branch's `elif` back into `if` gives the
+# v1.1.3 hook byte for byte (tests/release/test_ota_boot.py checks this against the v1.1.3 tag).
+_LAUNCHER = "/opt/diskos/bin/diskos-launch"
+_LAUNCH_RUN = _LAUNCHER + " /usr/data/mq_ui"
+_LAUNCH_CMD = "diskos_ui_start &"
+_WATCH_NAMES = 'PROCESS_MQ_UI="mq_ui"; PROCESS_MQ_PLAYER="mq_player"'
+_NORMAL_RUN_SECS = 30           # a UI that ran this long is left to the stock watchdog when it exits
+_HASH_BOUND_SECS = 10           # the flashed-UI hash check in the fallback must finish by then, else stock starts
+_STARTUP_BOUND_SECS = 15        # the OTA launch must have produced a running diskOS UI by then, else the supervisor acts
+_OTA_HELPERS_BEGIN = "# --- diskOS OTA helpers (used only when S97 selected a signed non-flashed build) ---\n"
+_OTA_HELPERS_END = "# --- end OTA helpers ---\n"
+_OTA_BRANCH_BEGIN = "# --- OTA branch: only when S97 selected a signed non-flashed build for this boot ---\n"
+_OTA_BRANCH_END = "# --- end OTA branch ---\n"
+_OTA_HELPERS = (
+    _OTA_HELPERS_BEGIN +
+    "diskos_ota_build() {\n"
+    "    [ -f /tmp/.diskos_run ] && [ ! -L /tmp/.diskos_run ] && [ -x " + _LAUNCHER + " ] || return 1\n"
+    "    _b=$(grep '^BUILD=' /tmp/.diskos_run 2>/dev/null | head -n 1 | cut -d= -f2)\n"
+    "    case \"$_b\" in trial|good|prev) return 0;; esac\n"
+    "    return 1\n"
+    "}\n"
+    # Startup supervisor. The launcher runs in the background under the watched name mq_ui and walks its ladder
+    # itself; if it has NOT produced a running diskOS UI (its watcher writes /tmp/.diskos_launched only after a
+    # successful exec) within the bound, and it is not already the stock UI, the supervisor REVOKES the launch token
+    # (the launcher checks it right before every exec), kills only the launcher WITHOUT waiting for it (a process in
+    # uninterruptible I/O may not die at once), and starts the fallback immediately: the READ-ONLY flashed diskOS if it
+    # matches the RO manifest, else the stock UI. Nothing here touches mq_player or /usr/data/mq_ui.
+    # The manifest read and the hash run in a background subshell with a hard deadline and are NEVER waited for: a
+    # stalled read means "not verified" and the caller launches stock at once.
+    "diskos_flashed_ok() {\n"
+    "    rm -f /tmp/.diskos_flashed_chk /tmp/.diskos_flashed_chk.tmp\n"
+    "    (\n"
+    "        _m=$(grep '^SHA256=' /etc/diskos_manifest 2>/dev/null | head -n 1 | cut -d= -f2)\n"
+    "        _h=$(sha256sum /opt/diskos/mq_ui 2>/dev/null | cut -d' ' -f1)\n"
+    "        if [ -n \"$_m\" ] && [ \"$_h\" = \"$_m\" ]; then echo ok; else echo no; fi > /tmp/.diskos_flashed_chk.tmp\n"
+    "        mv -f /tmp/.diskos_flashed_chk.tmp /tmp/.diskos_flashed_chk\n"
+    "    ) &\n"
+    "    _hp=$!\n"
+    "    _hw=0\n"
+    "    while [ \"$_hw\" -lt " + str(_HASH_BOUND_SECS) + " ] && [ ! -f /tmp/.diskos_flashed_chk ]; do\n"
+    "        sleep 1\n"
+    "        _hw=$((_hw + 1))\n"
+    "    done\n"
+    "    _r=$(cat /tmp/.diskos_flashed_chk 2>/dev/null)\n"
+    "    kill -9 \"$_hp\" 2>/dev/null\n"
+    "    rm -f /tmp/.diskos_flashed_chk /tmp/.diskos_flashed_chk.tmp\n"
+    "    [ \"$_r\" = ok ]\n"
+    "}\n"
+    "diskos_ui_start() {\n"
+    "    _u0=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)\n"
+    "    : > /tmp/.diskos_launch_token\n"
+    "    " + _LAUNCH_RUN + " &\n"
+    "    _lp=$!\n"
+    "    _w=0\n"
+    "    _k=0\n"
+    "    while [ \"$_w\" -lt " + str(_STARTUP_BOUND_SECS) + " ]; do\n"
+    "        [ -f /tmp/.diskos_launched ] && break\n"
+    "        kill -0 \"$_lp\" 2>/dev/null || break\n"
+    "        sleep 1\n"
+    "        _w=$((_w + 1))\n"
+    "    done\n"
+    "    if [ ! -f /tmp/.diskos_launched ] && kill -0 \"$_lp\" 2>/dev/null; then\n"
+    "        case \"$(readlink /proc/$_lp/exe 2>/dev/null)\" in\n"
+    "            /usr/bin/mq_ui) ;;\n"
+    "            *) rm -f /tmp/.diskos_launch_token; kill -9 \"$_lp\" 2>/dev/null; _k=1 ;;\n"
+    "        esac\n"
+    "    fi\n"
+    "    [ \"$_k\" = 0 ] && wait \"$_lp\" 2>/dev/null\n"
+    "    rm -f /tmp/.diskos_launch_token\n"
+    "    _u1=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)\n"
+    "    [ \"$_k\" = 0 ] && [ \"$((_u1 - _u0))\" -ge " + str(_NORMAL_RUN_SECS) + " ] && return 0\n"
+    "    if diskos_flashed_ok; then\n"
+    "        PATH=/opt/diskos:$PATH mq_ui\n"
+    "        _u2=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)\n"
+    "        [ \"$((_u2 - _u1))\" -ge " + str(_NORMAL_RUN_SECS) + " ] && return 0\n"
+    "    fi\n"
+    "    mq_ui\n"
+    "}\n" +
+    _OTA_HELPERS_END
+)
 _GUARD_PATH_LINE = "export PATH=/opt/diskos/bin:$PATH"
 # S96 writes exactly "diskos\n" or "stock\n". Only a POSITIVE record launches diskOS: missing, partial or
 # malformed (selector hung, crashed, timed out or never ran) means stock. The record is read ONLY through
@@ -328,6 +415,10 @@ _GUARD_PATH_LINE = "export PATH=/opt/diskos/bin:$PATH"
 # if the helper itself is missing the test fails, which is stock.
 _SELECTED_HELPER = "/opt/diskos/bin/diskos-selected"
 _BOOTPROBE = "/opt/diskos/bin/diskos-bootprobe"
+# Artwork helper: the UI runs it to make covers (stock V2.57's ffmpeg has no image decoders). Not part of the boot
+# decision, but shipped and validated the same way: exact bytes, a regular file, mode 0755.
+_ARTDEC = "/opt/diskos/bin/diskos-artdec"
+_SUPPORT_FILES = ((_ARTDEC.lstrip("/"), "diskos-artdec"),)
 _SELECT_LINE = _SELECTED_HELPER
 # (image path, payload name) of every file the boot's stock/diskOS decision runs through
 _BOOT_DECISION_FILES = (
@@ -335,6 +426,15 @@ _BOOT_DECISION_FILES = (
     ("etc/init.d/S97diskos_install", "S97diskos_install"),
     (_SELECTED_HELPER.lstrip("/"), "diskos-selected"),
     (_BOOTPROBE.lstrip("/"), "diskos-bootprobe"),
+    (_LAUNCHER.lstrip("/"), "diskos-launch"),
+)
+_IF_LINE = "if " + _SELECT_LINE + " && [ -f /tmp/.diskos_ready ] && [ -f /usr/data/mq_ui ] && [ -f /usr/data/mq_player ]"
+_OTA_BRANCH = (
+    _OTA_BRANCH_BEGIN +
+    _IF_LINE + " && diskos_ota_build; then\n"
+    "    " + _WATCH_NAMES + "\n"
+    "    " + _LAUNCH_CMD + "\n    sleep 2\n    /usr/data/mq_player &\n" +
+    _OTA_BRANCH_END
 )
 _BLOCK = (
     "# diskOS SD guard: the stock player runs 'umount /tmp/sdcard; rm -rf /tmp/sdcard' without checking\n"
@@ -342,6 +442,7 @@ _BLOCK = (
     "# operands. Exported HERE (before any launch) so the initial launch, BOTH watchdog respawn\n"
     "# branches and the stock fallback all inherit it.\n"
     + _GUARD_PATH_LINE + "\n"
+    + _OTA_HELPERS +
     "# READINESS GATE: /tmp/.diskos_ready is written by S97 only when it COMPLETED and left a verified\n"
     "# override in place. It is on tmpfs, so it means 'this boot'. Requiring it means a first-boot hook\n"
     "# that hung, was killed, or could not quarantine a bad install falls back to STOCK - the decision no\n"
@@ -349,7 +450,8 @@ _BLOCK = (
     "# STOCK SELECTION: S96 sampled the boot preference and the Vol-Up override once, before any diskOS\n"
     "# code ran, and recorded the result. Only a positive 'diskos' record launches diskOS, so reaching the\n"
     "# stock firmware never depends on diskOS - or on the selector itself - completing.\n"
-    "if " + _SELECT_LINE + " && [ -f /tmp/.diskos_ready ] && [ -f /usr/data/mq_ui ] && [ -f /usr/data/mq_player ]; then\n"
+    + _OTA_BRANCH +
+    "el" + _IF_LINE + "; then\n"
     "    # diskOS override: run our UI + the player from /usr/data (persists across\n"
     "    # rootfs flashes).  Falls back to the stock rootfs binaries if either is absent.\n"
     "    /usr/data/mq_ui &\n    sleep 2\n    /usr/data/mq_player &\n"
@@ -375,6 +477,8 @@ _USR_DATA_ALLOWED = (
     'PROCESS_MQ_PLAYER="/usr/data/mq_player"',
     '/usr/data/mq_ui &',
     '/usr/data/mq_player &',
+    _LAUNCH_CMD,
+    _LAUNCH_RUN + " &",
 )
 
 
@@ -404,6 +508,10 @@ def _validate_boot_hook(fi):
     g = fi.find(_GUARD_PATH_LINE)
     if g < 0 or g > fi.find("diskOS override"):
         bad("lacks the SD-guard PATH export before the launch block")
+    if fi.count(_OTA_BRANCH) != 1 or fi.count(_WATCH_NAMES) != 1:
+        bad("does not contain exactly one OTA branch (gated on diskos_ota_build)")
+    if fi.count(_OTA_HELPERS) != 1 or fi.find(_OTA_HELPERS) > fi.find("diskOS override"):
+        bad("lacks the OTA helper functions before the launch block")
     if fi.count(_BLOCK + "\n    /usr/data/mq_ui &") != 1:
         bad("does not contain the generated launch block followed by the branch it replaced")
     lines = fi.splitlines()
@@ -413,13 +521,22 @@ def _validate_boot_hook(fi):
             continue
         if st in _USR_DATA_ALLOWED:
             continue
-        if st.startswith("if " + _SELECT_LINE + " && [ -f /tmp/.diskos_ready ] && [ -f /usr/data/mq_ui ]"):
+        if st.startswith("if " + _SELECT_LINE + " && [ -f /tmp/.diskos_ready ] && [ -f /usr/data/mq_ui ]") \
+                or st.startswith("elif " + _SELECT_LINE + " && [ -f /tmp/.diskos_ready ] && [ -f /usr/data/mq_ui ]"):
             continue
         bad(f"line {i + 1} mentions the /usr/data binaries in an unrecognised form: {st[:80]!r}")
     launches = 0
+    in_fn = False
     for i, ln in enumerate(lines):
         st = ln.strip()
-        if st.startswith("#") or not (st.startswith("/usr/data/mq_ui") or st.startswith("/usr/data/mq_player")):
+        if st in ("diskos_ui_start() {", "diskos_ota_build() {"):
+            in_fn = True
+            continue
+        if in_fn:
+            in_fn = st != "}"
+            continue                  # the function body is the checked launcher call itself; its CALL sites are gated below
+        if st.startswith("#") or not (st.startswith("/usr/data/mq_ui") or st.startswith("/usr/data/mq_player")
+                                      or st.startswith("diskos_ui_start")):
             continue
         launches += 1
         cond = None
@@ -482,6 +599,110 @@ def _patch_fiio_init(path, rep):
     s = s[:i] + _BLOCK + s[i + len(_OLD_IF):]
     with open(path, "wb") as f:
         f.write(s.encode("utf-8"))
+
+
+# --- over-the-air update trust anchor (Tier A; contract: update-system/OTA_CONTRACT.md) ------------------------
+# The read-only rootfs carries the OFFLINE ROOT PUBLIC KEY, the anti-downgrade floors and the verifier script.
+# /etc/diskos-ota/{root.pub.pem, epochs, diskos-verify.sh}. Without a root key the image is built with OTA OFF
+# (nothing is written, and S97/the UI treat the install as "updates not supported"): a public build never
+# trusts a key nobody chose. Key sources, first hit wins: the build_image() argument, $DISKOS_OTA_ROOTPUB,
+# payload/diskos-root.pub.pem. Floors: argument, $DISKOS_MIN_KEY_EPOCH / $DISKOS_MIN_UI_EPOCH, default 1.
+OTA_DIR = "etc/diskos-ota"
+DEFAULT_MIN_KEY_EPOCH = 1
+DEFAULT_MIN_UI_EPOCH = 1
+_P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200")   # SubjectPublicKeyInfo, id-ecPublicKey/prime256v1, uncompressed point
+_OTA_FILES = (("root.pub.pem", 0o644), ("epochs", 0o644), ("diskos-verify.sh", 0o644))
+
+
+def _check_rootpub_pem(raw):
+    """A root key must be exactly one PEM PUBLIC KEY holding a P-256 SubjectPublicKeyInfo (91 bytes DER).
+    Structural check only (no OpenSSL needed on the user's machine); the device verifier does the crypto."""
+    import base64
+    try:
+        text = raw.decode("ascii")
+    except UnicodeDecodeError:
+        raise BuildError("OTA root key is not ASCII PEM", code="E240")
+    lines = [ln.strip() for ln in text.strip().splitlines()]
+    if len(lines) < 3 or lines[0] != "-----BEGIN PUBLIC KEY-----" or lines[-1] != "-----END PUBLIC KEY-----":
+        raise BuildError("OTA root key must be a single 'BEGIN PUBLIC KEY' PEM block (no private key, no chain)", code="E240")
+    try:
+        der = base64.b64decode("".join(lines[1:-1]), validate=True)
+    except Exception:
+        raise BuildError("OTA root key PEM body is not valid base64", code="E240")
+    if len(der) != 91 or not der.startswith(_P256_SPKI_PREFIX):
+        raise BuildError("OTA root key is not an ECDSA P-256 public key", code="E240")
+    return raw
+
+
+def _epoch(val, name):
+    v = str(val).strip()
+    if not v.isdigit() or len(v) > 15:
+        raise BuildError(f"{name} must be a non-negative integer (got {val!r})", code="E241")
+    return int(v)
+
+
+def resolve_ota_config(rootpub=None, min_key_epoch=None, min_ui_epoch=None, no_ota=False):
+    """-> None (OTA disabled: no root key configured, or no_ota) or {'rootpub': bytes, 'epochs': bytes}.
+    no_ota is absolute: it ignores $DISKOS_OTA_ROOTPUB and the payload key, and refuses an explicit rootpub."""
+    if no_ota:
+        if rootpub:
+            raise BuildError("--no-ota and an OTA root key (--ota-key) contradict each other", code="E242")
+        return None
+    path = rootpub or os.environ.get("DISKOS_OTA_ROOTPUB") or bundle.data("diskos-root.pub.pem", required=False)
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(8192)
+    except OSError as exc:
+        raise BuildError(f"cannot read the OTA root key {path}: {exc}", code="E240")
+    _check_rootpub_pem(raw)
+    if min_key_epoch is None:
+        min_key_epoch = os.environ.get("DISKOS_MIN_KEY_EPOCH", DEFAULT_MIN_KEY_EPOCH)
+    if min_ui_epoch is None:
+        min_ui_epoch = os.environ.get("DISKOS_MIN_UI_EPOCH", DEFAULT_MIN_UI_EPOCH)
+    ke, ue = _epoch(min_key_epoch, "MIN_KEY_EPOCH"), _epoch(min_ui_epoch, "MIN_UI_EPOCH")
+    return {"rootpub": raw, "epochs": f"MIN_KEY_EPOCH={ke}\nMIN_UI_EPOCH={ue}\n".encode("ascii")}
+
+
+def _install_ota(rf, cfg):
+    d = os.path.join(rf, OTA_DIR)
+    _assert_within_rf(rf, d)
+    os.makedirs(d, exist_ok=True)
+    for name, mode in _OTA_FILES:
+        dst = os.path.join(d, name)
+        _assert_within_rf(rf, dst)
+        if os.path.islink(dst):
+            os.unlink(dst)
+        if name == "diskos-verify.sh":
+            _copyfile(bundle.data("diskos-verify.sh"), dst)
+        else:
+            with open(dst, "wb") as f:
+                f.write(cfg["rootpub"] if name == "root.pub.pem" else cfg["epochs"])
+        os.chmod(dst, mode)
+
+
+def _check_ota_output(dst, cfg):
+    """Output-image check for the OTA files: present iff configured, exact bytes, regular 0644 files."""
+    import stat as _st
+    d = os.path.join(dst, OTA_DIR)
+    if cfg is None:
+        if os.path.lexists(d):
+            raise BuildError("repacked image: unexpected /etc/diskos-ota although OTA is not configured - do NOT flash", code="E232")
+        return
+    _assert_within_rf(dst, d, code="E232")
+    want = {"root.pub.pem": cfg["rootpub"], "epochs": cfg["epochs"],
+            "diskos-verify.sh": open(bundle.data("diskos-verify.sh"), "rb").read()}
+    for name, mode in _OTA_FILES:
+        p = os.path.join(d, name)
+        _assert_within_rf(dst, p, code="E232")
+        try:
+            m = os.lstat(p).st_mode
+            ok = _st.S_ISREG(m) and _st.S_IMODE(m) == mode and open(p, "rb").read() == want[name]
+        except OSError:
+            ok = False
+        if not ok:
+            raise BuildError(f"repacked image: OTA file {name} missing or differs from what the build wrote - do NOT flash", code="E232")
 
 
 def _install_sd_guards(rf):
@@ -760,7 +981,7 @@ def _case_sensitive_extract_root(workdir, rep):
 
 
 def _validate_squashfs_output(sq_path, unsq, expect_ui_sha, expect_ui_sz, extract_root, rep=None, expected_busybox_sha=None,
-                              expected_fiio_init=None):
+                              expected_fiio_init=None, ota_cfg=None):
     """Validate a freshly-repacked squashfs by its CONTENT, not the repacker's exit status. Does a
     COMPLETE independent extraction (so silent corruption ANYWHERE fails, not just in two files),
     then verifies every boot-critical artefact: the boot-hook patch in fiio_init.sh, the executable
@@ -803,9 +1024,10 @@ def _validate_squashfs_output(sq_path, unsq, expect_ui_sha, expect_ui_sz, extrac
         # exact identity, not just existence: the boot-time scripts are what decide stock vs diskOS
         # every file the stock/diskOS decision runs through: exact bytes, a regular file (not a symlink),
         # and permission bits exactly 0755 - a non-executable helper would silently force every boot to stock
-        for rel, name in _BOOT_DECISION_FILES:
+        for rel, name in _BOOT_DECISION_FILES + _SUPPORT_FILES:
             _check_decision_file(_need(rel, name), bundle.data(name), name)
         _validate_sd_guards(dst, expected_busybox_sha)
+        _check_ota_output(dst, ota_cfg)
         # first-boot installer hook present + executable
         s97 = _need("etc/init.d/S97diskos_install", "first-boot installer hook")
         if not (os.stat(s97).st_mode & 0o111):
@@ -829,12 +1051,24 @@ def _validate_squashfs_output(sq_path, unsq, expect_ui_sha, expect_ui_sz, extrac
         rep.log("output squashfs validated (full extraction + boot hook + S97 + manifest + UI hash/mode)")
 
 
-def build_image(stock_squashfs, ui_binary, variant, out_bin, workdir, rep=None):
+def describe_ota(cfg):
+    """One line saying which OTA state an image built with this resolve_ota_config() result will have."""
+    if cfg is None:
+        return "OFF (no OTA root key baked; the image never accepts in-app updates)"
+    import hashlib
+    fp = hashlib.sha256(cfg["rootpub"]).hexdigest()[:16]
+    return f"ON (accepts updates signed by the baked root key, key sha256 {fp}...)"
+
+
+def build_image(stock_squashfs, ui_binary, variant, out_bin, workdir, rep=None, ota_rootpub=None,
+                min_key_epoch=None, min_ui_epoch=None, no_ota=False):
     """Build diskos_<variant>.bin from a stock rootfs + the diskOS UI."""
     rep = rep or CLIReporter()
     if variant not in ("public", "dev"):
         raise BuildError(f"variant must be 'public' or 'dev', got {variant!r}", code="E250")
     rep.phase(f"Building diskOS image ({variant})")
+    ota_cfg = resolve_ota_config(ota_rootpub, min_key_epoch, min_ui_epoch, no_ota)     # BEFORE any heavy work: a bad key fails fast
+    rep.log("OTA updates: " + describe_ota(ota_cfg))
 
     unsq = bundle.native("unsquashfs")
     mksq = bundle.native("mksquashfs")
@@ -871,6 +1105,12 @@ def build_image(stock_squashfs, ui_binary, variant, out_bin, workdir, rep=None):
         _install(bundle.data("diskos-selected"), os.path.join(rf, _SELECTED_HELPER.lstrip("/")), 0o755, rf)
         # S96's bounded native probe: errno-aware preference lookup + pin read, under its own supervisor
         _install(bundle.data("diskos-bootprobe"), os.path.join(rf, _BOOTPROBE.lstrip("/")), 0o755, rf)
+        # read-only launcher the boot hook runs instead of exec'ing the writable /usr/data path
+        _install(bundle.data("diskos-launch"), os.path.join(rf, _LAUNCHER.lstrip("/")), 0o755, rf)
+        if ota_cfg:
+            _install_ota(rf, ota_cfg)
+        # artwork helper run by the UI (no stock ffmpeg dependency)
+        _install(bundle.data("diskos-artdec"), os.path.join(rf, _ARTDEC.lstrip("/")), 0o755, rf)
         # Guard the actual /bin entry too: default PATH and stock fallbacks must
         # remain protected even when the custom UI/NAND override is unavailable.
         busybox_sha = _install_sd_guards(rf)
@@ -923,7 +1163,7 @@ def build_image(stock_squashfs, ui_binary, variant, out_bin, workdir, rep=None):
         # silently-corrupt/truncated repack - the exact failure mode a nonzero-exit-but-valid (or, worse,
         # zero-exit-but-corrupt) mksquashfs could hide - before it ever reaches the device.
         _validate_squashfs_output(out_sq, unsq, ui_sha, ui_sz, extract_root, rep, busybox_sha,
-                                  expected_fiio_init=patched_fiio_init)
+                                  expected_fiio_init=patched_fiio_init, ota_cfg=ota_cfg)
 
         rep.status("[6/6] finalizing image (pad to partition size)")
         _copyfile(out_sq, out_bin)

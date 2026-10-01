@@ -36,6 +36,7 @@ static int g_n = 0;
 static int g_loaded = 0;
 
 static int g_save_err = 0;   /* sticky until cfg_take_save_error() reads it */
+static int g_renamed = 0;    /* the last rewrite() got past rename(): the file HAS changed even if a later step failed */
 static int g_dirty = 0;      /* the in-memory set differs from the on-disk file: a save is pending
                               * (a deferred batch) or FAILED. Guards the unchanged-value shortcut so a
                               * failed persist is retried instead of masked by "value already equals v". */
@@ -62,6 +63,7 @@ static cfg_entry_t *find(const char *key){
  * Returns 0 on success, -1 on any failure (and sets the sticky save-error flag). */
 static int rewrite(void){
     if(g_load_failed){ g_save_err = 1; return -1; }   /* never persist an unloaded/partial config over a good file */
+    g_renamed = 0;
     char tmp[64];
     snprintf(tmp, sizeof tmp, "%s.tmp", CFG_PATH);
     FILE *f = fopen(tmp, "w");
@@ -72,6 +74,7 @@ static int rewrite(void){
     if(ok && (fflush(f) != 0 || fsync(fileno(f)) != 0)) ok = 0;
     if(fclose(f) != 0) ok = 0;
     if(!ok || rename(tmp, CFG_PATH) != 0){ unlink(tmp); g_save_err = 1; return -1; }
+    g_renamed = 1;
     /* persist the rename itself; a dir open/fsync/close failure means the new file may not survive a
      * power cut, so surface it (rewrite()'s contract is durable success), though the content is written. */
     int dfd = open(CFG_DIR, O_RDONLY | O_DIRECTORY);
@@ -232,5 +235,29 @@ int cfg_set_str(const char *key, const char *v){
 int cfg_set_str_deferred(const char *key, const char *v){
     if(g_load_failed){ g_save_err = 1; return -1; }
     if(put(key, v) < 0){ g_save_err = 1; return -1; }
+    return 0;
+}
+
+/* Remove every key for which match(key) is nonzero, then persist once. All-or-nothing: if the save fails, the in-memory
+ * set is restored (the snapshot buffer is free outside a cfg_begin batch, and a reset inside one is refused). */
+int cfg_remove_if(int (*match)(const char *key)){
+    if(g_load_failed || g_txn || !match){ g_save_err = 1; return -1; }
+    memcpy(g_snap, g_cfg, (size_t)g_n * sizeof g_cfg[0]);
+    int old_n = g_n, old_dirty = g_dirty, w = 0;
+    for(int i = 0; i < g_n; i++) if(!match(g_cfg[i].k)) g_cfg[w++] = g_cfg[i];
+    if(w == g_n) return 0;
+    g_n = w; g_dirty = 1;
+    if(rewrite() != 0){
+        if(g_renamed){   /* the new file is in place (only the directory fsync failed): memory must follow the disk */
+            g_n = 0;
+            FILE *f = fopen(CFG_PATH, "r");
+            if(f){ if(cfg_parse_stream(f) < 0) g_load_failed = 1; fclose(f); } else g_load_failed = 1;
+            g_dirty = 0;
+            return -2;
+        }
+        memcpy(g_cfg, g_snap, (size_t)old_n * sizeof g_cfg[0]);
+        g_n = old_n; g_dirty = old_dirty;
+        return -1;
+    }
     return 0;
 }

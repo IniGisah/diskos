@@ -112,7 +112,7 @@ static int unescape(const char*s,int n,char*dst,int dstsz){
 static void clear_track(void){
     g_state.have_track=0;
     g_state.title[0]=0; g_state.artist[0]=0; g_state.album[0]=0; g_state.path[0]=0;
-    g_state.duration_ms=0; g_state.position_ms=0;
+    g_state.duration_ms=0; g_state.position_ms=0; g_state.pos_id=0;
     g_state.sample_rate=0; g_state.is_dsd=0;
 }
 
@@ -144,7 +144,7 @@ static void parse_a2(const char*payload,int len){
              * string: the inner song JSON still carries \/ \" \uXXXX after the outer unescape. */
             char t_title[sizeof g_state.title]={0}, t_artist[sizeof g_state.artist]={0};
             char t_album[sizeof g_state.album]={0}, t_path[sizeof g_state.path]={0};
-            long t_dur=-1; int t_sr=-1, t_dsd=-1, have_path=0, sv;
+            long t_dur=-1, t_pos=-1; int t_sr=-1, t_dsd=-1, have_path=0, sv;
             sv=find_val(song,st,n2,"song_name");          if(sv>=0) unescape(song+st[sv].start, st[sv].end-st[sv].start, t_title,  sizeof t_title);
             sv=find_val(song,st,n2,"song_artist_name");   if(sv>=0) unescape(song+st[sv].start, st[sv].end-st[sv].start, t_artist, sizeof t_artist);
             sv=find_val(song,st,n2,"song_album_name");    if(sv>=0) unescape(song+st[sv].start, st[sv].end-st[sv].start, t_album,  sizeof t_album);
@@ -154,6 +154,7 @@ static void parse_a2(const char*payload,int len){
             sv=find_val(song,st,n2,"song_duration_time"); if(sv>=0) t_dur=tok_long(song,&st[sv]);
             sv=find_val(song,st,n2,"song_sample_rate");   if(sv>=0) t_sr=(int)tok_long(song,&st[sv]);
             sv=find_val(song,st,n2,"is_dsd");             if(sv>=0) t_dsd=tok_bool(song,&st[sv]);
+            sv=find_val(song,st,n2,"pos_id");             if(sv>=0) t_pos=tok_long(song,&st[sv]);
             if(have_path){                 /* complete identity -> publish the whole track atomically */
                 snprintf(g_state.path,   sizeof g_state.path,   "%s", t_path);
                 snprintf(g_state.title,  sizeof g_state.title,  "%s", t_title);
@@ -162,6 +163,7 @@ static void parse_a2(const char*payload,int len){
                 if(t_dur>=0) g_state.duration_ms=t_dur;
                 if(t_sr>=0)  g_state.sample_rate=t_sr;
                 if(t_dsd>=0) g_state.is_dsd=t_dsd;
+                g_state.pos_id = (t_pos>0 && t_pos<=0x7FFFFFFF) ? (int)t_pos : 0;   /* per track: never carried over from the previous one */
                 g_state.have_track=1;
             } else {
                 /* a present song with NO usable path can't establish identity -> clear rather than bind new

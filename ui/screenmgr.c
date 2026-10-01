@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
+#include "theme.h"
+#include "theme_kit.h"
 #include "folderbrowser.h"
 #include "books.h"
 #include "anim.h"
@@ -24,8 +26,7 @@ static lv_obj_t *screen_make_root(lv_obj_t *parent)
     lv_obj_remove_style_all(root);
     lv_obj_set_size(root, LV_PCT(100), LV_PCT(100));
     lv_obj_set_pos(root, 0, 0);
-    lv_obj_set_style_bg_color(root, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
+    theme_screen_bg(root);   /* canvas colour (+ the theme's dot grid, if it has one) */
     /* full black square; the physical round bezel masks the shape. Clipping to a
      * circle here just exposed the lighter screen behind at the corners. */
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
@@ -118,11 +119,15 @@ static void transition(int from, int to, int dir)
     else if (to == SCR_EQ) eqcustom_refresh();              /* re-resolve edited USER slot */
     else if (to == SCR_ALBUMWALL) albumwall_refresh();      /* cover-flow album browser */
     else if (to == SCR_TUNE)  tune_refresh();
+    else if (to == SCR_UPNEXT) upnext_refresh();   /* the live queue, read on every entry */
+    else if (to == SCR_DATETIME) datetime_refresh();   /* starts from the current time on every entry */
     else if (to == SCR_NPHUB) nphub_refresh();   /* book-aware hub (Chapters for audiobooks) */
     else if (to == SCR_SAVER) saver_show_sync();
     else if (to == SCR_PLVIEW) plview_refresh();   /* fresh song list every entry (no stale tap positions) */
     else if (to == SCR_LIBRARY) library_refresh(); /* pick up playlists created (NP New Playlist) or imported
                                                     * (Settings) elsewhere, without needing a restart */
+
+    kit_pass(nw);   /* the active theme styles anything new on the incoming screen (no-op for Default) */
 
     /* Cancel any in-flight animation on BOTH screens + reset their offset up front, so a
      * stale anim_done_hide from a prior fast transition can't fire later and hide the new
@@ -232,8 +237,9 @@ void screens_init(void)
     s_anim = cfg_get_int("anim", 1);
     if (access("/usr/data/anim_off", 0) == 0) s_anim = 0;   /* legacy override */
 
+    kit_install();                                   /* the theme's styling pass, before any screen is shown */
     lv_obj_t *parent = lv_screen_active();
-    lv_obj_set_style_bg_color(parent, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(parent, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
     /* The screen container must not scroll: during a slide, the incoming screen sits off-screen
      * to the right (x=+360), which overflows the parent and makes LVGL draw a horizontal
@@ -273,6 +279,8 @@ void screens_init(void)
     s_roots[SCR_SETLIST] = screen_make_root(parent);
     s_roots[SCR_QSCONFIG] = screen_make_root(parent);
     s_roots[SCR_ALBUMWALL] = screen_make_root(parent);
+    s_roots[SCR_UPNEXT] = screen_make_root(parent);
+    s_roots[SCR_DATETIME] = screen_make_root(parent);
 
     /* depth scrim: a full-screen translucent-black overlay, created LAST so it sits above the
      * roots in sibling order; re-parented in z during a transition to dim the screen beneath the
@@ -281,7 +289,7 @@ void screens_init(void)
     lv_obj_remove_style_all(s_scrim);
     lv_obj_set_size(s_scrim, LV_PCT(100), LV_PCT(100));
     lv_obj_set_pos(s_scrim, 0, 0);
-    lv_obj_set_style_bg_color(s_scrim, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(s_scrim, TC(SCRIM), 0);
     lv_obj_set_style_bg_opa(s_scrim, LV_OPA_COVER, 0);   /* object opacity (animated) gates visibility */
     lv_obj_set_style_opa(s_scrim, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(s_scrim, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
@@ -310,6 +318,8 @@ void screens_init(void)
     folderbrowser_create(s_roots[SCR_FOLDER]);
     books_create(s_roots[SCR_BOOKS]);
     chapters_create(s_roots[SCR_CHAPTERS]);
+    upnext_create(s_roots[SCR_UPNEXT]);
+    datetime_create(s_roots[SCR_DATETIME]);
     apps_create(s_roots[SCR_APPS]);
     nphub_create(s_roots[SCR_NPHUB]);
     plpick_create(s_roots[SCR_PLPICK]);

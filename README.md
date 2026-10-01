@@ -1,479 +1,177 @@
 <p align="center">
-  <img src="docs/assets/diskos-hero.png" alt="diskOS running on a round digital audio player" width="100%">
+  <img src="docs/assets/themes-home.png" alt="Eight diskOS themes on the Disc Home screen" width="100%">
 </p>
 
 <h1 align="center">diskOS</h1>
 
 <p align="center">
-  A purpose-built player interface for the FiiO Snowsky Disc.<br>
-  Designed around the round screen, the music library, and the way the hardware wants to be used.
+  A round-screen music interface for the FiiO Snowsky Disc, built on its stock audio engine.
 </p>
 
 <p align="center">
-  <a href="#host-support"><img alt="Flash-tested platform: Linux x86-64" src="https://img.shields.io/badge/platform-Linux%20x86__64-3D424B?style=flat-square"></a>
-  <a href="#whats-proven-vs-beta"><img alt="Status: beta" src="https://img.shields.io/badge/status-beta-B99AC8?style=flat-square"></a>
-  <a href="LICENSE"><img alt="Installer license: MIT" src="https://img.shields.io/badge/installer-MIT-D77868?style=flat-square"></a>
+  <a href="docs/INSTALL.md#host-support"><img alt="Linux and macOS" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-3D424B?style=flat-square"></a>
+  <a href="#current-limitations"><img alt="Beta" src="https://img.shields.io/badge/status-beta-B99AC8?style=flat-square"></a>
+  <a href="LICENSE"><img alt="Installer MIT" src="https://img.shields.io/badge/installer-MIT-D77868?style=flat-square"></a>
+  <a href="ui/COPYING"><img alt="UI GPL 3.0 or later" src="https://img.shields.io/badge/UI-GPL--3.0--or--later-8EAF93?style=flat-square"></a>
   <a href="https://ko-fi.com/b0hemia"><img alt="Support diskOS on Ko-fi" src="https://img.shields.io/badge/Ko--fi-support%20diskOS-FF5E5B?style=flat-square&logo=ko-fi&logoColor=white"></a>
 </p>
 
 <p align="center">
   <a href="#see-diskos">Screenshots</a> |
+  <a href="#before-you-install">Before you install</a> |
   <a href="#install">Install</a> |
-  <a href="#restore-stock--recover">Restore</a> |
-  <a href="#known-issues">Known issues</a> |
+  <a href="#update-restore-recover">Restore</a> |
   <a href="#documentation">Docs</a> |
   <a href="#contributing">Contribute</a>
 </p>
 
 > [!CAUTION]
-> **diskOS is an unsupported beta and installation rewrites the Disc's main root filesystem.**
-> Power loss, host sleep, a bad cable, a defect, an unsupported device, or an interrupted flash can
-> make the player unbootable, lose data, require hardware recovery, or void its warranty. Recovery
-> worked on tested units, but is **not guaranteed**. Back up your data and keep the saved stock image
-> on separate storage before installing.
-
-diskOS is a custom player UI/firmware for the **FiiO Snowsky Disc** digital audio player
-(Ingenic X2000). It replaces the stock interface while keeping the stock audio engine, and uses a
-source-run installer to build a diskOS image locally from **your own official FiiO firmware**, then
-flashes it over the chip's mask-ROM USB mode. No FiiO root filesystem is distributed by this project.
-
-The installer and build tooling in this repository are open source under the MIT license. The
-on-device UI source lives in [`ui/`](ui/) and is licensed separately under **GPL-3.0-or-later** (its built
-artifact, `payload/mq_ui`, is what the installer bakes into the image); see [License](#license) for
-the boundary.
-
-**v1.1.3 is a safety release.** It protects the microSD card against a deletion flaw in the stock
-player that diskOS runs alongside, and reworks how diskOS hands the card to USB Storage. It also
-includes Bluetooth, font, and interface fixes. **Every diskOS user should update.** Updating needs
-the complete installer and a new flash; replacing only the UI binary does not install the protection.
-
-It builds on earlier releases: V2.40 firmware support, album cover flow, a separate Books view with
-saved progress, folder browsing, Latin-extended, Greek, and Cyrillic library text, safer selection of
-USER EQ presets changed on the stock player, and image builds on the default macOS filesystem.
+> **diskOS is an unsupported beta. Installation rewrites the Disc's main root filesystem.**
+> Power loss, host sleep, a bad cable, or an interrupted flash can leave the player unbootable
+> or require hardware recovery. Recovery worked on tested units but is not guaranteed.
+> Back up your music and keep the saved stock image on separate storage before installing.
 
 ## At a glance
 
-| | |
-|---|---|
-| **Device** | FiiO Snowsky Disc |
-| **Current release** | v1.1.3 |
-| **Project status** | Beta; field testing is still limited |
-| **Released host** | Linux x86-64 |
-| **macOS** | Image builds tested on the default filesystem; device flashing remains unverified |
-| **Supported stock firmware** | V2.09, V2.28, and V2.40 |
-| **Typical flash time** | About 15 minutes, including verification |
-| **Return to stock** | Saved-image restore, temporary stock boot, or stock UI as default |
-
-Not affiliated with or endorsed by FiiO, Snowsky, or Ingenic. No warranty or support is promised.
+- **Device:** FiiO Snowsky Disc.
+- **Release described here:** diskOS and installer 1.2.0; beta.
+- **Stock firmware supported:** V2.09, V2.28, V2.40, and V2.57.
+- **Hosts:** Linux x86-64 (Debian, Ubuntu, Arch, CachyOS, Fedora); macOS Apple Silicon release package. Intel Macs can build the native tools.
+- **Flash time:** about 20 minutes, including the firmware check and verification.
+- **Going back:** restore the saved stock image, boot the stock UI once, or set stock as the default UI.
 
 ## See diskOS
 
 <table>
-  <tr>
-    <td align="center"><img src="docs/assets/coverflow.png" alt="diskOS horizontal album cover flow with reflections" width="240"><br><sub>Album cover flow</sub></td>
-    <td align="center"><img src="docs/assets/now-playing.png" alt="diskOS now playing screen" width="240"><br><sub>Now playing</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="docs/assets/library.png" alt="diskOS music library" width="240"><br><sub>Library</sub></td>
-    <td align="center"><img src="docs/assets/folders.png" alt="diskOS file and folder browser" width="240"><br><sub>Folder browser</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="docs/assets/home.png" alt="diskOS home screen" width="240"><br><sub>Home</sub></td>
-    <td align="center"><img src="docs/assets/eq.png" alt="diskOS custom equalizer" width="240"><br><sub>Custom EQ</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="docs/assets/search.png" alt="diskOS library search" width="240"><br><sub>Search</sub></td>
-    <td align="center"><img src="docs/assets/apps.png" alt="diskOS apps screen" width="240"><br><sub>Apps</sub></td>
-  </tr>
+<tr>
+<td align="center"><img src="docs/tour/now-playing.png" width="220" alt="Now Playing"><br><sub>Now Playing</sub></td>
+<td align="center"><img src="docs/tour/theme-picker.png" width="220" alt="Theme picker"><br><sub>Eight themes</sub></td>
+<td align="center"><img src="docs/tour/up-next.png" width="220" alt="Up Next"><br><sub>Up Next</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/tour/lyrics-timed.png" width="220" alt="Timed lyrics"><br><sub>Timed lyrics</sub></td>
+<td align="center"><img src="docs/tour/song-info.png" width="220" alt="Song Info"><br><sub>Song Info</sub></td>
+<td align="center"><img src="docs/tour/cover-flow.png" width="220" alt="Cover Flow"><br><sub>Album cover flow</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/tour/keyboard.png" width="220" alt="Search keyboard"><br><sub>Search and keyboard</sub></td>
+<td align="center"><img src="docs/tour/settings-display.png" width="220" alt="Display settings"><br><sub>Make it yours</sub></td>
+<td align="center"><img src="docs/tour/startup.png" width="220" alt="Startup"><br><sub>Startup</sub></td>
+</tr>
 </table>
 
+**[See every screen in the diskOS tour](docs/TOUR.md).**
 
-### Built around the Disc
+## Built around the Disc
 
-| For listening | For tinkering |
-|---|---|
-| Circular UI designed for the round display | Graphical and command-line installer |
-| Album cover flow with swipe navigation and reflections | Image built locally from your stock firmware |
-| Dedicated Books view for `.m4b` audiobooks with saved progress | V2.09, V2.28, and V2.40 firmware support |
-| File/folder browsing to find and play library tracks | Bad-block-aware writer with block verification |
-| Bezel scrolling and alphabet navigation | Writer capacity checked before any NAND write |
-| M3U playlist import | Saved-stock restore, including older short backups |
-| Dynamic colors derived from album art | Opt-in SSH debug mode, off by default |
-| Latin-extended, Greek, and Cyrillic library text | On-device UI source under GPL-3.0-or-later |
-| Custom EQ that preserves stock-edited USER presets on reselection | Hardware map and reverse-engineering notes |
-| Local playback as the well-tested path | Stock UI fallback and restore path |
-| Weather and Last.fm integrations *(experimental)* | Installer and build tooling under MIT |
+### For listening
 
-**Album cover flow** turns the album library into a horizontal wall with a centered cover,
-angled side covers, and faded reflections. Swipe to browse, tap the center album to play, or
-long-press it to open its tracks. Covers and reflections are pre-baked into sprites and cached
-in a small moving window, with album lists sized to the library. This is designed to accommodate
-thousands of albums without keeping every cover in memory. Albums without cached art show a
-placeholder.
+- [Now Playing](docs/TOUR.md#now-playing) puts music controls on the round display.
+- [Up Next](docs/TOUR.md#up-next) shows the player's queue and lets you jump within it.
+- [Lyrics and Song Info](docs/TOUR.md#song-info-and-lyrics) show words and available file details.
+- [Library and cover flow](docs/TOUR.md#library) offer several ways to browse indexed music.
+- [Playlists, favourites, and books](docs/TOUR.md#playlists) keep different listening collections close.
+- [Themes and display choices](docs/TOUR.md#eight-themes) change the look of the interface.
 
-**Books** gives single-file `.m4b` audiobooks a dedicated view with saved listening positions.
-They stay out of the music library and queues (existing library entries migrate on upgrade). Open a
-book to resume where you left off. From Now Playing, a **chapter list** lets you jump between
-chapters: it opens centred on the current chapter and shows each chapter's title and duration.
+### For tinkering
 
-**Files** provides the familiar stock-style route through the microSD card's folder tree.
-Browse folders and tap an indexed music file to play it. Playback uses the all-songs queue;
-selecting a file does not create a queue for that folder.
+- [Display settings](docs/TOUR.md#settings-display) let you change theme, type size, and artwork behavior.
+- [Quick Settings](docs/TOUR.md#quick-settings) lets you choose the controls in the pull-down drawer.
+- [System settings](docs/TOUR.md#settings-system) include Debug Mode for temporary SSH access.
+- [Updates and startup](docs/TOUR.md#updates-startup-and-power) explain keyed app updates and boot behavior.
+- [Stock UI choices](docs/TOUR.md#safety-and-stock-ui) give you an interface fallback; [restore](docs/INSTALL.md#restore-stock-and-recover) removes the diskOS image.
 
-**Multilingual library text** uses bundled Noto Sans glyphs for Latin-extended, Greek, and
-Cyrillic names, so supported filenames and metadata render instead of missing-character boxes.
-This expands text coverage; full interface localization is not included.
+## Before you install
 
-**Safer custom EQ** checks the current stock curve against diskOS's saved settings before writing
-it back. Reselecting a USER preset preserves changes made on the stock player. Advanced parametric
-presets that the graphic editor cannot represent are protected from slider edits.
+You need a FiiO Snowsky Disc, its matching unmodified official FiiO firmware ZIP, a reliable
+USB cable, Python 3.8 or newer, and about 20 uninterrupted minutes. The installer builds the
+root filesystem image on your computer; this project does not distribute FiiO's root filesystem.
+Keep a separate copy of the saved stock image and read the [full requirements](docs/INSTALL.md#requirements).
+
+The 1.2.0 upgrade from 1.1.3 requires a **full flash** with the complete 1.2.0 installer and
+matching flash tools. An in-app update cannot replace the boot components in that image.
+The installer checks the selected firmware and the Disc before it writes.
+If it refuses a firmware archive, use a matching unmodified official ZIP.
+Read the on-screen message before retrying a failed flash.
 
 ## Install
 
-> [!IMPORTANT]
-> Read [Requirements](#requirements), [What's proven vs. beta](#whats-proven-vs-beta), and
-> [Known issues](#known-issues) before connecting the player. Do not run the installer as root.
+Run setup from the extracted release package, then start the graphical installer:
 
-### First-time setup
-
-Run these commands from the installer directory.
-
-The installer runs with your own **Python 3.8+**. The setup script creates a local virtual
-environment and installs two Python dependencies into it; nothing is installed system-wide.
-
-```bash
+```sh
 ./install.sh
+./diskos-installer gui
 ```
 
-The setup check will tell you if any optional or required system components are missing:
+Choose **Install diskOS**, select the official firmware ZIP, and normally choose the **Public**
+variant. Power off the Disc, hold **Volume Down**, and connect USB to enter mask-ROM mode; the
+screen stays black. Confirm the warning in the installer, keep the computer awake, and wait for
+verification before power-cycling the Disc. The Public variant has no always-on root shell;
+Debug Mode can enable temporary SSH on the Disc.
 
-- **Tk / tkinter:** needed only by the graphical installer.
-  - Arch / CachyOS: `sudo pacman -S tk`
-  - Debian / Ubuntu: `sudo apt install python3-tk`
-  - Fedora: `sudo dnf install python3-tkinter`
-  - macOS: `brew install python-tk`
-- **libusb-1.0:** used to detect the device in mask-ROM mode.
-  - Arch / CachyOS: `sudo pacman -S libusb`
-  - Debian / Ubuntu: `sudo apt install libusb-1.0-0`
-  - Fedora: `sudo dnf install libusbx`
-  - macOS: `brew install libusb`
-- **squashfs-tools:** used to unpack and pack firmware images (LZO-capable).
-  - Arch / CachyOS: `sudo pacman -S squashfs-tools`
-  - Debian / Ubuntu: `sudo apt install squashfs-tools`
-  - Fedora: `sudo dnf install squashfs-tools`
-  - macOS: `brew install squashfs`
+For the command line, the equivalent install is:
 
-After setup, run commands through `./diskos-installer`; it selects the local environment for you.
-
-> [!NOTE]
-> A source checkout does not include the large host-native flash tools. Build them once using the
-> scripts in [For developers](#for-developers). A prepared release bundle places them under
-> `vendor/<os>-<arch>/`.
-
-### Graphical installer
-
-1. Run `./diskos-installer gui`.
-2. Choose **Install diskOS**, select your official FiiO firmware `.zip`, then select a variant:
-   - **Public** *(recommended):* no always-on root shell. SSH can still be enabled temporarily
-     from Debug Mode in the UI.
-   - **Dev:** adds a passwordless USB-serial root shell on every boot. Use this only on a dedicated
-     development device you control.
-3. Power the Disc off. Hold **Volume Down** and plug in USB to enter mask-ROM mode. The screen stays
-   black; that is expected.
-4. Select **Install**, acknowledge the warning, and begin. Do not disconnect the cable or let the
-   host sleep during the roughly 15-minute flash.
-5. After verification succeeds, power-cycle the device. diskOS is embedded in the flashed image and
-   installs on first boot; no microSD installation step is needed.
-
-### Command line
-
-```bash
-./install.sh
-./diskos-installer doctor
+```sh
 ./diskos-installer install --firmware SNOWSKY_DISC_update_*.zip --variant public
 ```
 
-Useful recovery and cleanup commands:
+Read the [installation guide](docs/INSTALL.md) for OS packages, USB permissions, source checkouts,
+options for your own build, and error codes. Do not run the installer with `sudo`.
 
-```bash
-./diskos-installer restore-stock
-./diskos-installer remove
-```
+## Update, restore, recover
 
-`restore-stock` acts on the player. `remove` cleans up the installer's files on the host, including
-saved recovery files; restore first if needed and keep a separate copy of your saved stock image.
+Installing 1.2.0 requires a full flash; it installs the in-app update feature. The 1.2.0
+release image includes the diskOS release key by default, so the first update over Wi-Fi will
+be a later signed release. Settings > System > Update diskOS updates only the diskOS app, not
+stock firmware or the whole image. Turn updates off on the Disc, or untick **Allow diskOS updates
+over Wi-Fi** when flashing. See [upgrading](docs/INSTALL.md#upgrading-to-120).
 
-Updating diskOS also requires a flash. Use the complete v1.1.3 installer and its matching flash
-tools, supply your official firmware archive, and follow the same installation steps. Back up the
-card and keep your saved stock image first. The installer accepts only the unmodified official
-V2.09, V2.28, and V2.40 firmware; modified images and V2.57 are refused.
+To use the stock interface without reflashing, set **Settings > System > Default UI > Stock**,
+or hold **Volume Up** from power-on for a one-time switch. To remove the diskOS image, use the
+installer's `restore-stock` command with its saved stock root filesystem. A failed flash may need
+mask-ROM reflashing; recovery is not guaranteed. Read [restore and recovery](docs/INSTALL.md#restore-stock-and-recover)
+before you need it.
 
-## Requirements
+## Current limitations
 
-- A **FiiO Snowsky Disc** with supported stock firmware.
-- The matching official FiiO firmware `.zip`. You supply this file; the installer decrypts and
-  extracts its root filesystem locally.
-- A reliable USB cable and about 15 uninterrupted minutes.
-- **Python 3.8+** and the dependencies installed by `./install.sh`.
-- USB access to mask-ROM device `a108:eaef`.
-- **Linux x86-64** for the path tested through device flashing. macOS image builds are tested;
-  see [Host support](#host-support) for the remaining limitation.
-
-Do **not** run the installer with `sudo`. Its saved recovery image and state belong under your user
-account. On Linux, install the included udev rule once instead:
-
-```bash
-sudo cp udev/70-diskos-maskrom.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-```
-
-The build, save, and flash then run as one unprivileged process.
-
-### Host support
-
-- **Linux x86-64:** released and tested end to end on hardware.
-- **macOS, Apple Silicon and Intel:** a build-from-source path is available through
-  `build/build-macos.sh` after installing libusb with Homebrew. **Image builds now succeed on the
-  default case-insensitive macOS filesystem.** The installer automatically creates and mounts a
-  case-sensitive APFS scratch image using `hdiutil`, verifies its case sensitivity, and uses it for
-  rootfs extraction and validation. It detaches the volume and removes the scratch image
-  automatically afterward, reporting cleanup failures if they occur. No manual volume setup or
-  `DISKOS_INSTALLER_HOME` change is needed for a normal build.
-  **Device flashing from macOS remains unverified end to end:** no flash with a device attached
-  to a Mac has been completed.
-
-The macOS fix resolves the E230 `unsquashfs ... already exists` failure caused by stock files whose
-names differ only in case. On real macOS, `back_home.png` and `BACK_HOME.png` now coexist in the
-extracted filesystem. The scratch-volume mechanism leaves the existing build path unchanged on
-Linux with a case-sensitive filesystem and on case-sensitive macOS volumes.
-
-## Restore stock & recover
-
-`restore-stock` reflashes the checksum-verified stock root filesystem reconstructed and saved during
-installation. This is built from your official firmware archive, not a dump of the device's original
-partition. It deactivates diskOS, but it is not a factory wipe; inactive files under `/usr/data`
-remain until you remove them.
-
-Older, shorter saved stock images remain usable: restore creates a copy padded to the current
-768-block image size, then validates it before flashing. Keep your saved stock image on separate
-storage.
-
-You can also switch without reflashing:
-
-- **Persistently:** Settings > System > Default UI > Stock
-- **Once:** hold **Volume Up** from power-on until the other UI appears
-
-Both keep the diskOS delete guard, because the diskOS image stays installed. Restoring the saved
-stock image removes the guard.
-
-If a flash fails, the root filesystem can be left partially written. In tested cases, the device
-could be returned to mask-ROM mode by powering off, holding **Volume Down**, and reconnecting USB,
-then reflashing diskOS or the saved stock image. Mask-ROM lives in on-chip ROM and is entered before
-flashed code runs, but recovery is still **not guaranteed** for every unit or failure.
-
-## What's proven vs. beta
-
-| Status | Area | Current evidence |
-|---|---|---|
-| Tested | Flash mechanism and image build | Used on real hardware; writer skips factory bad blocks and verifies every block |
-| Tested | Firmware extraction | Reproduces the stock root filesystem byte for byte from FiiO's archive |
-| Tested | Linux x86-64 | Builds and flashes end to end on hardware |
-| Tested | macOS image builds | Builds succeed on the default case-insensitive filesystem; case-colliding stock files coexist |
-| Unverified | macOS device flashing | No end-to-end flash with a device attached to a Mac yet |
-| Supported | Firmware | V2.09, V2.28, and V2.40; other versions are refused |
-
-Local music playback is the well-tested listening path. Weather and Last.fm remain experimental;
-hardware flash testing does not imply that every feature or mode has been verified.
-
-The Disc uses **Winbond W63AH6NKB LPDDR3**, the DRAM initialized by its stock bootloader. If a future
-hardware revision uses different DRAM, the writer is designed to fail at memory initialization and
-leave the device mask-ROM-recoverable instead of continuing. Wide field testing is still in progress.
-
-## Known issues
-
-- **V2.57:** not supported; the installer refuses it.
-- **Library scans:** the hardware buttons can stop responding while a scan runs (touch still works).
-  They come back when the scan finishes. USB Storage is refused while a scan is running.
-- **Boot override:** hold **Volume Up** from power-on until the other UI appears. A short hold can
-  be missed.
-- **Restart:** temporarily removed from Settings until it can wait for card writes to finish.
-- **Debug Mode:** the public image offers SSH over Wi-Fi only; the USB serial shell is for
-  developer builds.
-- **USB Storage:** always eject safely on the computer before switching back to Local. If diskOS
-  cannot confirm who owns the card, it keeps its card features off and asks for a reboot.
-- **Card after cold boot:** the card mounts a few seconds after startup. If diskOS reports that card
-  access is unavailable, its library and artwork stay off for that boot.
-- **Cover flow artwork:** albums without cached art show placeholders. Playing a track with artwork
-  lets diskOS fill its art cache.
-- **Folder playback:** a selected file must be in the library database. Unindexed files report
-  "Not in library". Playback uses the all-songs queue, not a folder-only queue.
-- **Long flash:** a complete write and verification takes about 15 minutes. Updating diskOS
-  requires another flash.
-- **Last.fm:** scrobbling is experimental. Setup transfers your API key over your local network in
-  plaintext HTTP. It is off by default; read
-  [`docs/PRIVACY.md`](docs/PRIVACY.md) first.
-
-Found another issue? Open a GitHub issue and include the device's **firmware version** and the exact
-on-screen **error code**.
+Local music playback is the best established path. Weather, Last.fm, and Bluetooth codec behavior
+remain experimental. After a restart, Wi-Fi can take up to about a minute to connect; if it
+shows no IP, reconnect in Settings > Wi-Fi. A fix is planned for 1.2.1. On the first boot after
+installing, a "Player didn't respond" message may appear once; it is harmless.
+An indexed file format may still fail to play on the Disc.
+The stock player and connected headphones also affect some audio and Bluetooth choices.
+Browse Files plays indexed files through the all-songs queue, not a folder queue. On V2.09,
+playlist and book playback may fail; on V2.57, the Custom EQ editor is view-only.
+Read the [tour's limits](docs/TOUR.md#limits) and [privacy disclosure](docs/PRIVACY.md).
+This project is not affiliated with or endorsed by FiiO, Snowsky, or Ingenic.
 
 ## How it works
 
-```mermaid
-flowchart LR
-    A[Official FiiO firmware ZIP] --> B[Local extraction and validation]
-    C[diskOS UI payload] --> D[Build verified rootfs image]
-    B --> D
-    B --> H[Saved stock image]
-    D --> E[Writer capacity check and mask-ROM USB]
-    E --> F[Bad-block-aware write and verify]
-    F --> G[diskOS first boot]
-    H --> I[Restore stock]
-```
-
-diskOS adds a small hook to the stock `fiio_init.sh` that launches `mq_ui` instead of the stock UI.
-The stock root filesystem is read-only squashfs, so enabling the hook requires rewriting partition
-`mtd2`. On first boot, the embedded UI is copied to writable storage and checked against a baked
-SHA-256 manifest. If validation fails, the stock UI launches instead.
-
-The image uses **768 NAND blocks (96 MiB)** so V2.40's roughly 88 MB stock root filesystem fits.
-This capacity was increased from 580 blocks in v1.1.0 without changing the partition layout.
-Before any NAND write, the flasher checks that the writer's compiled capacity can cover the image
-and refuses an undersized or unrecognized writer. It also checks the reported capacity after the
-write, alongside the existing block verification.
-
-The device's normal update menu checks a signature this project cannot create, so installation uses
-mask-ROM USB. See [`docs/HARDWARE.md`](docs/HARDWARE.md) for the partition map and hardware details.
+diskOS replaces the stock interface while keeping the stock player and audio engine.
+The installer extracts your official FiiO firmware locally, saves a stock image for restore,
+and adds diskOS to a new root filesystem image. It flashes that image over the Disc's mask-ROM
+USB mode and verifies the written blocks. A boot hook starts the diskOS UI; the stock UI remains
+available as a fallback. See the [hardware notes](docs/HARDWARE.md) for the device layout.
 
 ## Documentation
 
-| Document | What it covers |
-|---|---|
-| [`docs/DESIGN_SYSTEM.md`](docs/DESIGN_SYSTEM.md) | Round-screen tokens, edge-ring geometry, components, accessibility, and boot motion |
-| [`docs/PREVIEW_UI_BUILD.md`](docs/PREVIEW_UI_BUILD.md) | Preview an `mq_ui` build on the Disc live over Wi-Fi, no reflash (reverts on reboot) |
-| [`docs/HARDWARE.md`](docs/HARDWARE.md) | Live-probed SoC, four CS43131 DACs, display planes, power, wireless, USB, and hardware gaps |
-| [`docs/COMMAND_MAP.md`](docs/COMMAND_MAP.md) | Roughly 221 `mq_player` IPC tags, reply frames, and MCU/SPI commands |
-| [`docs/RE_CATALOGUE.md`](docs/RE_CATALOGUE.md) | Reverse-engineering catalogue for `mq_player` and `mq_ui` |
-| [`docs/PRIVACY.md`](docs/PRIVACY.md) | Network behavior of the installer and on-device UI |
-| [`build/README-vendor.md`](build/README-vendor.md) | Building and packaging portable native flash tools |
-| [`SPL_SOURCE.md`](SPL_SOURCE.md) | GPL source and build recipe for the stage-1 DRAM bring-up loader |
-| [`DEPENDENCY_INVENTORY.md`](DEPENDENCY_INVENTORY.md) | Optional one-file bundle dependencies and obligations |
-| [`NOTICE.md`](NOTICE.md) / [`licenses/`](licenses/) | Third-party component and license mapping |
-| [`SECURITY.md`](SECURITY.md) | Private vulnerability reporting |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Safe contribution workflow |
-| [`agents/`](agents/) | Project brief for diskOS development |
-
-## For developers
-
-A prepared release bundle includes native host tools under `vendor/<os>-<arch>/`. A fresh source
-checkout does not include those large binaries, so build them once.
-
-On Linux:
-
-```bash
-bash build/build-usbboot-static.sh
-bash build/build-squashfs-static.sh
-```
-
-On macOS:
-
-```bash
-bash build/build-macos.sh
-```
-
-The macOS script also builds a standalone installer. See
-[`build/README-vendor.md`](build/README-vendor.md) for native tool and packaging details.
-
-You can optionally create a self-contained binary. This is not the normal release format and
-bundles many system libraries; review [`licenses/THIRD_PARTY_BUNDLED.md`](licenses/THIRD_PARTY_BUNDLED.md)
-before redistributing it.
-
-```bash
-bash build/build.sh
-```
-
-### Building the UI
-
-The on-device UI source is in [`ui/`](ui/), licensed **GPL-3.0-or-later** - fork it, theme it, make
-it yours. LVGL 9.2.2 is vendored in `ui/lvgl/` (lightly customized), so all you need is a static
-`mipsel-linux-musl` toolchain; see [`ui/README.md`](ui/README.md) for the full recipe.
-
-```bash
-cd ui && make    # toolchain as mipsel-linux-musl-gcc; or: make CROSS=/path/to/mipsel-linux-musl-
-```
-
-## Debug Mode
-
-<details>
-<summary><strong>Optional SSH access and security notes</strong></summary>
-
-Debug Mode is **off by default**. Open **Settings > System > Debug Mode > Enable Debug** to show an
-SSH command and a newly generated password. The password rotates each time Debug Mode is enabled.
-
-While enabled, the password is stored in plaintext at `/usr/data/sshd/current_pw` with mode `0600`
-so the UI can display it again after a restart. Disabling Debug Mode removes the file. A reboot can
-leave a stale copy, but the SSH overlay is inactive until Debug Mode is enabled again.
-
-Debug Mode uses Dropbear 2022.83, which predates the CVE-2023-48795 Terrapin Strict-KEX mitigation.
-Use it only for short sessions on a trusted network and turn it off when finished.
-
-</details>
-
-## Error codes
-
-<details>
-<summary><strong>Installer and device error reference</strong></summary>
-
-Quote the complete code in bug reports. A stopped flash can leave the root filesystem partially
-written even when the writer fails closed.
-
-| Code | Meaning |
-|---|---|
-| **E1xx** | Environment or preflight; nothing was written |
-| E101-E103 | Unsupported host, missing component, or tool cannot run |
-| E110-E112 | Mask-ROM device detection or permission problem |
-| E120-E122 | Image missing, wrong size, or not a squashfs |
-| E123 / E124 | Writer capacity cannot be verified or is too small; refused before any NAND write |
-| E140-E142 | Firmware ZIP, saved stock image, or state-directory problem |
-| **E2xx** | Firmware extraction and image build |
-| E201-E225 | Unsafe archive, OTA manifest, decrypt, rootfs, version, payload, or hash problem. E221/E224/E225 mean the firmware is not an unmodified supported version; install and build cannot override them |
-| E230-E250 | Squashfs extraction/build, size, validation, filesystem, symlink, partition, or variant problem |
-| E234 | Build filesystem could not be verified as case-sensitive, or scratch-volume setup failed; see the accompanying message |
-| **E3xx** | Host-side flashing |
-| E301 / E302 | Missing or truncated result; outcome unknown |
-| E303 | Flash timed out |
-| E310 | Device reported a verification failure |
-| E311 | Writer capacity reported after flashing does not match the image; treat the flash as failed |
-| **F1xx** | Device writer aborted; return to mask-ROM and reflash or restore |
-
-Process exit codes are `0` success, `1` error, `2` usage or preflight refusal, `3` cancelled, and
-`130` interrupted.
-
-</details>
+Start with the [documentation index](docs/README.md) for installation, the screen-by-screen tour,
+development notes, hardware research, privacy, and license information.
 
 ## Contributing
 
-Bug reports, hardware findings, documentation fixes, and carefully scoped patches are welcome.
-Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before changing flashing code or security-sensitive paths.
-Report vulnerabilities privately according to [`SECURITY.md`](SECURITY.md).
+Bug reports, hardware findings, documentation fixes, and focused patches are welcome.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing flashing or security-sensitive code.
+Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 
-## Acknowledgements
+## License and support
 
-Thanks to the people who contributed reports, tools, and fixes:
+The installer, scripts, and documentation are MIT licensed; see [LICENSE](LICENSE).
+The on-device UI source in [ui/](ui/) is GPL-3.0-or-later; see [ui/COPYING](ui/COPYING).
+Third-party license details and corresponding source are listed in [NOTICE.md](NOTICE.md),
+[SPL_SOURCE.md](SPL_SOURCE.md), and [licenses/](licenses/).
 
-- **[eudj1n](https://github.com/eudj1n)** reported the V2.40 image-size issue
-  ([#1](https://github.com/b0hemia/diskos/issues/1)) with a byte-exact stock rootfs reproduction,
-  reported the Cyrillic rendering issue ([#3](https://github.com/b0hemia/diskos/issues/3)),
-  and built a QEMU preview harness.
-- **Pierre Nel ([@pierrenel](https://github.com/pierrenel))** contributed the macOS
-  case-insensitive-filesystem fix ([PR #2](https://github.com/b0hemia/diskos/pull/2)).
-- **[zmd22](https://github.com/zmd22)** corrected the V2.40 `0657` work-mode command table from
-  hardware testing ([discussion #6](https://github.com/b0hemia/diskos/discussions/6)) and shared
-  UI customizations ([discussion #5](https://github.com/b0hemia/diskos/discussions/5)).
-
-## Support the project
-
-diskOS is an open-source hobby project maintained by b0hemia, with community contributions.
+DiskOS is an open-source hobby project maintained by b0hemia, with community contributions.
 Tips are optional, but they help keep testing, reverse-engineering, documentation, and release
 work moving.
 
@@ -483,18 +181,6 @@ work moving.
   </a>
 </p>
 
-## License
-
-- Original installer code, scripts, and documentation are **MIT** licensed; see [`LICENSE`](LICENSE).
-- Third-party components keep their own licenses. GPL/LGPL corresponding source, notices, and
-  relinking information are included in [`corresponding-source/`](corresponding-source/),
-  [`spl-src/`](spl-src/), [`SPL_SOURCE.md`](SPL_SOURCE.md), [`NOTICE.md`](NOTICE.md), and
-  [`licenses/`](licenses/).
-- The on-device UI **source** is in [`ui/`](ui/), licensed **GPL-3.0-or-later**
-  (see [`ui/COPYING`](ui/COPYING)) - deliberately copyleft so forks stay open. Its built artifact
-  ships at `payload/mq_ui`. The UI's bundled components (LVGL, SQLite, fonts) keep their own
-  licenses; see [`ui/README.md`](ui/README.md).
-
 > [!WARNING]
-> Do not redistribute generated `diskos_*.bin` images. They contain FiiO's root filesystem. Build
-> them locally from firmware you obtained from FiiO and share the installer, not the resulting image.
+> Do not redistribute generated `diskos_*.bin` images. They contain FiiO's root filesystem.
+> Build them locally from firmware you obtained from FiiO and share the installer instead.

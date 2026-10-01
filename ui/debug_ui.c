@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
+#include "theme.h"
+#include "theme_kit.h"
 #include "config.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -187,31 +189,38 @@ void debug_create(lv_obj_t *root){
      * contrast (bright white); the password also gets the accent colour + bigger font to stand out. */
     g_ssh = lv_label_create(root);
     lv_obj_set_width(g_ssh, 320); lv_obj_set_style_text_align(g_ssh, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(g_ssh, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_color(g_ssh, TC(TEXT_PRIMARY), 0);
     lv_obj_align(g_ssh, LV_ALIGN_TOP_MID, 0, 94);
 
     g_pw = lv_label_create(root);
     lv_obj_set_width(g_pw, 320); lv_obj_set_style_text_align(g_pw, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_pw, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(g_pw, TF(UI_24), 0);
     lv_obj_set_style_text_color(g_pw, ui_current_accent(), 0);
     lv_obj_align(g_pw, LV_ALIGN_TOP_MID, 0, 122);
 
     g_serial = lv_label_create(root);
     lv_obj_set_width(g_serial, 300); lv_obj_set_style_text_align(g_serial, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(g_serial, lv_color_hex(0x8E8E93), 0);
+    lv_obj_set_style_text_color(g_serial, TC(TEXT_MUTED), 0);
     lv_obj_align(g_serial, LV_ALIGN_TOP_MID, 0, 158);
 
     g_warn = lv_label_create(root);
     lv_obj_set_width(g_warn, 280); lv_label_set_long_mode(g_warn, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(g_warn, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(g_warn, lv_color_hex(0xFF5E5B), 0);
+    lv_obj_set_style_text_color(g_warn, TC(STATUS_WARNING), 0);
     lv_obj_align(g_warn, LV_ALIGN_TOP_MID, 0, 190);
 
     lv_obj_t *btn = lv_button_create(root);
     lv_obj_set_size(btn, 190, 50);
+    lv_obj_set_style_shadow_width(btn, 0, 0);   /* no LVGL default-theme drop shadow: every other button is flat */
     lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -46);
-    lv_obj_add_event_cb(btn, btn_cb, LV_EVENT_CLICKED, NULL);
+    ui_on(btn, btn_cb, LV_EVENT_CLICKED, NULL, "debug_ui.btn", UI_CORE);
+    /* the accent action, like Date & Time's Set: LVGL's default button blue and an inherited text colour read poorly
+     * (green on green, grey on orange) under the themes */
+    lv_color_t acc = ui_current_accent();
+    lv_obj_set_style_bg_color(btn, acc, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
     g_btnlbl = lv_label_create(btn); lv_obj_center(g_btnlbl);
+    lv_obj_set_style_text_color(g_btnlbl, theme_on_color(acc), 0);   /* the live accent can be any album colour */
 
     refresh();
 }

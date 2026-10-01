@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """The boot-selection record has three readers that must never disagree: main.c's boot_select_is_diskos(),
 and the shipped shell helper payload/diskos-selected (used by S97 and the boot hook). This compiles the
 REAL C reader and enforcement out of main.c and runs the REAL helper, under the host shell and, when
@@ -31,10 +33,11 @@ if helper is None:
 # quietly use another version's shell and report it as this one.
 FW_BASE = os.environ.get('DISKOS_FW_BASE', '240')
 FW_BUSYBOX_MD5 = {'209': 'e6b2bb328e1c08238878991c0aae062d', '228': 'c1af60e81cea22b040b957c00404de9e',
-                  '240': '5d8a5e60ee7d40002fe70f43228596cb'}
+                  '240': '5d8a5e60ee7d40002fe70f43228596cb', '257': '8651f07f6387df9f10a22a73f0f9450f'}
 if FW_BASE not in FW_BUSYBOX_MD5:
     raise SystemExit(f'FAIL unknown DISKOS_FW_BASE={FW_BASE!r}')
-FW = Path(os.environ.get('DISKOS_FW_ROOT') or os.environ.get('DISKOS_V240_ROOT', '/tmp/vs6'))
+FW = Path(os.environ.get('DISKOS_FW_ROOT') or os.environ.get('DISKOS_V240_ROOT')
+         or app.parents[1] / 'scratch' / 'fixtures' / ('v' + FW_BASE))   # tools/make-fixtures.sh
 QEMU = shutil.which('qemu-mipsel-static')
 _fw_ok = bool(QEMU) and (FW / 'bin' / 'busybox').is_file() \
     and hashlib.md5((FW / 'bin' / 'busybox').read_bytes()).hexdigest() == FW_BUSYBOX_MD5[FW_BASE]
@@ -93,7 +96,7 @@ with tempfile.TemporaryDirectory(prefix='diskos-bootsel-') as t:
 
     def shell_says(name, path):
         env = dict(os.environ, DISKOS_BOOT_SELECT=str(path))
-        if name == 'v240-ash':
+        if name == f'v{FW_BASE}-ash':             # this base's own applets, not the host's
             env['PATH'] = f'{fwbin}:{env["PATH"]}'
         r = subprocess.run(shells[name], env=env, timeout=10, capture_output=True)
         if r.returncode not in (0, 1):

@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
+#include "theme.h"
+#include "theme_kit.h"
 #include "config.h"
 #include <stdio.h>
 #include <string.h>
@@ -98,6 +100,9 @@ static void *weather_thread(void *arg)
         memcpy(cond, c, cl); cond[cl] = 0;
         char *tp = temp; if (*tp == '+') tp++;   /* drop leading + on positive temps */
         snprintf(result, sizeof result, "%s  %s  %s", ic, tp, cond);   /* into local; g_wbuf write is under the lock */
+        { size_t n = strlen(result);                    /* the service can pad the condition: trailing blanks would
+                                                         * count in the centred label's width and push it off centre */
+          while(n && (result[n - 1] == ' ' || result[n - 1] == '\t' || result[n - 1] == '\r' || result[n - 1] == '\n')) result[--n] = 0; }
         fail = 0;
     }
     if (fail) fprintf(stderr, "weather: no usable data (resp='%.48s')\n", line);
@@ -236,39 +241,39 @@ static lv_obj_t *wapp_btn(lv_obj_t *root, int y, const char *label, lv_event_cb_
     lv_obj_remove_style_all(b);
     lv_obj_set_pos(b, 50, y); lv_obj_set_size(b, 260, 52);
     lv_obj_set_style_radius(b, 26, 0);
-    lv_obj_set_style_bg_color(b, lv_color_hex(0x1C1C1E), 0);
+    lv_obj_set_style_bg_color(b, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_70, 0);
-    lv_obj_set_style_bg_color(b, lv_color_hex(0x2C2C2E), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(b, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_STATE_PRESSED);
-    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
+    ui_on(b, cb, LV_EVENT_CLICKED, NULL, "weather.cb", UI_CORE);
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, label);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(l, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(l, TF(UI_16), 0);
+    lv_obj_set_style_text_color(l, TC(TEXT_PRIMARY), 0);
     lv_obj_center(l);
     return b;
 }
 
 void weather_app_create(lv_obj_t *root)
 {
-    lv_obj_set_style_bg_color(root, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
 
     ui_header(root, "Weather");   /* shared standard header */
 
-    s_appwfont = lv_font_montserrat_22;
+    s_appwfont = *TF(UI_22);
     s_appwfont.fallback = &font_weather16;
     g_app_w = lv_label_create(root);
     lv_obj_set_pos(g_app_w, 0, 96); lv_obj_set_width(g_app_w, 360);
     lv_obj_set_style_text_align(g_app_w, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(g_app_w, &s_appwfont, 0);
-    lv_obj_set_style_text_color(g_app_w, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_color(g_app_w, TC(TEXT_PRIMARY), 0);
 
     g_app_loc = lv_label_create(root);
     lv_obj_set_pos(g_app_loc, 0, 140); lv_obj_set_width(g_app_loc, 360);
     lv_obj_set_style_text_align(g_app_loc, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_app_loc, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(g_app_loc, lv_color_hex(0x8E8E93), 0);
+    lv_obj_set_style_text_font(g_app_loc, TF(UI_14), 0);
+    lv_obj_set_style_text_color(g_app_loc, TC(TEXT_MUTED), 0);
 
     wapp_btn(root, 186, "Set Location", set_loc_cb);
     wapp_btn(root, 248, "Auto (by IP)", auto_loc_cb);

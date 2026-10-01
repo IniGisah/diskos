@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
+#include "theme.h"
+#include "theme_kit.h"
 #include "config.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -45,7 +47,7 @@ static void slider_cb(lv_event_t *e){
     int r,gg,b; hsv2rgb(h,s,v,&r,&gg,&b);
     int rgb = (r<<16)|(gg<<8)|b;
     g_pending_rgb = rgb;
-    if(g_preview) lv_obj_set_style_bg_color(g_preview, lv_color_hex(rgb), 0);
+    if(g_preview) lv_obj_set_style_bg_color(g_preview, theme_color_from_rgb(rgb), 0);
     if(g_dyn_btn) lv_obj_set_style_border_width(g_dyn_btn, 0, 0);   /* leaving dynamic */
     ui_set_accent_config(1, rgb);
 }
@@ -74,20 +76,20 @@ void colorpick_open(void){
     if(g_ssl) lv_slider_set_value(g_ssl, s, LV_ANIM_OFF);
     if(g_vsl) lv_slider_set_value(g_vsl, v, LV_ANIM_OFF);
     g_loading = 0;
-    if(g_preview) lv_obj_set_style_bg_color(g_preview, lv_color_hex(rgb), 0);
+    if(g_preview) lv_obj_set_style_bg_color(g_preview, theme_color_from_rgb(rgb), 0);
     if(g_dyn_btn) lv_obj_set_style_border_width(g_dyn_btn, mode==0 ? 2 : 0, 0);
     screen_show(SCR_COLORPICK);
 }
 
 static lv_obj_t *mk_slider(lv_obj_t *root, int y, int max){
     lv_obj_t *sl = lv_slider_create(root);
-    lv_obj_set_pos(sl, 56, y); lv_obj_set_size(sl, 248, 12);
+    lv_obj_set_pos(sl, 62, y); lv_obj_set_size(sl, 236, 12);   /* a knob at 0 lines up with its label, not over it */
     lv_obj_set_ext_click_area(sl, 16);   /* 12px slider -> ~44px grab band on the capacitive panel */
     lv_slider_set_range(sl, 0, max);
-    lv_obj_set_style_bg_color(sl, lv_color_hex(0x2C2C2E), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(sl, lv_color_hex(0x8E8E93), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(sl, lv_color_hex(0xFFFFFF), LV_PART_KNOB);
-    lv_obj_add_event_cb(sl, slider_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_set_style_bg_color(sl, TC(CONTROL_TRACK), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(sl, TC(CONTROL_FILL_MUTED), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(sl, TC(CONTROL_KNOB), LV_PART_KNOB);
+    ui_on(sl, slider_cb, LV_EVENT_VALUE_CHANGED, NULL, "colorpick.slider.value", UI_CORE);
     lv_obj_add_event_cb(sl, slider_release_cb, LV_EVENT_RELEASED, NULL);
     /* a drag that ends in press-lost (finger slid off) must persist too, else the live
      * static accent never gets written and reverts to dynamic on next boot. */
@@ -97,12 +99,12 @@ static lv_obj_t *mk_slider(lv_obj_t *root, int y, int max){
 static void mk_label(lv_obj_t *root, int y, const char *txt){
     lv_obj_t *l = lv_label_create(root);
     lv_label_set_text(l, txt); lv_obj_set_pos(l, 56, y);
-    lv_obj_set_style_text_color(l, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(l, TC(TEXT_MUTED), 0);
+    lv_obj_set_style_text_font(l, TF(UI_14), 0);
 }
 
 void colorpick_create(lv_obj_t *root){
-    lv_obj_set_style_bg_color(root, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
 
     ui_header(root, "Accent");   /* shared standard header */
@@ -113,22 +115,23 @@ void colorpick_create(lv_obj_t *root){
     lv_obj_set_size(g_preview, 54, 54); lv_obj_set_pos(g_preview, 153, 74);
     lv_obj_set_style_radius(g_preview, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_opa(g_preview, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(g_preview, lv_color_hex(0x3A3A3C), 0);
+    lv_obj_set_style_border_color(g_preview, TC(BORDER_STRONG), 0);
     lv_obj_set_style_border_width(g_preview, 2, 0);
 
-    mk_label(root, 140, "Hue");        g_hsl = mk_slider(root, 158, 359);
-    mk_label(root, 184, "Saturation"); g_ssl = mk_slider(root, 202, 100);
-    mk_label(root, 228, "Brightness"); g_vsl = mk_slider(root, 246, 100);
+    /* label, then its track 26 px lower: the knob's overhang clears the label's line */
+    mk_label(root, 134, "Hue");        g_hsl = mk_slider(root, 160, 359);
+    mk_label(root, 180, "Saturation"); g_ssl = mk_slider(root, 206, 100);
+    mk_label(root, 226, "Brightness"); g_vsl = mk_slider(root, 252, 100);
 
     /* "Album Art" (dynamic) button */
     g_dyn_btn = lv_button_create(root);
     lv_obj_remove_style_all(g_dyn_btn);
     lv_obj_set_pos(g_dyn_btn, 100, 282); lv_obj_set_size(g_dyn_btn, 160, 40);
     lv_obj_set_style_radius(g_dyn_btn, 20, 0);
-    lv_obj_set_style_bg_color(g_dyn_btn, lv_color_hex(0x1C1C1E), 0);
+    lv_obj_set_style_bg_color(g_dyn_btn, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(g_dyn_btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(g_dyn_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_add_event_cb(g_dyn_btn, dynamic_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_style_border_color(g_dyn_btn, TC(OUTLINE_BRIGHT), 0);
+    ui_on(g_dyn_btn, dynamic_cb, LV_EVENT_CLICKED, NULL, "colorpick.dynamic", UI_CORE);
     lv_obj_t *dl=lv_label_create(g_dyn_btn); lv_label_set_text(dl, "Album Art");
-    lv_obj_set_style_text_color(dl, lv_color_hex(0xFFFFFF), 0); lv_obj_center(dl);
+    lv_obj_set_style_text_color(dl, TC(TEXT_PRIMARY), 0); lv_obj_center(dl);
 }

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 # Off-device host tests for diskOS pure-logic modules (arch#5 harness).
 # Native x86-64 build with sanitizers + CFG_* paths pointed at a temp dir. Does NOT touch the
 # device build (separate dir, separate Makefile). Run: make -C tests run

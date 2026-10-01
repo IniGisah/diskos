@@ -14,6 +14,10 @@ int  artcache_get(const char *track, const char *cover_out, const char *thumb_ou
 /* Store freshly-decoded BMPs into the cache for this track (atomic, best-effort).
  * No-op if the SD is nearly full. */
 void artcache_put(const char *track, const char *cover, const char *thumb, const char *bg);
+/* The cache key for the track as it is NOW (track + sidecar covers). Capture it before decoding and insert with
+ * artcache_put_if, which stores nothing if the key changed meanwhile. 0 on success. */
+int  artcache_key(const char *track, char *out, int cap);
+void artcache_put_if(const char *track, const char *fp_before, const char *cover, const char *thumb, const char *bg);
 
 /* 1 if this track already has a complete cache entry (cover+thumb+backdrop). */
 int  artcache_has(const char *track);

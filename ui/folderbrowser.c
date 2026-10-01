@@ -1,8 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
+#include "theme.h"
+#include "theme_kit.h"
 #include "sdio.h"
 #include "folderbrowser.h"
+#include "musicdb.h"
+#include "scanner.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,17 +30,20 @@
  *     library row by absolute path (the scanner stores PATH as the full
  *     /tmp/sdcard/... path), and playback runs in the all-songs scope via the
  *     same proven path a Songs-view / Search tap uses (ui_play_song_by_path).
+ *   - SACD .iso images the library has IS_ISO rows for, and .cue sheets, are listed too. Tapping one plays that
+ *     file's tracks (SONG rows by PATH, TRACK order) as the exact type-5 queue the album drill uses (ui_play_plan).
+ *     A sheet names its audio file(s) in FILE lines; the tracks live under that audio PATH.
  *
- * HONEST LIMITATION (no fake folder-queue)
- *   The stock player builds its play queue (LIST_SONG_0) itself, from the DB,
- *   filtered by a fixed list_type (0=all, 2=artist, 3=album, 5=playlist,
- *   6=favourites, 10=genre). There is NO "play these file paths" / "play this
- *   folder" command in the player's frame surface, and an arbitrary folder is
- *   not a DB list. So "play the whole folder as a queue" is not cleanly
- *   achievable through the existing play path, and we do not fake it (e.g. by
- *   silently minting a throwaway playlist). We browse + play a single tapped
- *   file. A file that is not in the library DB (e.g. an unscanned or
- *   unsupported container) reports "Not in library" instead of playing.
+ * FOLDER QUEUE (stock parity, deliberately not done here)
+ *   Stock V2.57 plays a tapped file as a queue of its folder: 0100 list type 4
+ *   with the directory path (docs/COMMAND_MAP.md, live-verified 2026-09-29). The
+ *   player scans that directory itself (not recursive) and orders the rows with
+ *   its own ICU collation, then starts at a 0-based row index into that list.
+ *   That order cannot be reproduced here (no ICU, and non-audio entries take a
+ *   slot), so a computed start index could play the wrong track. Until the
+ *   player's order can be read back exactly we play the tapped file alone, in
+ *   the all-songs scope, via ui_play_song_by_path. A file that is not in the
+ *   library DB reports "Not in library" instead of playing.
  */
 
 #define FB_ROOT        "/tmp/sdcard"
@@ -47,9 +54,13 @@
  * unlimited would need a row-recycling virtual list, which this device's RAM does not favour. */
 #define FB_MAX_ENTRIES 4000
 
+#define FB_K_AUDIO 0
+#define FB_K_ISO   1     /* SACD image the library has IS_ISO rows for: opens its tracks */
+#define FB_K_CUE   2     /* .cue sheet: opens the tracks of the file(s) it names */
 typedef struct {
     char name[FB_NAMELEN];
     int  is_dir;
+    int  kind;           /* FB_K_* for files */
 } fb_entry_t;
 
 static char        g_dir[FB_MAXPATH];
@@ -69,7 +80,11 @@ static int fb_is_audio(const char *name){
     /* mirror scanner.c is_audio()'s music set (SONG-resident, folder-playable). .m4b is intentionally
      * NOT here: audiobooks are isolated in their own BOOKS table + Books menu, out of the folder queue. */
     return fb_has_ext(name, ".mp3") || fb_has_ext(name, ".flac")
-        || fb_has_ext(name, ".wav") || fb_has_ext(name, ".m4a");
+        || fb_has_ext(name, ".wav") || fb_has_ext(name, ".m4a")
+        /* the scanner's other formats (stock V2.57's list): a file Files shows must be one the scanner indexes */
+        || fb_has_ext(name, ".aac") || fb_has_ext(name, ".ogg") || fb_has_ext(name, ".ape")
+        || fb_has_ext(name, ".aif") || fb_has_ext(name, ".aiff") || fb_has_ext(name, ".wma")
+        || fb_has_ext(name, ".dsf") || fb_has_ext(name, ".dff") || fb_has_ext(name, ".dts");
 }
 
 /* folders first, then files; case-insensitive within each group. */
@@ -124,11 +139,21 @@ static void fb_scan_leased(void){
                 else continue;                                /* not a folder or a regular file */
             }
             if(is_dir != (pass == 0)) continue;               /* pass 0 = dirs only, pass 1 = files only */
-            if(!is_dir && !fb_is_audio(nm)) continue;         /* files: only the audio we can play */
+            int kind = FB_K_AUDIO;
+            if(!is_dir && !fb_is_audio(nm)){                  /* files: audio we can play, indexed .iso images, .cue sheets */
+                if(fb_has_ext(nm, ".cue")) kind = FB_K_CUE;
+                else if(fb_has_ext(nm, ".iso")){
+                    char ip[FB_MAXPATH];
+                    int pn = snprintf(ip, sizeof ip, "%s/%s", g_dir, nm);
+                    if(pn <= 0 || pn >= (int)sizeof ip || mdb_subtrack_count(ip, 1) <= 0) continue;
+                    kind = FB_K_ISO;
+                } else continue;
+            }
 
             fb_entry_t *slot = &g_ent[g_nent];
             snprintf(slot->name, sizeof slot->name, "%s", nm);
             slot->is_dir = is_dir;
+            slot->kind = kind;
             g_nent++;
         }
         if(pass == 0) rewinddir(d);
@@ -150,8 +175,8 @@ static const char *fb_basename(const char *p){
 static void fb_empty_label(const char *msg){
     lv_obj_t *l = lv_label_create(g_list);
     lv_label_set_text(l, msg);
-    lv_obj_set_style_text_color(l, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(l, TC(TEXT_MUTED), 0);
+    lv_obj_set_style_text_font(l, TF(UI_16), 0);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
 }
 
@@ -161,35 +186,36 @@ static void fb_add_row(int i){
         fb_entry_t *en = &g_ent[i];
         lv_obj_t *r = lv_button_create(g_list);
         lv_obj_remove_style_all(r);
-        lv_obj_set_size(r, 280, 46);
+        lv_obj_set_size(r, 268, 46);
         lv_obj_set_style_radius(r, 8, 0);
-        lv_obj_set_style_bg_color(r, lv_color_hex(0x1C1C1E), LV_STATE_PRESSED);
+        lv_obj_set_style_bg_color(r, TC(LIST_PRESSED), LV_STATE_PRESSED);
         lv_obj_set_style_bg_opa(r, LV_OPA_70, LV_STATE_PRESSED);
         lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_ext_click_area(r, 2);
-        lv_obj_add_event_cb(r, fb_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        ui_on(r, fb_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i, "folderbrowser.fb_row", UI_CORE);
 
         lv_obj_t *ic = lv_label_create(r);
         lv_label_set_text(ic, en->is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_AUDIO);
         lv_obj_set_pos(ic, 10, 14);
-        lv_obj_set_style_text_font(ic, &lv_font_montserrat_16, 0);
-        lv_obj_set_style_text_color(ic, en->is_dir ? lv_color_hex(0xE5C158) : lv_color_hex(0x8E8E93), 0);
+        lv_obj_set_style_text_font(ic, TF(UI_16), 0);
+        lv_obj_set_style_text_color(ic, en->is_dir ? TC(FOLDER_ICON) : TC(TEXT_MUTED), 0);
 
         lv_obj_t *nm = lv_label_create(r);
         lv_label_set_text(nm, en->name);
         lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
         lv_obj_set_pos(nm, 40, 14);
-        lv_obj_set_size(nm, en->is_dir ? 206 : 228, 20);
-        lv_obj_set_style_text_font(nm, ui_font_cjk(16), 0);   /* CJK filenames, like Library/Search */
-        lv_obj_set_style_text_color(nm, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_size(nm, en->is_dir ? 194 : 216, 20);
+        lv_obj_set_style_text_font(nm, TF(USER_16), 0);   /* CJK filenames, like Library/Search */
+        lv_obj_set_style_text_color(nm, TC(TEXT_PRIMARY), 0);
 
         if(en->is_dir){
             lv_obj_t *ch = lv_label_create(r);
             lv_label_set_text(ch, LV_SYMBOL_RIGHT);
-            lv_obj_set_pos(ch, 256, 15);
-            lv_obj_set_style_text_font(ch, &lv_font_montserrat_16, 0);
-            lv_obj_set_style_text_color(ch, lv_color_hex(0x636366), 0);
+            lv_obj_set_pos(ch, 244, 15);
+            lv_obj_set_style_text_font(ch, TF(UI_16), 0);
+            lv_obj_set_style_text_color(ch, TC(TEXT_DISABLED), 0);
         }
+        theme_list_row(r);
 }
 
 static void fb_fill_cb(lv_timer_t *t){
@@ -203,7 +229,7 @@ static void fb_rebuild(void){
     fb_fill_stop();
     if(g_title){
         int at_root = (strcmp(g_dir, FB_ROOT) == 0);
-        lv_label_set_text(g_title, at_root ? "Files" : fb_basename(g_dir));
+        theme_title_text(g_title, at_root ? "Files" : fb_basename(g_dir));
     }
     if(!g_list) return;
     lv_obj_clean(g_list);
@@ -264,12 +290,45 @@ static void fb_play(const char *name){
         screen_show(SCR_NOWPLAYING);
 }
 
+/* Play the CUE/ISO tracks of `paths` (their SONG rows, TRACK order) through the exact queue the album drill uses. */
+static void fb_play_tracks(const char *const *paths, int n){
+    mdb_plan_t plan;
+    if(!mdb_subtrack_plan(paths, n, &plan)){ ui_toast("Not in library"); return; }
+    int ok = ui_play_plan(&plan, plan.ids[0]);
+    mdb_plan_free(&plan);
+    if(ok) screen_show(SCR_NOWPLAYING);
+}
+/* A .cue sheet: the scanner's own bounded FILE resolver (256 KiB, 64 files, path normalisation, no ".."/absolute) names the
+ * library files whose CUE rows are the sheet's tracks. */
+#define FB_CUE_FILES 64
+static char g_cue_paths[FB_CUE_FILES][FB_MAXPATH];
+static int fb_cue_seen(const char *path){ return mdb_subtrack_count(path, 0) > 0; }
+static void fb_play_sheet(const char *name){
+    char full[FB_MAXPATH];
+    int n = snprintf(full, sizeof full, "%s/%s", g_dir, name);
+    if(n <= 0 || n >= (int)sizeof full){ ui_toast("Path too long"); return; }
+    int np = 0;
+    if(sd_io_begin()){ np = scan_cue_files(full, g_cue_paths, FB_CUE_FILES, fb_cue_seen); sd_io_end(); }
+    const char *paths[FB_CUE_FILES];
+    for(int i = 0; i < np; i++) paths[i] = g_cue_paths[i];
+    fb_play_tracks(paths, np);   /* np == 0: "Not in library" */
+}
+static void fb_play_iso(const char *name){
+    char full[FB_MAXPATH];
+    int n = snprintf(full, sizeof full, "%s/%s", g_dir, name);
+    if(n <= 0 || n >= (int)sizeof full){ ui_toast("Path too long"); return; }
+    const char *paths[1] = { full };
+    fb_play_tracks(paths, 1);
+}
+
 static void fb_row_cb(lv_event_t *e){
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     int i = (int)(intptr_t)lv_event_get_user_data(e);
     if(i < 0 || i >= g_nent) return;
     fb_entry_t *en = &g_ent[i];
     if(en->is_dir) fb_descend(en->name);
+    else if(en->kind == FB_K_ISO) fb_play_iso(en->name);
+    else if(en->kind == FB_K_CUE) fb_play_sheet(en->name);
     else           fb_play(en->name);
 }
 
@@ -278,14 +337,14 @@ static void fb_header_back_cb(lv_event_t *e){
 }
 
 void folderbrowser_create(lv_obj_t *root){
-    lv_obj_set_style_bg_color(root, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
 
     g_title = ui_header_cb(root, "Files", fb_header_back_cb);   /* back-chevron ascends a level */
 
     g_list = lv_obj_create(root);
     lv_obj_remove_style_all(g_list);
-    lv_obj_set_pos(g_list, 40, 72);
+    lv_obj_set_pos(g_list, 41, 72);   /* its 268 px rows (5 px in) land centred on the screen */
     lv_obj_set_size(g_list, 290, 272);
     lv_obj_set_style_pad_bottom(g_list, 44, 0);   /* last row scrolls clear of the round bottom bezel */
     lv_obj_set_style_bg_opa(g_list, LV_OPA_TRANSP, 0);

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
+#include "theme.h"
 #include "sdio.h"
 #include "musicdb.h"
 #include "artcache.h"
@@ -294,7 +295,7 @@ void albumwall_drag_end(void){                           /* release: throw a few
     uint32_t dur = (uint32_t)(dist*120.0f) + 130; if(dur > 700) dur = 700;
     aw_anim_to(target, dur);
 }
-void albumwall_play(void){ if(g_nalb<=0) return; cfg_set_int("work_mode",0); ui_set_workmode(0); ui_play_list(3,g_names[g_cur],1); screen_show(SCR_NOWPLAYING); }
+void albumwall_play(void){ if(g_nalb<=0) return; cfg_set_int("work_mode",0); ui_set_workmode(0); if(ui_play_list(3,g_names[g_cur],1)) screen_show(SCR_NOWPLAYING); }
 void albumwall_open(void){ if(g_nalb<=0) return; library_open_album(g_names[g_cur]); screen_show(SCR_LIBRARY); }
 
 /* ---- prefetch ----------------------------------------------------------------------------------- */
@@ -317,22 +318,39 @@ static void aw_rebake_new_covers(void){
  * Enumerates the album list on the MAIN thread (mdb in-memory caches are not thread-safe) and enqueues
  * the representative track of every album lacking a cached cover, for the ui.c worker to decode. Runs
  * incrementally off its own timer so it never hitches boot/scan, re-walks the whole list each start
- * (cheap: cached albums are skipped) so it catches same-count library changes, and needs no visit to the
+ * (cheap: one indexed lookup per album - the WORKER skips albums whose cover is already cached, so no SD
+ * file checks run on the UI thread) so it catches same-count library changes, and needs no visit to the
  * Album view. Started at boot, after each scan, and on Cover Flow open. */
 static char (*g_seed_names)[MDB_STR];
 static int         g_seed_n, g_seed_cur;
 static lv_timer_t *g_seed_timer;
+static int *g_seed_rep;                                     /* per album: representative SONG.ID (0 = none) */
 static void aw_seed_cb(lv_timer_t *t){
     if(!g_seed_names || g_seed_cur >= g_seed_n){ lv_timer_delete(t); g_seed_timer = NULL; return; }
+    lv_timer_set_period(t, 50);                                 /* back to full pace (a full queue slows it below) */
     for(int k=0; k<3 && g_seed_cur < g_seed_n; k++){
-        int ids[6]; int m = mdb_album_track_ids(g_seed_names[g_seed_cur], ids, 6);
-        for(int i=0;i<m;i++){
-            char track[512]; track[0]=0;
-            if(mdb_song_path(ids[i], track, sizeof track) && track[0]){
-                if(artcache_has(track)) break;             /* already has a cached cover */
-                if(!ui_prewarm_enqueue(track)) return;      /* queue full -> resume this album next tick */
-                break;                                      /* one representative track per album */
+        /* The album's representative song (its first in library order, recorded when the album cache was built):
+         * one indexed ID lookup instead of comparing the album name against every song. Only if that path can't
+         * be read fall back to the album's other songs, as before. */
+        int ids[6], m = 0;
+        if(g_seed_rep && g_seed_rep[g_seed_cur] > 0){ ids[0] = g_seed_rep[g_seed_cur]; m = 1; }
+        for(int pass = 0; pass < 2; pass++){
+            int found = 0;
+            for(int i=0;i<m;i++){
+                char track[512]; track[0]=0;
+                if(mdb_song_path(ids[i], track, sizeof track) && track[0]){
+                    found = 1;
+                    if(!ui_prewarm_enqueue(track)){            /* queue full: the worker isn't draining it right now
+                                                                 * (heat, card access, a live decode) - retry this album
+                                                                 * slowly instead of re-querying it 20x a second */
+                        lv_timer_set_period(t, 2000);
+                        return;
+                    }
+                    break;                                      /* one representative track per album */
+                }
             }
+            if(found || pass) break;
+            m = mdb_album_track_ids(g_seed_names[g_seed_cur], ids, 6);   /* fallback: the slow scan */
         }
         g_seed_cur++;
     }
@@ -342,14 +360,17 @@ void albumwall_prewarm_seed(void){                          /* MAIN thread: (re)
     int want = mdb_album_count();                           /* size to the real album count (no >600 truncation) */
     if(want < 1) return;                                    /* <0 = OOM building the cache, 0 = empty -> nothing to seed (retry next start) */
     if(!g_seed_names || seed_cap < want){                   /* main-thread only + repopulated below -> free+malloc safe */
-        free(g_seed_names); free(artists); free(counts);
+        free(g_seed_names); free(artists); free(counts); free(g_seed_rep);
         g_seed_names = malloc((size_t)want*MDB_STR);
         artists      = malloc((size_t)want*MDB_STR);
         counts       = malloc((size_t)want*sizeof(int));
-        if(!g_seed_names || !artists || !counts){ free(g_seed_names); free(artists); free(counts); g_seed_names=NULL; artists=NULL; counts=NULL; seed_cap=0; return; }
+        g_seed_rep   = malloc((size_t)want*sizeof(int));
+        if(!g_seed_names || !artists || !counts || !g_seed_rep){ free(g_seed_names); free(artists); free(counts); free(g_seed_rep); g_seed_names=NULL; artists=NULL; counts=NULL; g_seed_rep=NULL; seed_cap=0; return; }
         seed_cap = want;
     }
     g_seed_n = mdb_albums(g_seed_names, artists, counts, seed_cap); g_seed_cur = 0;
+    if(mdb_album_rep_ids(g_seed_rep, seed_cap) != g_seed_n)
+        for(int i=0;i<seed_cap;i++) g_seed_rep[i] = 0;      /* reps unavailable -> every album uses the fallback scan */
     if(g_seed_n > 0 && !g_seed_timer) g_seed_timer = lv_timer_create(aw_seed_cb, 50, NULL);
 }
 
@@ -378,11 +399,12 @@ void albumwall_create(lv_obj_t *root){
 void albumwall_refresh(void){
     if(!g_root) return;
     if(!g_aw_inited){
-        /* dark placeholder sprites (built once) */
+        /* placeholder sprites (built once; BGRA from the theme's art-wall roles) */
         static uint8_t fb[AW_SRC*AW_SPR_H*4], sb[AW_SIDE_W*AW_SPR_H*4];
         memset(fb,0,sizeof fb); memset(sb,0,sizeof sb);
-        for(int y=0;y<AW_SRC;y++){ for(int x=0;x<AW_SRC;x++){ uint8_t *d=fb+(y*AW_SRC+x)*4; d[0]=0x2E;d[1]=0x2C;d[2]=0x2C;d[3]=0xFF; }
-                                   for(int x=0;x<AW_SIDE_W;x++){ uint8_t *d=sb+(y*AW_SIDE_W+x)*4; d[0]=0x20;d[1]=0x1E;d[2]=0x1E;d[3]=0xFF; } }
+        uint32_t fc = theme_rgb(THEME_CLR_ART_WALL_FRONT), sc = theme_rgb(THEME_CLR_ART_WALL_SIDE);
+        for(int y=0;y<AW_SRC;y++){ for(int x=0;x<AW_SRC;x++){ uint8_t *d=fb+(y*AW_SRC+x)*4; d[0]=fc&255;d[1]=fc>>8&255;d[2]=fc>>16&255;d[3]=0xFF; }
+                                   for(int x=0;x<AW_SIDE_W;x++){ uint8_t *d=sb+(y*AW_SIDE_W+x)*4; d[0]=sc&255;d[1]=sc>>8&255;d[2]=sc>>16&255;d[3]=0xFF; } }
         g_blank.has_cover=0; g_blank.idx=-2; aw_set_dsc(&g_blank.fdsc, fb, AW_SRC, AW_SPR_H); aw_set_dsc(&g_blank.sdsc, sb, AW_SIDE_W, AW_SPR_H);
         for(int i=0;i<AW_LRU;i++) g_lru[i].idx=-1;
         g_aw_inited = 1;
@@ -411,7 +433,7 @@ void albumwall_refresh(void){
 
     lv_obj_clean(g_root);
     for(int c=0;c<AW_CARDS;c++){ g_front[c]=NULL; g_side[c]=NULL; }
-    lv_obj_set_style_bg_color(g_root, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(g_root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(g_root, LV_OPA_COVER, 0);
     ui_header_cb(g_root, "Albums", aw_back_cb);
 
@@ -419,7 +441,7 @@ void albumwall_refresh(void){
     if(g_nalb <= 0){
         lv_obj_t *e = lv_label_create(g_root);
         lv_label_set_text(e, g_names ? "No albums found" : "Out of memory");
-        lv_obj_center(e); lv_obj_set_style_text_color(e, lv_color_hex(0x8E8E93), 0);
+        lv_obj_center(e); lv_obj_set_style_text_color(e, TC(TEXT_MUTED), 0);
         return;
     }
     if(g_cur >= g_nalb) g_cur = 0;
@@ -433,24 +455,24 @@ void albumwall_refresh(void){
     for(int k=0;k<AW_CARDS;k++) g_front[zc[k]] = aw_img();
 
     g_initial = lv_label_create(g_root);
-    lv_obj_set_style_text_font(g_initial, ui_text_font(20), 0);
-    lv_obj_set_style_text_color(g_initial, lv_color_hex(0x8E8E93), 0);
+    lv_obj_set_style_text_font(g_initial, TF(USER_20), 0);
+    lv_obj_set_style_text_color(g_initial, TC(TEXT_MUTED), 0);
     lv_obj_align(g_initial, LV_ALIGN_TOP_MID, 0, 72 + AW_SRC/2 - 12);
     lv_obj_add_flag(g_initial, LV_OBJ_FLAG_HIDDEN);
 
     g_name = lv_label_create(g_root);
     lv_label_set_long_mode(g_name, LV_LABEL_LONG_DOT); lv_obj_set_size(g_name, 260, 24);
     lv_obj_set_style_text_align(g_name, LV_TEXT_ALIGN_CENTER, 0); lv_obj_align(g_name, LV_ALIGN_TOP_MID, 0, 266);
-    lv_obj_set_style_text_font(g_name, ui_text_font(18), 0); lv_obj_set_style_text_color(g_name, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(g_name, TF(USER_18), 0); lv_obj_set_style_text_color(g_name, TC(TEXT_PRIMARY), 0);
 
     g_artist = lv_label_create(g_root);
     lv_label_set_long_mode(g_artist, LV_LABEL_LONG_DOT); lv_obj_set_size(g_artist, 220, 20);
     lv_obj_set_style_text_align(g_artist, LV_TEXT_ALIGN_CENTER, 0); lv_obj_align(g_artist, LV_ALIGN_TOP_MID, 0, 292);
-    lv_obj_set_style_text_font(g_artist, ui_text_font(16), 0); lv_obj_set_style_text_color(g_artist, lv_color_hex(0x8E8E93), 0);
+    lv_obj_set_style_text_font(g_artist, TF(USER_16), 0); lv_obj_set_style_text_color(g_artist, TC(TEXT_MUTED), 0);
 
     g_counter = lv_label_create(g_root);
     lv_obj_align(g_counter, LV_ALIGN_TOP_MID, 0, 318);
-    lv_obj_set_style_text_font(g_counter, &lv_font_montserrat_14, 0); lv_obj_set_style_text_color(g_counter, lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(g_counter, TF(UI_14), 0); lv_obj_set_style_text_color(g_counter, TC(TEXT_DISABLED), 0);
 
     aw_render_all(); aw_labels();
 }

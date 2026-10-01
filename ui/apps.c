@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
+#include "theme.h"
+#include "theme_kit.h"
 #include "anim.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -63,21 +65,21 @@ static void make_tile(const char *icon, const lv_font_t *ifont, const char *name
     lv_obj_remove_style_all(r);
     lv_obj_set_size(r, 128, 108);
     lv_obj_set_style_radius(r, 18, 0);
-    lv_obj_set_style_bg_color(r, lv_color_hex(0x1C1C1E), 0);
+    lv_obj_set_style_bg_color(r, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(r, lv_color_hex(0x2C2C2E), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(r, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
     lv_obj_set_ext_click_area(r, 4);
     lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(r, cb, LV_EVENT_CLICKED, ud);
+    ui_on(r, cb, LV_EVENT_CLICKED, ud, "apps.cb", UI_CORE);
     lv_obj_t *ic = lv_label_create(r);
     lv_label_set_text(ic, icon);
     lv_obj_set_style_text_font(ic, ifont, 0);
-    lv_obj_set_style_text_color(ic, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_color(ic, TC(TEXT_PRIMARY), 0);
     lv_obj_align(ic, LV_ALIGN_TOP_MID, 0, 22);
     lv_obj_t *l = lv_label_create(r);
     lv_label_set_text(l, name);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(l, lv_color_hex(0xC7C7CC), 0);
+    lv_obj_set_style_text_font(l, TF(UI_14), 0);
+    lv_obj_set_style_text_color(l, TC(TEXT_SECONDARY), 0);
     lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, -14);
 }
 
@@ -87,15 +89,15 @@ void apps_reload(void){
     scan_apps();
     /* Weather is not a tile here anymore - it opens by tapping the home weather glance (glance->detail). */
     /* built-in: Last.fm scrobbling (the FA lastfm brand glyph) */
-    make_tile(LFM_ICON, &font_icons_28, "Last.fm", lastfm_row_cb, NULL);
+    make_tile(LFM_ICON, TF(ICON_28), "Last.fm", lastfm_row_cb, NULL);
     /* homebrew apps from /usr/data/apps */
-    for(int i=0;i<g_napps;i++) make_tile(LV_SYMBOL_FILE, &font_icons_28, g_apps[i].name, app_row_cb, (void*)(uintptr_t)i);
+    for(int i=0;i<g_napps;i++) make_tile(LV_SYMBOL_FILE, TF(ICON_28), g_apps[i].name, app_row_cb, (void*)(uintptr_t)i);
     /* built-in: Settings */
-    make_tile(LV_SYMBOL_SETTINGS, &font_icons_28, "Settings", settings_row_cb, NULL);
+    make_tile(LV_SYMBOL_SETTINGS, TF(ICON_28), "Settings", settings_row_cb, NULL);
 }
 
 void apps_create(lv_obj_t *root){
-    lv_obj_set_style_bg_color(root, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
 
     ui_header(root, "Apps");   /* shared standard header */

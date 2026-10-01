@@ -1,10 +1,14 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
+#include "theme.h"
+#include "theme_kit.h"
 #include "config.h"
 #include "musicdb.h"
+#include "fwcaps.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 /* Custom graphic EQ: 10 bands (32 Hz..16 kHz) + master, -12..+12 dB, matching the stock
  * player's PEQ. The stock player keeps TEN user slots, USER1..USER10 = STYLE_PRESET 11..20;
@@ -20,7 +24,6 @@
  * hasn't been reverse-engineered off the device yet. */
 
 int ui_apply_eq(int preset);             /* main.c: 0689 select; <0 = send failed */
-#define ACC 0xFF375F
 #define NBAND 10
 #define SLOT_MIN 11                      /* USER1  = STYLE_PRESET 11 */
 #define SLOT_MAX 20                      /* USER10 = STYLE_PRESET 20 */
@@ -72,6 +75,7 @@ static void migrate_legacy_user1(void){
 /* build the stock PARAMS_JSON from the current band values + write+select the current PEQ
  * slot. Returns 1 if the curve actually reached the player (DB write + select), 0 otherwise. */
 static int apply_now(void){
+    if(!fw_custom_peq_writable()) return 0;   /* view-only firmware: never write or select a PEQ slot */
     char json[1100]; int n = 0;
     n += snprintf(json+n, sizeof json-n, "[");
     for(int i=0;i<NBAND;i++){
@@ -175,6 +179,7 @@ static void set_slot(int slot){
     cfg_set_int("eq_slot", g_slot);
     if(g_slotlbl){ char b[16]; snprintf(b,sizeof b,"USER%d", g_slot-10); lv_label_set_text(g_slotlbl, b); }
     load_slot(g_slot);
+    if(!fw_custom_peq_writable()) return;               /* view-only: show the slot's curve, select nothing */
     if(slot_has_cfg(g_slot) && !g_slot_foreign){
         if(!apply_now()) ui_toast("Couldn't apply EQ");   /* our curve, DB agrees -> write back + select */
     } else if(ui_eq_select(g_slot) < 0){
@@ -198,6 +203,7 @@ static void band_cb(lv_event_t *e){
 /* persist this control (to the current slot) + apply the whole curve when the finger lifts */
 static void band_release_cb(lv_event_t *e){
     (void)e;
+    if(!fw_custom_peq_writable()){ ui_toast("Custom EQ: not on this firmware yet"); load_slot(g_slot); return; }
     /* Blocked edit: either a stock PARAMETRIC preset (which the 10-band graphic editor would flatten), or a
      * slot whose stock curve we FAILED to read (persisting the placeholder-flat would clobber it). Either
      * way, drop the edit and reload the real curve rather than destroy it. */
@@ -215,6 +221,7 @@ static void band_release_cb(lv_event_t *e){
 
 static void flat_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+    if(!fw_custom_peq_writable()){ ui_toast("Custom EQ: not on this firmware yet"); return; }
     /* LV_ANIM_OFF so the slider VALUES are actually 0 when apply_now() reads them below - with
      * LV_ANIM_ON the sliders are still mid-animation and apply_now() would send the old/intermediate
      * curve to the player while cfg + labels already said 0. */
@@ -233,40 +240,41 @@ static void flat_cb(lv_event_t *e){
 
 /* one EQ column: value label on top, vertical slider, freq label below. idx==NBAND = master.
  * Built inside the horizontal scroller. Slider starts at 0; load_slot() fills the real value. */
+static int g_eq_drop;   /* px the header's filled title cap pushes everything down (0 for a plain title) */
 static void make_col(lv_obj_t *parent, int idx, const char *flabel,
                      lv_obj_t **slot_slider, lv_obj_t **slot_val){
     lv_obj_t *col = lv_obj_create(parent);
     lv_obj_remove_style_all(col);
-    lv_obj_set_size(col, 42, 206);
+    lv_obj_set_size(col, 42, 206 - g_eq_drop);
     lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *val = lv_label_create(col);
     lv_obj_set_pos(val, 0, 0); lv_obj_set_width(val, 42);
     lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(val, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(val, lv_color_hex(ACC), 0);
+    lv_obj_set_style_text_font(val, TF(UI_14), 0);
+    lv_obj_set_style_text_color(val, TC(ACCENT_PRIMARY), 0);
     lv_label_set_text(val, "0");
 
     lv_obj_t *sl = lv_slider_create(col);
-    lv_obj_set_size(sl, 16, 150);
+    lv_obj_set_size(sl, 16, 150 - g_eq_drop);
     lv_obj_set_ext_click_area(sl, 8);
     lv_obj_set_pos(sl, 13, 22);
     lv_slider_set_mode(sl, LV_SLIDER_MODE_SYMMETRICAL);   /* fill from 0 dB centre */
     lv_slider_set_range(sl, -12, 12);
     lv_slider_set_value(sl, 0, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(sl, lv_color_hex(0x2C2C2E), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(sl, lv_color_hex(ACC), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(sl, lv_color_hex(0xFFFFFF), LV_PART_KNOB);
-    lv_obj_add_event_cb(sl, band_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)idx);
+    lv_obj_set_style_bg_color(sl, TC(CONTROL_TRACK), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(sl, TC(ACCENT_PRIMARY), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(sl, TC(CONTROL_KNOB), LV_PART_KNOB);
+    ui_on(sl, band_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)idx, "eqcustom.band.value", UI_CORE);
     lv_obj_add_event_cb(sl, band_release_cb, LV_EVENT_RELEASED, (void*)(intptr_t)idx);
     lv_obj_add_event_cb(sl, band_release_cb, LV_EVENT_PRESS_LOST, (void*)(intptr_t)idx);
 
     lv_obj_t *fl = lv_label_create(col);
-    lv_obj_set_pos(fl, 0, 182); lv_obj_set_width(fl, 42);
+    lv_obj_set_pos(fl, 0, 182 - g_eq_drop); lv_obj_set_width(fl, 42);
     lv_label_set_text(fl, flabel);
     lv_obj_set_style_text_align(fl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(fl, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(fl, lv_color_hex(idx==NBAND ? 0xC7C7CC : 0x8E8E93), 0);
+    lv_obj_set_style_text_font(fl, TF(UI_14), 0);
+    lv_obj_set_style_text_color(fl, (idx==NBAND ? TC(TEXT_SECONDARY) : TC(TEXT_MUTED)), 0);
 
     *slot_slider = sl;
     *slot_val = val;
@@ -276,29 +284,29 @@ static void make_col(lv_obj_t *parent, int idx, const char *flabel,
 static void make_slot_selector(lv_obj_t *root){
     lv_obj_t *sel = lv_obj_create(root);
     lv_obj_remove_style_all(sel);
-    lv_obj_set_pos(sel, 70, 48); lv_obj_set_size(sel, 220, 32);
+    lv_obj_set_pos(sel, 100, 48 + g_eq_drop); lv_obj_set_size(sel, 160, 32);   /* its arrows clear the back chevron's column */
     lv_obj_clear_flag(sel, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *lb = lv_button_create(sel); lv_obj_remove_style_all(lb);
     lv_obj_set_size(lb, 40, 30); lv_obj_align(lb, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_set_ext_click_area(lb, 8);
     lv_obj_t *li = lv_label_create(lb); lv_label_set_text(li, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_color(li, lv_color_hex(0xFFFFFF), 0); lv_obj_center(li);
-    lv_obj_add_event_cb(lb, slot_dir_cb, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
+    lv_obj_set_style_text_color(li, TC(TEXT_PRIMARY), 0); lv_obj_center(li);
+    ui_on(lb, slot_dir_cb, LV_EVENT_CLICKED, (void*)(intptr_t)-1, "eqcustom.slot_dir", UI_CORE);
 
     g_slotlbl = lv_label_create(sel);
-    lv_obj_set_width(g_slotlbl, 120); lv_obj_align(g_slotlbl, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_width(g_slotlbl, 80); lv_obj_align(g_slotlbl, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_text_align(g_slotlbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_slotlbl, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(g_slotlbl, lv_color_hex(ACC), 0);
+    lv_obj_set_style_text_font(g_slotlbl, TF(UI_16), 0);
+    lv_obj_set_style_text_color(g_slotlbl, TC(ACCENT_PRIMARY), 0);
     { char b[16]; snprintf(b,sizeof b,"USER%d", g_slot-10); lv_label_set_text(g_slotlbl, b); }
 
     lv_obj_t *rb = lv_button_create(sel); lv_obj_remove_style_all(rb);
     lv_obj_set_size(rb, 40, 30); lv_obj_align(rb, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_ext_click_area(rb, 8);
     lv_obj_t *ri = lv_label_create(rb); lv_label_set_text(ri, LV_SYMBOL_RIGHT);
-    lv_obj_set_style_text_color(ri, lv_color_hex(0xFFFFFF), 0); lv_obj_center(ri);
-    lv_obj_add_event_cb(rb, slot_dir_cb, LV_EVENT_CLICKED, (void*)(intptr_t)1);
+    lv_obj_set_style_text_color(ri, TC(TEXT_PRIMARY), 0); lv_obj_center(ri);
+    ui_on(rb, slot_dir_cb, LV_EVENT_CLICKED, (void*)(intptr_t)1, "eqcustom.slot_dir", UI_CORE);
 }
 
 /* Re-resolve the edited slot on every entry (display-only, no audio re-apply): if a USER slot is the
@@ -317,7 +325,7 @@ void eqcustom_refresh(void){
 }
 
 void eqcustom_create(lv_obj_t *root){
-    lv_obj_set_style_bg_color(root, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
 
     migrate_legacy_user1();   /* carry a pre-slots Custom EQ curve into USER1 (one-time, non-destructive) */
@@ -331,23 +339,36 @@ void eqcustom_create(lv_obj_t *root){
     g_slot = init;
     cfg_set_int("eq_slot", g_slot);
 
-    ui_header(root, "Custom EQ");   /* shared standard header */
+    lv_obj_t *title = ui_header(root, "Custom EQ");   /* shared standard header */
+    /* the slot selector sits under the title as it does under Default's (whose title ends at y 56): a taller title
+     * face moves it down by the difference, a filled title cap puts it below the cap; the sliders give up the room */
+    g_eq_drop = 0;
+    lv_obj_update_layout(root);
+    if(title){
+        lv_area_t a; lv_obj_get_coords(title, &a);
+        if(lv_obj_get_style_bg_opa(title, 0) > LV_OPA_50) g_eq_drop = a.y2 + 2 - 48;
+        else if(a.y2 > 56) g_eq_drop = a.y2 - 56 + 4;   /* and a little air: its faces are taller */
+        if(g_eq_drop < 0) g_eq_drop = 0;
+        if(g_eq_drop > 40) g_eq_drop = 40;
+    }
 
     make_slot_selector(root);
 
     /* horizontally-scrollable row of EQ columns (master + 10 bands) */
     lv_obj_t *scr = lv_obj_create(root);
     lv_obj_remove_style_all(scr);
-    lv_obj_set_pos(scr, 0, 80);
-    lv_obj_set_size(scr, 360, 212);
+    /* exactly SIX columns wide (6 x 42 + 5 x 4 = 272, x 44..316): the next column is either fully in view or fully
+     * hidden, never cut by the round glass - a full-width strip left the 7th column's label sliced by the rim ("1k"
+     * read "1'"). x 44 still clears an edge back arrow; the label row (y ~262) is inside the circle across 44..316. */
+    lv_obj_set_pos(scr, 44, 80 + g_eq_drop);
+    lv_obj_set_size(scr, 272, 212 - g_eq_drop);
     lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(scr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scroll_dir(scr, LV_DIR_HOR);
     lv_obj_add_flag(scr, LV_OBJ_FLAG_SCROLL_MOMENTUM);
     lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_set_style_pad_left(scr, 20, 0);
-    lv_obj_set_style_pad_right(scr, 20, 0);
     lv_obj_set_style_pad_column(scr, 4, 0);
+    lv_obj_set_scroll_snap_x(scr, LV_SCROLL_SNAP_START);   /* scrolling stops on a whole column */
 
     make_col(scr, NBAND, "MSTR", &g_master, &g_mval);    /* master first */
     for(int i=0;i<NBAND;i++)
@@ -360,11 +381,20 @@ void eqcustom_create(lv_obj_t *root){
     lv_obj_set_size(flat, 120, 34); lv_obj_align(flat, LV_ALIGN_TOP_MID, 0, 296);
     lv_obj_set_ext_click_area(flat, 6);   /* 34px pill -> ~46px touch target */
     lv_obj_set_style_radius(flat, 17, 0);
-    lv_obj_set_style_bg_color(flat, lv_color_hex(0x1C1C1E), 0);
+    lv_obj_set_style_bg_color(flat, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(flat, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(flat, lv_color_hex(0x2C2C2E), LV_STATE_PRESSED);
-    lv_obj_add_event_cb(flat, flat_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_style_bg_color(flat, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
+    ui_on(flat, flat_cb, LV_EVENT_CLICKED, NULL, "eqcustom.flat", UI_CORE);
     lv_obj_t *fll=lv_label_create(flat); lv_label_set_text(fll, "Flat");
-    lv_obj_set_style_text_font(fll, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(fll, lv_color_hex(0xFFFFFF), 0); lv_obj_center(fll);
+    lv_obj_set_style_text_font(fll, TF(UI_14), 0);
+    lv_obj_set_style_text_color(fll, TC(TEXT_PRIMARY), 0); lv_obj_center(fll);
+    if(!fw_custom_peq_writable()){
+        /* View-only firmware: sliders and Flat are disabled (the slot arrows still browse curves), and the
+         * Flat pill says why instead of offering a change the player would reject or repair. */
+        for(int i=0;i<NBAND;i++) if(g_band[i]) lv_obj_add_state(g_band[i], LV_STATE_DISABLED);
+        if(g_master) lv_obj_add_state(g_master, LV_STATE_DISABLED);
+        lv_obj_set_width(flat, 196);   /* inside the round glass at this height (y 296..330), square corners too */
+        lv_label_set_text(fll, "Not on this firmware");
+        lv_obj_set_style_text_color(fll, TC(TEXT_MUTED), 0);
+    }
 }

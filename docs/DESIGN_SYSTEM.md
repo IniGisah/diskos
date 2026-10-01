@@ -2,7 +2,7 @@
 
 This is the visual and interaction baseline for the device UI, boot experience, project imagery,
 and supporting pages. It is intentionally small: diskOS should feel calm, precise, premium, and
-native to a round 360 × 360 display.
+native to a round 360 x 360 display.
 
 <p align="center">
   <img src="assets/boot-animation.gif" alt="diskOS boot animation concept" width="360">
@@ -44,7 +44,7 @@ art and listening screens, not startup chrome.
 
 ### Type
 
-- UI family (as shipped): **Montserrat** for Latin text, with **Source Han Sans** as the CJK fallback. (**Inter** / **Noto Sans** are a possible future direction, not the current build.)
+- UI family (as shipped): **Montserrat** for Latin text, with **Source Han Sans** as the CJK fallback. **Inter** is shipped in the hi-fi theme; other themes have their own bundled fonts.
 - Display: 28 px / 32 px, semibold.
 - Title: 20 px / 24 px, semibold.
 - Body: 16 px / 21 px, regular.
@@ -54,26 +54,26 @@ art and listening screens, not startup chrome.
 ### Space and shape
 
 - Base spacing unit: **4 px**. Use 8, 12, 16, 24, and 32 px steps.
-- Minimum touch target: **44 × 44 px**.
+- Minimum touch target: **44 x 44 px**.
 - Central safe zone for essential controls: **280 px diameter**.
 - Corners: 12 px compact, 18 px card, 999 px pill.
 - Borders: 1 px standard; 2 px for selected or focused controls.
 
 ## Canonical edge ring
 
-The ring is a 270° path near the outer display edge, with a 90° gap centered at the bottom.
+The ring is a 270 degrees path near the outer display edge, with a 90 degrees gap centered at the bottom.
 
-| Property | 360 × 360 value |
+| Property | 360 x 360 value |
 |---|---:|
 | Center | `180, 180` |
 | Radius | `172 px` |
 | Stroke | `3 px` |
-| Start | `135°`: lower-left, about 7:30 |
-| End | `405°`: lower-right, about 4:30 |
+| Start | `135 degrees`: lower-left, about 7:30 |
+| End | `405 degrees`: lower-right, about 4:30 |
 | Direction | Clockwise |
 | Leading dot | `7.2 px` diameter, `focus` color |
 
-For playback or determinate loading, the filled path starts at 135° and grows clockwise. The dot
+For playback or determinate loading, the filled path starts at 135 degrees and grows clockwise. The dot
 sits on the leading edge. Never mirror the path, start at the top, or fill the inactive section.
 
 Use the ring for one continuous value only: playback position, volume during adjustment, or boot
@@ -106,7 +106,7 @@ and crossfade to Home when ready.
 
 The 2.4-second GIF is a visual timing sample. Production should bind progress to boot stages and
 must not reach 100% before the home screen is ready. If real progress is unavailable, animate a
-72° segment clockwise along the same path and never show a percentage.
+72 degrees segment clockwise along the same path and never show a percentage.
 
 ### Boot states
 
@@ -114,8 +114,8 @@ must not reach 100% before the home screen is ready. If real progress is unavail
 |---|---|---|---|
 | Starting | Track + early progress | Wordmark resolving | No text beyond `diskOS` |
 | Loading | Forward progress | Stable wordmark | No bounce or reverse motion |
-| Ready | Full 270° path | Mark at full contrast | Short hold, then crossfade |
-| Recoverable delay | 72° moving segment | Muted wordmark | Keep motion slow and steady |
+| Ready | Full 270 degrees path | Mark at full contrast | Short hold, then crossfade |
+| Recoverable delay | 72 degrees moving segment | Muted wordmark | Keep motion slow and steady |
 | Error | `danger` at failed position | Small error code | Stop motion; preserve the code |
 
 ## Component rules
@@ -150,7 +150,7 @@ must not reach 100% before the home screen is ready. If real progress is unavail
 
 - Maintain at least 4.5:1 contrast for body text and 3:1 for large text and controls.
 - Do not encode status through color alone; pair it with an icon, label, or stable position.
-- Test every screen at native 360 × 360 resolution, not only in an enlarged mockup.
+- Test every screen at native 360 x 360 resolution, not only in an enlarged mockup.
 - Check the 44 px target minimum with fingers, not a pointer.
 - Confirm the ring begins at lower-left, moves clockwise, and remains inside the display edge.
 - Keep motion readable at 30 fps and provide a reduced-motion state.
@@ -158,5 +158,5 @@ must not reach 100% before the home screen is ready. If real progress is unavail
 ## Reference assets
 
 - [`assets/boot-animation.gif`](assets/boot-animation.gif): one-shot preview
-- [`assets/boot-screen.png`](assets/boot-screen.png): native 360 × 360 reference frame
+- [`assets/boot-screen.png`](assets/boot-screen.png): native 360 x 360 reference frame
 - [`assets/boot-storyboard.png`](assets/boot-storyboard.png): six-frame handoff

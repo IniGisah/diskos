@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Exercise shared transport and pause feedback, with IPC failures and storage holds."""
 from pathlib import Path
 import os,subprocess,tempfile
@@ -19,7 +21,10 @@ static uint32_t now;
 static long g_seek_target_ms,requested_seek;
 static uint32_t g_seek_hold_until;
 static char *btn_pp="";
-static char toast[100],glyph[20],g_play_scope[40]="keep",g_play_pendscope[40]="keep";
+static char toast[100],glyph[20];
+static void ui_note_transport_sent(void){}
+static int modes_output_busy(void){ return 0; }   /* no output switch in flight: the transport path is under test */
+static int cancel_ok=1,cancels; static int scanner_cancel(void){ cancels++; return cancel_ok; }   /* Rescan during a scan = Stop */
 typedef struct { char path[40]; long position_ms,duration_ms; } track_state_t;
 static track_state_t state;
 static uint32_t lv_tick_get(void){return now;}
@@ -34,7 +39,7 @@ static int ui_seek_to(long p){seeks++;requested_seek=p;return send_fail?-1:0;}
 static void ui_book_user_seeked(long p){(void)p;hints++;}
 static void ui_cancel_book_resume(void){cancelled++;}
 static void ui_disarm_book_eoc(void){disarmed++;}
-static void set_label_text_changed(const char *obj,const char *s){(void)obj;snprintf(glyph,sizeof glyph,"%s",s);}
+static void ui_pp_glyph(const char *obj,int playing){(void)obj;snprintf(glyph,sizeof glyph,"%s",playing?LV_SYMBOL_PAUSE:LV_SYMBOL_PLAY);}
 static int scanner_active(void){return scan_busy;}
 static int sd_io_allowed(void){return sd_allowed;}
 static int scanner_start(void){scans++;return scan_fail?-1:0;}
@@ -72,12 +77,14 @@ int main(void){
     send_fail=0;assert(ui_transport_command("0201000C0001")==0 && cancelled==1 && disarmed==1);
     puts("PASS bounded book seeks, failed seek preserves resume, successful music skip clears it");
 
-    local=0; ui_rescan_library(); assert(scans==0 && !strcmp(g_play_scope,"keep"));
-    local=1;scan_busy=1;ui_rescan_library();assert(scans==0 && strstr(toast,"already running"));
+    local=0; ui_rescan_library(); assert(scans==0);
+    local=1;scan_busy=1;toast[0]=0;ui_rescan_library();assert(scans==0 && cancels==1 && !strcmp(toast,"Cancelling scan..."));
+    cancel_ok=0;toast[0]=0;ui_rescan_library();assert(scans==0 && cancels==2 && toast[0]==0);   /* committing: refused, completion reports */
+    cancel_ok=1;
     scan_busy=0;sd_allowed=0;ui_rescan_library();assert(scans==0 && strstr(toast,"not ready"));
-    sd_allowed=1;scan_fail=1;ui_rescan_library();assert(scans==1 && !strcmp(g_play_scope,"keep") && strstr(toast,"Couldn't start"));
-    scan_fail=0;ui_rescan_library();assert(scans==2 && !g_play_scope[0] && !g_play_pendscope[0] && !strcmp(toast,"Scanning library..."));
-    puts("PASS honest scan admission, busy/error feedback and scope invalidation after start");
+    sd_allowed=1;scan_fail=1;ui_rescan_library();assert(scans==1 && strstr(toast,"Couldn't start"));
+    scan_fail=0;ui_rescan_library();assert(scans==2 && !strcmp(toast,"Scanning library..."));
+    puts("PASS honest scan admission, busy/error feedback and the started toast");
     puts("HARNESS COMPLETE");
 }
 '''

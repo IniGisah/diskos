@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: OFL-1.1 */
+/* Glyph data converted from Font Awesome Free (SIL OFL 1.1); licence text: licenses/OFL-1.1-FontAwesome.txt */
 /*******************************************************************************
  * Size: 28 px
  * Bpp: 4

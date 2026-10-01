@@ -1,9 +1,14 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
+#include "fwcaps.h"
 #include "screens.h"
+#include "theme.h"
+#include "theme_kit.h"
 #include "config.h"       /* cfg_get_int/cfg_set_int: persist the BT on/off intent */
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
+#include <time.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
@@ -130,6 +135,9 @@ static int run_cap_bounded(const char *cmd, char *out, int cap, int timeout_ms){
     g_bt_stuck[slot] = pid;                    /* stuck in the kernel: retry later, never block on it */
     return n;
 }
+/* Shared entry for other modules (wifi.c radio reconciliation): the same bounded capture - the command runs in its
+ * own process group and is killed at timeout_ms, so a wedged tool can never block the UI thread. */
+int ui_run_cap_bounded(const char *cmd, char *out, int cap, int timeout_ms){ return run_cap_bounded(cmd, out, cap, timeout_ms); }
 
 /* a single status message (Scanning / off / empty) - centered in the list area */
 static void list_msg(const char *m){
@@ -139,8 +147,8 @@ static void list_msg(const char *m){
     lv_obj_set_flex_align(g_list, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_t *e = lv_label_create(g_list);
     lv_label_set_text(e, m);
-    lv_obj_set_style_text_color(e, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(e, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(e, TC(TEXT_MUTED), 0);
+    lv_obj_set_style_text_font(e, TF(UI_14), 0);
 }
 /* "Scanning" + a spinning refresh glyph, centered in the list area */
 static void list_msg_scanning(void){
@@ -157,14 +165,14 @@ static void list_msg_scanning(void){
     lv_obj_set_style_pad_column(row, 8, 0);
     lv_obj_t *t = lv_label_create(row);
     lv_label_set_text(t, "Scanning");
-    lv_obj_set_style_text_color(t, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(t, TC(TEXT_MUTED), 0);
+    lv_obj_set_style_text_font(t, TF(UI_14), 0);
     lv_obj_t *ic = lv_label_create(row);
     lv_label_set_text(ic, LV_SYMBOL_REFRESH);
     lv_obj_set_size(ic, 24, 24);
     lv_obj_set_style_text_align(ic, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(ic, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(ic, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(ic, TC(TEXT_MUTED), 0);
+    lv_obj_set_style_text_font(ic, TF(UI_14), 0);
     g_scan_icon = ic;
     lv_obj_set_style_transform_pivot_x(ic, lv_pct(50), 0);
     lv_obj_set_style_transform_pivot_y(ic, lv_pct(50), 0);
@@ -218,6 +226,180 @@ static void bt_ensure_services(void){
     system("pidof bluealsa >/dev/null 2>&1 || bluealsa -S --device=hci0 --profile=a2dp-source "
            "--sbc-quality=medium --ldac-abr --ldac-quality=standard "
            "--codec=sbc --initial-volume=48 >/tmp/bluealsa.log 2>&1 &");
+}
+/* ---- A2DP codec choice (parity C17/C18) ----------------------------------------------------------------
+ * Stock V2.57 picks the codec with the player command 06b3 (VALUE1: 0 SBC, 1 AAC, 2/3/4 LDAC mobile/standard/high;
+ * mq_player handler 0x4f0980 maps it to the worker 0x4112b4, which reads /usr/data/bt_codec, then calls BlueALSA
+ * SelectCodec over D-Bus; LDAC quality goes through /usr/data/bt_pipe_recv). BlueALSA itself is left as stock
+ * launches it - on the device its status advertises SBC AAC LDAC endpoints whatever --codec says - so a choice needs
+ * no daemon restart, and this only ever sends the frame diskOS already sent, with another VALUE1. The choice is
+ * read on the next route to a Bluetooth device (connect/reconnect), once BlueALSA has that device's PCM. DEVICE-UNVERIFIED with headphones. */
+const char *const BT_CODEC_LABEL[BT_CODEC_N] = { "SBC", "AAC", "LDAC Mobile", "LDAC Standard", "LDAC High" };
+static int bt_mac_valid(const char *mac);
+static int bt_codec_frame_value(const char *mac, int v, char *out, int cap);
+#define BTC_AAC  2u
+#define BTC_LDAC 4u
+static unsigned bt_codec_need(int v){ return v == 1 ? BTC_AAC : (v >= 2 && v <= 4) ? BTC_LDAC : 0u; }
+/* The stock VALUE1 to send: the saved choice, or SBC when the sink is known not to offer that codec. */
+int bt_codec_pick(int choice, unsigned avail, int avail_known){
+    if(choice < 0 || choice >= BT_CODEC_N) return 0;
+    unsigned need = bt_codec_need(choice);
+    if(need && !(avail_known && (avail & need))) return 0;   /* offered, or unknown: SBC */
+    return choice;
+}
+/* Codecs a sink offers, from `bluealsa-cli info <pcm>`: the words on the "Available codecs:" line and on the lines
+ * after it that carry no ':'. *known = 0 when that header is missing (unparseable/failed query). */
+unsigned bt_codec_parse_avail(const char *info, int *known){
+    unsigned m = 0;
+    if(known) *known = 0;
+    const char *h = info ? strstr(info, "Available codecs:") : NULL;
+    if(!h) return 0;
+    if(known) *known = 1;
+    const char *p = h + 17;
+    for(int first = 1; *p;){
+        const char *e = strchr(p, '\n'); size_t n = e ? (size_t)(e - p) : strlen(p);
+        if(!first && memchr(p, ':', n)) break;
+        first = 0;
+        for(size_t i = 0; i < n;){
+            size_t j = i;
+            while(j < n && ((p[j]>='A'&&p[j]<='Z')||(p[j]>='a'&&p[j]<='z')||(p[j]>='0'&&p[j]<='9'))) j++;
+            if(j - i == 3 && !strncasecmp(p + i, "AAC", 3)) m |= BTC_AAC;
+            else if(j - i == 4 && !strncasecmp(p + i, "LDAC", 4)) m |= BTC_LDAC;
+            i = j > i ? j : i + 1;
+        }
+        if(!e) break;
+        p = e + 1;
+    }
+    return m;
+}
+/* Shell command that prints "PCM=<path>" then the A2DP source PCM's info for a device (MAC already validated);
+ * it prints nothing while BlueALSA has no such PCM. */
+static int bt_codec_query_cmd(const char *mac, char *out, int cap){
+    if(!bt_mac_valid(mac)) return -1;
+    char d[24]; int n = 0;
+    for(int i = 0; i < 17; i++) d[n++] = mac[i] == ':' ? '_' : mac[i];
+    d[n] = 0;
+    int r = snprintf(out, cap, "p=$(bluealsa-cli list-pcms 2>/dev/null | grep -i 'dev_%s/a2dpsrc' | head -n 1); "
+                               "[ -n \"$p\" ] && { echo \"PCM=$p\"; bluealsa-cli info \"$p\" 2>/dev/null; }", d);
+    return (r > 0 && r < cap) ? 0 : -1;
+}
+/* Thread-safe bounded capture for the probe worker (the shared run_cap_bounded is main-thread only). */
+static int bt_probe_run(const char *cmd, char *out, int cap, int timeout_ms){
+    out[0] = 0;
+    int fds[2];
+    if(pipe(fds) != 0) return 0;
+    pid_t pid = fork();
+    if(pid < 0){ close(fds[0]); close(fds[1]); return 0; }
+    if(pid == 0){
+        close(fds[0]); dup2(fds[1], 1); close(fds[1]); setpgid(0, 0);
+        execl("/bin/sh", "sh", "-c", cmd, (char*)NULL); _exit(127);
+    }
+    setpgid(pid, pid);
+    close(fds[1]);
+    int n = 0, left = timeout_ms;
+    while(left > 0 && n < cap - 1){
+        struct pollfd pf = { fds[0], POLLIN, 0 };
+        struct timespec t0, t1; clock_gettime(CLOCK_MONOTONIC, &t0);
+        if(poll(&pf, 1, left) <= 0) break;
+        int r = read(fds[0], out + n, cap - 1 - n);
+        if(r <= 0) break;
+        n += r;
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        left -= (int)((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000);
+    }
+    out[n] = 0;
+    close(fds[0]);
+    kill(-pid, SIGKILL); kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);                        /* worker thread: blocking here never touches the UI */
+    return n;
+}
+/* Result of the last probe, shared between the worker threads and the UI thread. Every route change (a route
+ * to a device, back to analog, or a lost link) bumps gen; a probe result carries the gen it was started under and is
+ * dropped if it is no longer current, so a stale answer can never trigger a codec switch on a later connection. */
+static struct { char mac[18]; int state; /* 0 idle, 1 running, 2 done */ int pcm, known; unsigned avail;
+                int choice, misses, armed, applied; unsigned gen; } g_cq;
+static pthread_mutex_t g_cq_mu = PTHREAD_MUTEX_INITIALIZER;
+#define BT_PCM_TRIES 15        /* probe ticks (2 s apart, ~30 s) to wait for the PCM before giving up (stays on SBC) */
+struct bt_probe_arg { unsigned gen; char mac[18]; };
+static void *bt_codec_probe_thread(void *arg){
+    struct bt_probe_arg *pa = arg;
+    char cmd[240], info[1536];
+    info[0] = 0;
+    if(bt_codec_query_cmd(pa->mac, cmd, sizeof cmd) == 0) bt_probe_run(cmd, info, sizeof info, 700);
+    int known = 0; unsigned avail = bt_codec_parse_avail(info, &known);
+    pthread_mutex_lock(&g_cq_mu);
+    if(pa->gen == g_cq.gen){                       /* still the route this probe was started for */
+        g_cq.pcm = strstr(info, "PCM=") != NULL; g_cq.known = known; g_cq.avail = avail; g_cq.state = 2;
+    }
+    pthread_mutex_unlock(&g_cq_mu);
+    free(pa);
+    return NULL;
+}
+/* The route frame: 06b3 + length + VALUE1 0 (SBC) + MAC - byte-for-byte what diskOS has always sent, so routing
+ * itself never waits on codec state. Returns 0, or -1 for a bad MAC / short buffer. */
+int ui_bt_codec_frame(const char *mac, char *out, int cap){
+    return bt_codec_frame_value(mac, 0, out, cap);
+}
+static int bt_codec_frame_value(const char *mac, int v, char *out, int cap){
+    if(!bt_mac_valid(mac)) return -1;
+    int r = snprintf(out, cap, "06b3%04X%04X%s", (unsigned)(12 + 17), (unsigned)v, mac);
+    return (r > 0 && r < cap) ? 0 : -1;
+}
+/* AAC/LDAC. The route's 06c1 makes the player (re)start bluetoothd and BlueALSA (mq_player_257.dis: bt_source_control
+ * killall + relaunch), so the device's A2DP PCM appears only AFTER the route, and the player's codec worker drops a
+ * 06b3 sent while it is missing. So the route goes out with SBC as always (audio starts at once) and this then waits,
+ * off the UI thread, for the PCM: when it shows and lists the chosen codec, the choice is sent as a second 06b3.
+ * One step per call (UI timer tick); returns 1 when finished (sent, unavailable, gave up, or the route changed). */
+int bt_codec_upgrade_step(void){
+    char mac[18], f[48]; int send = -1, done = 0; struct bt_probe_arg *spawn = NULL;
+    pthread_mutex_lock(&g_cq_mu);
+    snprintf(mac, sizeof mac, "%s", g_cq.mac);
+    if(!g_cq.armed || strcmp(ui_route_mac(), mac)) done = 1;                 /* cancelled or routed away: forget it */
+    else if(g_cq.state == 2){
+        if(g_cq.pcm){
+            int v = bt_codec_pick(g_cq.choice, g_cq.avail, g_cq.known);      /* unknown/unlisted -> SBC = nothing to do */
+            if(v != 0) send = v;
+            done = 1; g_cq.applied = 1;
+        } else if(++g_cq.misses >= BT_PCM_TRIES){ done = 1; g_cq.applied = 1; }
+        g_cq.state = 0;
+    }
+    if(!done && g_cq.state == 0 && (spawn = malloc(sizeof *spawn)) != NULL){
+        spawn->gen = g_cq.gen; snprintf(spawn->mac, sizeof spawn->mac, "%s", mac); g_cq.state = 1;
+    }
+    if(done) g_cq.armed = 0;
+    pthread_mutex_unlock(&g_cq_mu);
+    if(send > 0 && bt_codec_frame_value(mac, send, f, sizeof f) == 0) ipc_send_cmd(f);
+    if(spawn){ pthread_t t;
+               if(pthread_create(&t, NULL, bt_codec_probe_thread, spawn) == 0) pthread_detach(t);
+               else { pthread_mutex_lock(&g_cq_mu); if(spawn->gen == g_cq.gen) g_cq.state = 0; pthread_mutex_unlock(&g_cq_mu); free(spawn); } }
+    return done;
+}
+static lv_timer_t *g_cq_timer;
+static void bt_codec_upgrade_cb(lv_timer_t *t){
+    if(bt_codec_upgrade_step()){ lv_timer_del(t); g_cq_timer = NULL; }
+}
+/* Any route change invalidates a pending upgrade and every probe still running for it. */
+void ui_bt_codec_upgrade_cancel(void){
+    pthread_mutex_lock(&g_cq_mu);
+    g_cq.gen++; g_cq.armed = 0; g_cq.applied = 0; g_cq.state = 0;
+    pthread_mutex_unlock(&g_cq_mu);
+}
+/* Called after a route to `mac`. fresh = a full route sequence just re-sent the SBC frame: it cancels whatever was
+ * pending and, if AAC/LDAC is chosen, arms a new upgrade. fresh = 0 (already routed there, e.g. a tap) keeps a
+ * pending or finished upgrade as it is. SBC (the default) leaves nothing armed: no timer, probe or extra frame. */
+void ui_bt_codec_upgrade_arm(const char *mac, int fresh){
+    if(!bt_mac_valid(mac)) return;
+    int choice = cfg_get_int("bt_codec", 0);
+    if(choice < 0 || choice >= BT_CODEC_N) choice = 0;
+    if(fw_os_ver() != 257) choice = 0;   /* the 06b3 codec mapping is only decoded for V2.57: elsewhere stay on SBC */
+    pthread_mutex_lock(&g_cq_mu);
+    int same = !strcmp(g_cq.mac, mac) && (g_cq.armed || g_cq.applied);
+    if(!fresh && (same || choice == 0)){ pthread_mutex_unlock(&g_cq_mu); return; }
+    g_cq.gen++; g_cq.armed = 0; g_cq.applied = 0; g_cq.state = 0; g_cq.misses = 0;
+    snprintf(g_cq.mac, sizeof g_cq.mac, "%s", mac);
+    if(choice > 0){ g_cq.choice = choice; g_cq.armed = 1; }
+    pthread_mutex_unlock(&g_cq_mu);
+    if(choice > 0 && !g_cq_timer) g_cq_timer = lv_timer_create(bt_codec_upgrade_cb, 2000, NULL);
 }
 /* Full stock bring-up: download the chip firmware patch over /dev/ttyS0 (creates a
  * working hci0 - the step our old bluez-only path lacked), then bluetoothd + agent. */
@@ -318,7 +500,7 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
             }
         }
     }
-    if(!found){ g_bt_autorouted[0] = 0; return; }
+    if(!found){ g_bt_autorouted[0] = 0; ui_bt_codec_upgrade_cancel(); return; }
     if(strcmp(mac, g_bt_autorouted)){
         if(ui_route_bt(mac) == 0)     /* latch only on a successful route, else retry on the next poll */
             snprintf(g_bt_autorouted, sizeof g_bt_autorouted, "%s", mac);
@@ -435,21 +617,21 @@ static void info_row(const char *key, const char *val){
     lv_obj_remove_style_all(r);
     lv_obj_set_size(r, 250, 40);
     lv_obj_set_style_radius(r, 8, 0);
-    lv_obj_set_style_bg_color(r, lv_color_hex(0x1C1C1E), 0);
+    lv_obj_set_style_bg_color(r, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(r, LV_OPA_50, 0);
     lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t *k = lv_label_create(r);
     lv_label_set_text(k, key);
     lv_obj_set_pos(k, 12, 11);
-    lv_obj_set_style_text_font(k, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(k, lv_color_hex(0x8E8E93), 0);
+    lv_obj_set_style_text_font(k, TF(UI_14), 0);
+    lv_obj_set_style_text_color(k, TC(TEXT_MUTED), 0);
     lv_obj_t *v = lv_label_create(r);
     lv_label_set_text(v, val && val[0] ? val : "-");
     lv_label_set_long_mode(v, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(v, 96, 11); lv_obj_set_size(v, 142, 18);
     lv_obj_set_style_text_align(v, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_style_text_font(v, ui_font_cjk(14), 0);   /* "Name" value = device name: Cyrillic/CJK-capable (issue #3) */
-    lv_obj_set_style_text_color(v, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(v, TF(USER_14), 0);   /* "Name" value = device name: Cyrillic/CJK-capable (issue #3) */
+    lv_obj_set_style_text_color(v, TC(TEXT_PRIMARY), 0);
 }
 /* Forget (unpair + untrust) the selected device, then return to the list + rescan (C13). */
 static void info_forget_cb(lv_event_t *e){
@@ -470,15 +652,15 @@ static void info_action_row(const char *label, lv_event_cb_t cb){
     lv_obj_remove_style_all(r);
     lv_obj_set_size(r, 250, 44);
     lv_obj_set_style_radius(r, 8, 0);
-    lv_obj_set_style_bg_color(r, lv_color_hex(0x2A1416), 0);
+    lv_obj_set_style_bg_color(r, TC(DANGER_SURFACE), 0);
     lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(r, lv_color_hex(0x3A1C1E), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(r, TC(DANGER_SURFACE_PRESSED), LV_STATE_PRESSED);
     lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(r, cb, LV_EVENT_CLICKED, NULL);
+    ui_on(r, cb, LV_EVENT_CLICKED, NULL, "bt.cb", UI_CORE);
     lv_obj_t *t = lv_label_create(r);
     lv_label_set_text(t, label); lv_obj_center(t);
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(t, lv_color_hex(0xFF453A), 0);
+    lv_obj_set_style_text_font(t, TF(UI_14), 0);
+    lv_obj_set_style_text_color(t, TC(STATUS_DANGER), 0);
 }
 static void info_disc_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
@@ -493,7 +675,7 @@ static void info_disc_cb(lv_event_t *e){
 static void info_back_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) screen_back(); }
 
 void bt_info_create(lv_obj_t *root){
-    lv_obj_set_style_bg_color(root, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
     ui_header_cb(root, "Device", info_back_cb);   /* shared header */
     g_info_list = lv_obj_create(root);
@@ -511,14 +693,14 @@ void bt_info_create(lv_obj_t *root){
     lv_obj_remove_style_all(db);
     lv_obj_set_pos(db, 110, 286); lv_obj_set_size(db, 140, 38);
     lv_obj_set_style_radius(db, 12, 0);
-    lv_obj_set_style_bg_color(db, lv_color_hex(0x3A1417), 0);
+    lv_obj_set_style_bg_color(db, TC(DANGER_PANEL_SURFACE), 0);
     lv_obj_set_style_bg_opa(db, LV_OPA_COVER, 0);
-    lv_obj_add_event_cb(db, info_disc_cb, LV_EVENT_CLICKED, NULL);
+    ui_on(db, info_disc_cb, LV_EVENT_CLICKED, NULL, "bt.info_disc", UI_CORE);
     lv_obj_t *dl = lv_label_create(db);
     lv_label_set_text(dl, "Disconnect");
     lv_obj_center(dl);
-    lv_obj_set_style_text_font(dl, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(dl, lv_color_hex(0xFF6961), 0);
+    lv_obj_set_style_text_font(dl, TF(UI_16), 0);
+    lv_obj_set_style_text_color(dl, TC(STATUS_DANGER_STRONG), 0);
 }
 
 void bt_info_open(void){
@@ -564,15 +746,15 @@ static void dev_cb(lv_event_t *e){
 static void add_dev_row(const char *mac, const char *name, int connected){
     lv_obj_t *r = lv_button_create(g_list);
     lv_obj_remove_style_all(r);
-    lv_obj_set_size(r, 280, 46);
+    lv_obj_set_size(r, 268, 46);
     lv_obj_set_style_radius(r, 8, 0);
-    lv_obj_set_style_bg_color(r, lv_color_hex(connected ? 0x0A2A4A : 0x1C1C1E), 0);
+    lv_obj_set_style_bg_color(r, (connected ? TC(CONNECTED_SURFACE) : TC(SURFACE)), 0);
     lv_obj_set_style_bg_opa(r, connected ? LV_OPA_COVER : LV_OPA_50, 0);
-    lv_obj_set_style_bg_color(r, lv_color_hex(0x2C2C2E), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(r, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
     lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
     char *dup = strdup(mac);
     lv_obj_set_user_data(r, dup);
-    lv_obj_add_event_cb(r, dev_cb, LV_EVENT_CLICKED, (void*)(intptr_t)connected);
+    ui_on(r, dev_cb, LV_EVENT_CLICKED, (void*)(intptr_t)connected, "bt.dev", UI_CORE);
     lv_obj_add_event_cb(r, row_free_cb, LV_EVENT_DELETE, NULL);
 
     int tx = 12;
@@ -580,22 +762,22 @@ static void add_dev_row(const char *mac, const char *name, int connected){
         lv_obj_t *ck = lv_label_create(r);
         lv_label_set_text(ck, LV_SYMBOL_OK);
         lv_obj_set_pos(ck, 12, 15);
-        lv_obj_set_style_text_font(ck, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(ck, lv_color_hex(0x0A84FF), 0);
+        lv_obj_set_style_text_font(ck, TF(UI_14), 0);
+        lv_obj_set_style_text_color(ck, TC(STATUS_INFO), 0);
         tx = 34;
     }
     lv_obj_t *t = lv_label_create(r);
     lv_label_set_text(t, name);
     lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(t, tx, 13); lv_obj_set_size(t, 232 - tx, 20);
-    lv_obj_set_style_text_font(t, ui_font_cjk(16), 0);   /* BT device names are user data: Cyrillic/CJK-capable (issue #3) */
-    lv_obj_set_style_text_color(t, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_pos(t, tx, 13); lv_obj_set_size(t, 220 - tx, 20);
+    lv_obj_set_style_text_font(t, TF(USER_16), 0);   /* BT device names are user data: Cyrillic/CJK-capable (issue #3) */
+    lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
 
     lv_obj_t *ic = lv_label_create(r);
     lv_label_set_text(ic, LV_SYMBOL_BLUETOOTH);
-    lv_obj_set_pos(ic, 252, 14);
-    lv_obj_set_style_text_font(ic, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(ic, lv_color_hex(connected ? 0x0A84FF : 0x8E8E93), 0);
+    lv_obj_set_pos(ic, 240, 14);
+    lv_obj_set_style_text_font(ic, TF(UI_14), 0);
+    lv_obj_set_style_text_color(ic, (connected ? TC(STATUS_INFO) : TC(TEXT_MUTED)), 0);
 }
 
 /* Show only real AUDIO devices (bluez Icon = audio-card / audio-headset / ...),
@@ -827,8 +1009,8 @@ int bt_toggle(void){
 }
 
 /* ---- Bluetooth persistence: restore the radio at boot if it was on (mirrors WiFi) -------
- * diskOS owns a "bt_on" intent (cfg), seeded once from stock SYSCONFIG.BT_STATUS; the toggle
- * above persists every change. bt_boot_restore() (called at startup) brings the stack up if
+ * diskOS owns a "bt_on" intent (cfg), which starts OFF on a fresh install (bt_init_intent below - it is NOT
+ * seeded from stock SYSCONFIG.BT_STATUS); the toggle above persists every change. bt_boot_restore() (called at startup) brings the stack up if
  * the intent is on - bluez then auto-reconnects trusted speakers and bt_autoroute picks them
  * up, so BT audio survives reboots with no BT-screen visit. Uses its OWN poll timer (not
  * g_radio_timer) and never scans (no BT screen at boot). */
@@ -867,7 +1049,7 @@ static void rescan_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED)
 static void back_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) screen_back(); }
 
 void bt_create(lv_obj_t *root){
-    lv_obj_set_style_bg_color(root, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
     ui_header_cb(root, "Bluetooth", back_cb);   /* shared header */
 
@@ -877,49 +1059,49 @@ void bt_create(lv_obj_t *root){
     lv_obj_remove_style_all(trow);
     lv_obj_set_pos(trow, 50, 64); lv_obj_set_size(trow, 208, 48);
     lv_obj_set_style_radius(trow, 12, 0);
-    lv_obj_set_style_bg_color(trow, lv_color_hex(0x1C1C1E), 0);
+    lv_obj_set_style_bg_color(trow, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(trow, LV_OPA_70, 0);
     lv_obj_clear_flag(trow, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *tl = lv_label_create(trow);
     lv_label_set_text(tl, "Bluetooth");
     lv_obj_set_pos(tl, 16, 14);
-    lv_obj_set_style_text_font(tl, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(tl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(tl, TF(UI_16), 0);
+    lv_obj_set_style_text_color(tl, TC(TEXT_PRIMARY), 0);
 
     g_sw = lv_switch_create(trow);
     lv_obj_set_size(g_sw, 46, 24);
     lv_obj_set_ext_click_area(g_sw, 10);
     lv_obj_align(g_sw, LV_ALIGN_RIGHT_MID, -14, 0);
-    lv_obj_add_event_cb(g_sw, sw_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    ui_on(g_sw, sw_cb, LV_EVENT_VALUE_CHANGED, NULL, "bt.sw.value", UI_CORE);
 
     lv_obj_t *rb = lv_button_create(root);
     lv_obj_remove_style_all(rb);
     lv_obj_set_pos(rb, 266, 72); lv_obj_set_size(rb, 36, 32);
     lv_obj_set_ext_click_area(rb, 8);
     lv_obj_set_style_radius(rb, 10, 0);
-    lv_obj_set_style_bg_color(rb, lv_color_hex(0x1C1C1E), 0);
+    lv_obj_set_style_bg_color(rb, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(rb, LV_OPA_70, 0);
-    lv_obj_set_style_bg_color(rb, lv_color_hex(0x2C2C2E), LV_STATE_PRESSED);
-    lv_obj_add_event_cb(rb, rescan_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_style_bg_color(rb, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
+    ui_on(rb, rescan_cb, LV_EVENT_CLICKED, NULL, "bt.rescan", UI_CORE);
     lv_obj_t *rl = lv_label_create(rb);
     lv_label_set_text(rl, LV_SYMBOL_REFRESH);
-    lv_obj_set_style_text_font(rl, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(rl, lv_color_hex(0xC7C7CC), 0);
+    lv_obj_set_style_text_font(rl, TF(UI_16), 0);
+    lv_obj_set_style_text_color(rl, TC(TEXT_SECONDARY), 0);
     lv_obj_center(rl);
 
     /* Honesty: audio routing to a BT speaker works now (auto-routes on connect), but SBC
      * sw-encode on this MIPS CPU can be rough (occasional artifacts) - label it beta. */
     lv_obj_t *note = lv_label_create(root);
     lv_label_set_text(note, "Connect a speaker to play audio (beta)");
-    lv_obj_set_pos(note, 30, 113); lv_obj_set_width(note, 300);
+    lv_obj_set_pos(note, 30, 120); lv_obj_set_width(note, 300);   /* clear of the card (and a theme's edge under it) */
     lv_obj_set_style_text_align(note, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(note, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(note, lv_color_hex(0x6E6E73), 0);
+    lv_obj_set_style_text_font(note, TF(UI_12), 0);
+    lv_obj_set_style_text_color(note, TC(TEXT_FOOTNOTE), 0);
 
     g_list = lv_obj_create(root);
     lv_obj_remove_style_all(g_list);
-    lv_obj_set_pos(g_list, 40, 134); lv_obj_set_size(g_list, 280, 184);
+    lv_obj_set_pos(g_list, 40, 138); lv_obj_set_size(g_list, 280, 180);
     lv_obj_set_style_pad_bottom(g_list, 44, 0);   /* last row scrolls clear of the round bottom bezel */
     lv_obj_set_style_bg_opa(g_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_pad_row(g_list, 6, 0);

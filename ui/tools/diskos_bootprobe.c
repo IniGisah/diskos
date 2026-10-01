@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (C) 2026 diskOS contributors */
 /* diskos-bootprobe: the bounded, supervised hardware/NAND probe for the boot selector (S96diskos_select).
  *
  * Usage: diskos-bootprobe PREF DATA_MNT DEADLINE_MS [MEMDEV]

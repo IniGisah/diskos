@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """tools/diskos_bootprobe.c: the native supervisor S96 relies on for bounding and process identity.
 
 Every supervision property is checked twice: on the real source, and on a copy with exactly that protection

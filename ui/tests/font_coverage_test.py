@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Check the real fallback chain and rasterize reported glyphs with LVGL on the host."""
 from pathlib import Path
 import os, subprocess, tempfile
@@ -20,6 +22,13 @@ uint32_t lv_draw_buf_width_to_stride(uint32_t w, lv_color_format_t cf){
     assert(cf == LV_COLOR_FORMAT_A8);
     return (w + LV_DRAW_BUF_STRIDE_ALIGN - 1) & ~(LV_DRAW_BUF_STRIDE_ALIGN - 1);
 }
+/* ui.c takes its base Montserrat fonts from theme roles (TF(UI_n)); the real theme.c maps UI_n to Montserrat n. */
+#define TF(role) (&lv_font_montserrat_##role##_font)
+#define lv_font_montserrat_UI_14_font lv_font_montserrat_14
+#define lv_font_montserrat_UI_16_font lv_font_montserrat_16
+#define lv_font_montserrat_UI_18_font lv_font_montserrat_18
+#define lv_font_montserrat_UI_20_font lv_font_montserrat_20
+#define theme_font_base(px) (&lv_font_montserrat_##px)   /* the chain base: always Montserrat n */
 '''
 test=r'''
 int main(void){

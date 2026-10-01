@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
+#include "theme.h"
+#include "theme_kit.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -123,18 +125,18 @@ static void skb_add(skb_t *c, skb_kind_t kind, uint8_t row, uint8_t col,
     lv_obj_set_size(k->btn,w,SKB_ROW_H);
     lv_obj_set_ext_click_area(k->btn,1);   /* easier taps; 1px keeps zero overlap inside the 3-4px row gaps */
     lv_obj_remove_flag(k->btn,LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(k->btn,skb_key_cb,LV_EVENT_CLICKED,k);
-    if(kind==SKB_BKSP) lv_obj_add_event_cb(k->btn,skb_key_cb,LV_EVENT_LONG_PRESSED,k);   /* hold to clear all */
+    ui_on(k->btn, skb_key_cb, LV_EVENT_CLICKED, k, "kbinput.skb_key", UI_CORE);
+    if(kind==SKB_BKSP) ui_on(k->btn, skb_key_cb, LV_EVENT_LONG_PRESSED, k, "kbinput.skb_key.long", UI_CORE);   /* hold to clear all */
     lv_obj_set_style_radius(k->btn,7,0);
     lv_obj_set_style_border_width(k->btn,1,0);
-    lv_obj_set_style_border_color(k->btn,lv_color_hex(0x3A3A3C),0);
-    lv_obj_set_style_bg_color(k->btn,lv_color_hex(0x202022),0);
-    lv_obj_set_style_bg_color(k->btn,lv_color_hex(0x3A3A3C),LV_STATE_PRESSED);
-    lv_obj_set_style_bg_color(k->btn,lv_color_hex(0x425a78),LV_STATE_CHECKED);
+    lv_obj_set_style_border_color(k->btn,TC(BORDER_STRONG),0);
+    lv_obj_set_style_bg_color(k->btn,TC(KEY_SURFACE),0);
+    lv_obj_set_style_bg_color(k->btn,TC(KEY_PRESSED),LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(k->btn,TC(KEY_SELECTED),LV_STATE_CHECKED);
     lv_obj_set_style_pad_all(k->btn,0,0);
     k->label=lv_label_create(k->btn);
-    lv_obj_set_style_text_font(k->label,&lv_font_montserrat_16,0);
-    lv_obj_set_style_text_color(k->label,lv_color_hex(0xF0F0F0),0);
+    lv_obj_set_style_text_font(k->label,TF(UI_16),0);
+    lv_obj_set_style_text_color(k->label,TC(KEY_TEXT),0);
 }
 static lv_obj_t *skb_create(lv_obj_t *parent, lv_obj_t *ta, void (*submit)(void)){
     skb_t *c=lv_malloc(sizeof *c);
@@ -172,6 +174,7 @@ static lv_obj_t *skb_create(lv_obj_t *parent, lv_obj_t *ta, void (*submit)(void)
 /* ---- modal wrapper ------------------------------------------------------- */
 static lv_obj_t *g_modal, *g_ta;
 static kbinput_done_cb_t g_done;
+static int g_keep_spaces;   /* password entry: trailing spaces are part of the secret, never stripped */
 
 int kbinput_active(void){ return g_modal != NULL; }
 
@@ -184,7 +187,7 @@ static void do_save(void){
     static char buf[160];
     snprintf(buf, sizeof buf, "%s", g_ta ? lv_textarea_get_text(g_ta) : "");
     int n = (int)strlen(buf);
-    while(n > 0 && buf[n-1]==' ') buf[--n] = 0;
+    while(!g_keep_spaces && n > 0 && buf[n-1]==' ') buf[--n] = 0;
     finish(buf[0] ? buf : NULL);
 }
 static void save_btn(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) do_save(); }
@@ -197,10 +200,10 @@ static void pill(lv_obj_t *parent, int x, int y, const char *sym, lv_color_t col
     lv_obj_align(b, LV_ALIGN_TOP_MID, x, y);
     lv_obj_set_ext_click_area(b, 8);   /* Save/Cancel sit in open space - generous hit area */
     lv_obj_set_style_radius(b, 18, 0);
-    lv_obj_set_style_bg_color(b, lv_color_hex(0x2C2C2E), 0);
+    lv_obj_set_style_bg_color(b, TC(SURFACE_RAISED), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(b, lv_color_hex(0x3A3A3C), LV_STATE_PRESSED);
-    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_style_bg_color(b, TC(RAISED_PRESSED), LV_STATE_PRESSED);
+    ui_on(b, cb, LV_EVENT_CLICKED, NULL, "kbinput.cb", UI_CORE);
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, sym);
     lv_obj_set_style_text_color(l, col, 0);
@@ -221,8 +224,7 @@ void kbinput_open(const char *title, const char *initial, kbinput_done_cb_t cb){
     lv_obj_remove_style_all(g_modal);
     lv_obj_set_size(g_modal, 360, 360);
     lv_obj_center(g_modal);
-    lv_obj_set_style_bg_color(g_modal, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(g_modal, LV_OPA_COVER, 0);
+    theme_screen_bg(g_modal);                     /* a full screen: canvas plus the theme's texture, like any other */
     lv_obj_clear_flag(g_modal, LV_OBJ_FLAG_SCROLLABLE);
 
     g_ta = lv_textarea_create(g_modal);
@@ -231,15 +233,16 @@ void kbinput_open(const char *title, const char *initial, kbinput_done_cb_t cb){
     lv_obj_set_scrollbar_mode(g_ta, LV_SCROLLBAR_MODE_OFF);
     if(title && title[0]) lv_textarea_set_placeholder_text(g_ta, title);
     if(initial && initial[0]) lv_textarea_set_text(g_ta, initial);
+    g_keep_spaces = g_mask_next;
     if(g_mask_next){ lv_textarea_set_password_mode(g_ta, true); g_mask_next = 0; }  /* masked secret entry */
     lv_obj_set_size(g_ta, 240, 40);
     lv_obj_align(g_ta, LV_ALIGN_TOP_MID, 0, 52);
-    lv_obj_set_style_bg_color(g_ta, lv_color_hex(0x1C1C1E), 0);
-    lv_obj_set_style_text_color(g_ta, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_color(g_ta, TC(SURFACE), 0);
+    lv_obj_set_style_text_color(g_ta, TC(TEXT_PRIMARY), 0);
     /* typed text and the placeholder ("Password for <SSID>", a playlist name on Rename) are user
      * data: route both parts through the chain so Cyrillic/CJK don't tofu (issue #3). */
-    lv_obj_set_style_text_font(g_ta, ui_font_cjk(16), 0);
-    lv_obj_set_style_text_font(g_ta, ui_font_cjk(16), LV_PART_TEXTAREA_PLACEHOLDER);
+    lv_obj_set_style_text_font(g_ta, TF(USER_16), 0);
+    lv_obj_set_style_text_font(g_ta, TF(USER_16), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_set_style_border_width(g_ta, 0, 0);
     /* Pin the internal label to a FIXED one-line height so the textarea's vertical centering can't drift
      * as the measured text extent (ascenders/descenders/cursor) changes per keystroke -> no vertical bounce. */
@@ -248,8 +251,8 @@ void kbinput_open(const char *title, const char *initial, kbinput_done_cb_t cb){
       if(ta_lbl){ lv_obj_set_style_min_height(ta_lbl, 24, 0); lv_obj_set_style_max_height(ta_lbl, 24, 0); } }
 
     /* Cancel / Save in the wide mid-band, above the keyboard */
-    pill(g_modal, -66, 108, LV_SYMBOL_CLOSE, lv_color_hex(0xC7C7CC), cancel_btn);
-    pill(g_modal,  66, 108, LV_SYMBOL_OK,    lv_color_hex(0x34C759), save_btn);
+    pill(g_modal, -66, 108, LV_SYMBOL_CLOSE, TC(TEXT_SECONDARY), cancel_btn);
+    pill(g_modal,  66, 108, LV_SYMBOL_OK,    theme_def() ? TC(ACCENT_PRIMARY) : TC(STATUS_SUCCESS), save_btn);   /* confirm: go colour */
 
     skb_create(g_modal, g_ta, do_save);   /* the keyboard's OK key also saves */
 }

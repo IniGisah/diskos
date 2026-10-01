@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "anim.h"
+#include "theme.h"
 
 /* ---- concurrency cap (use LVGL's running count so delete can't leak it) -- */
 #define ANIM_MAX_ACTIVE 4
@@ -71,8 +72,9 @@ void anim_press(lv_obj_t *o){
 void anim_panel_shadow(lv_obj_t *root){
     lv_obj_set_style_border_side(root, LV_BORDER_SIDE_LEFT, 0);
     lv_obj_set_style_border_width(root, 1, 0);
-    lv_obj_set_style_border_color(root, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_border_color(root, TC(OUTLINE_BRIGHT), 0);
     lv_obj_set_style_border_opa(root, 26, 0);   /* ~10% */
+    lv_obj_set_style_pad_left(root, -1, 0);     /* the hairline must not indent the screen: content stays truly centred */
 }
 
 /* Like start(), but with a cubic EASE-OUT path (cubic-bezier 0.33,1,0.68,1) - the "confident arrival"

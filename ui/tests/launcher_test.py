@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 """Compile the real launch gate and verify EVERY failure still reaches the stock player exec.
 
 Owner constraint: diskOS may disable its own features, never the user's player or their route

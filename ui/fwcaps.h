@@ -28,4 +28,19 @@ int fw_needs_direct_sd_mount(void);
  * is a NULL no-op). Verified by RE of both mq_player dispatch tables. Returns a 4-hex-char prefix. */
 const char *fw_gain_tag(void);
 
+/* True where the Custom EQ editor may write + select its USER PEQ slots (see fwcaps.c); false = view-only. */
+int fw_custom_peq_writable(void);
+
+/* True where the stock player turns Wi-Fi off at boot when both radios were saved on (V2.57 only). */
+int fw_has_radio_boot_arbitration(void);
+
+/* True where a favourites (0100 type 6) play takes the MY_LOVE.ID of the first track as its start index and
+ * queues MY_LOVE in title order (V2.57, device-verified 2026-09-27; index 0 or an unknown ID is refused).
+ * False elsewhere: the V2.40 type-6 contract is static RE only, so those builds keep the older path. */
+int fw_fav_play_by_love_id(void);
+/* 1 = this player takes 0648 (Artist / Album Artist grouping); 0 = unknown firmware, never send it */
+int fw_artist_class_settable(void);
+int fw_folder_jump_settable(void);    /* 0687 = folder jump (V2.28/V2.40/V2.57) */
+int fw_track_display_settable(void);  /* 064d = track display (V2.40/V2.57) */
+
 #endif /* FWCAPS_H */

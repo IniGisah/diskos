@@ -18,5 +18,13 @@ int art_make_all_ex_gen(const char *track, const char *cover_bmp,
 unsigned art_cancel_gen(void);
 /* Kill the in-flight cancellable (live) decode, if any. */
 void art_cancel(void);
+int  art_last_exit(void);   /* the helper's exit status from this thread's last run, -1 if interrupted */
 void art_kill_all(void);   /* kill every decoder child, incl. non-cancellable prewarm/fallback */
+/* 1 if path is exactly the n x n 24-bit BMP layout the artwork readers expect (every header field checked). */
+int art_bmp_valid(const char *path, int n);
+/* Mix the track's sidecar cover files (name/size/mtime) into a hash, for cache invalidation. */
+#include <stdint.h>
+void art_sidecar_signature(const char *track, uint64_t *h);
+/* Vinyl saver cover: 360x360 top-down BGRA for the track (embedded, else sidecar). Blocking - worker threads only. */
+int art_make_saver(const char *track, const char *out_raw, int64_t deadline_ms);   /* CLOCK_MONOTONIC ms */
 #endif

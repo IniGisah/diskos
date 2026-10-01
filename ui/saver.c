@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
+#include "theme.h"
+#include "theme_kit.h"
 #include "config.h"
 #include <time.h>
 #include <math.h>
@@ -23,6 +25,8 @@ static lv_font_t s_swfont;   /* montserrat_16 + weather-icon fallback */
 
 static lv_obj_t *g_bg;
 static lv_obj_t *g_clock;
+static void saver_clock_style_cb(lv_event_t *e);   /* refits the time when the theme changes its face */
+static void saver_clock_fit(void);                  /* lays out the time (+ AM/PM beside it, hidden with the clock) */
 static lv_obj_t *g_date;
 static lv_obj_t *g_weather;
 static lv_obj_t *g_track;
@@ -58,7 +62,58 @@ static int g_vbuf_valid = 0;         /* does g_vbuf hold a good decode of the CU
                                         A failed/absent decode must NOT display the previous track's
                                         buffer, so visibility + brightness gate on this, not on g_vbuf. */
 static lv_image_dsc_t g_vdsc;
-static char g_vsig[48] = "";         /* mtime_size of the loaded cover, to skip re-decodes */
+
+/* The spin: diskOS rotates the cover itself into g_vout (a second 360x360 ARGB image the widget shows as-is) instead of
+ * asking LVGL to transform the image every frame. LVGL's generic transform cost ~19 ms/frame with anti-aliasing OFF
+ * (jagged edges) and ~52 ms with it on; this fixed-point bilinear loop over the round screen only measured ~6 ms/frame
+ * on the Disc (scratch/rotbench, 2026-09-27) with smooth edges, so the spin costs a fraction of the CPU (heat/battery)
+ * and looks better. Outside the rotated square stays transparent, as before. */
+static uint8_t *g_vout = NULL;       /* 360x360 BGRA: the rotated cover the widget shows */
+static lv_image_dsc_t g_vodsc;
+static int32_t g_vangle = 0;         /* current angle, 0.1 degree units */
+static inline uint32_t vin_px(const uint32_t *src, int x, int y){
+    return ((unsigned)x < VIN_W && (unsigned)y < VIN_W) ? src[y * VIN_W + x] : 0;   /* outside: transparent */
+}
+static inline uint32_t vin_lerp(uint32_t a, uint32_t b, uint32_t w){   /* per-channel a..b, w in 0..256 */
+    uint32_t rb = (((a & 0x00FF00FFu) * (256 - w) + (b & 0x00FF00FFu) * w) >> 8) & 0x00FF00FFu;
+    uint32_t ag = ((((a >> 8) & 0x00FF00FFu) * (256 - w) + ((b >> 8) & 0x00FF00FFu) * w)) & 0xFF00FF00u;
+    return rb | ag;
+}
+__attribute__((optimize("O2")))
+static void vinyl_rotate(int32_t tenths)
+{
+    if (!g_vout || !g_vbuf) return;
+    const uint32_t *src = (const uint32_t *)g_vbuf;
+    uint32_t *out = (uint32_t *)g_vout;
+    double a = (double)tenths * 3.14159265358979 / 1800.0;
+    int32_t c = (int32_t)lround(cos(a) * 65536.0), sn = (int32_t)lround(sin(a) * 65536.0);
+    const int32_t h = VIN_W / 2;
+    for (int y = 0; y < VIN_W; y++) {
+        int32_t dy = y - h;
+        int32_t hw = (int32_t)sqrt((double)(h * h - dy * dy));   /* only the round screen's span of this row */
+        int x0 = h - hw, x1 = h + hw;
+        if (x0 < 0) x0 = 0;
+        if (x1 > VIN_W) x1 = VIN_W;
+        /* inverse map (destination -> source), stepped along the row; +0.5 px so pixel centres line up */
+        int32_t u = (x0 - h) * c + dy * sn + (h << 16), v = -(x0 - h) * sn + dy * c + (h << 16);
+        uint32_t *o = out + y * VIN_W;
+        for (int x = x0; x < x1; x++, u += c, v -= sn) {
+            int xi = u >> 16, yi = v >> 16;
+            uint32_t fx = (u >> 8) & 0xFF, fy = (v >> 8) & 0xFF;
+            uint32_t p00, p10, p01, p11;
+            if ((unsigned)xi < VIN_W - 1 && (unsigned)yi < VIN_W - 1) {   /* interior: no bounds checks */
+                const uint32_t *q = src + yi * VIN_W + xi;
+                p00 = q[0]; p10 = q[1]; p01 = q[VIN_W]; p11 = q[VIN_W + 1];
+            } else {                                                      /* the square's edge: soft, transparent out */
+                p00 = vin_px(src, xi, yi); p10 = vin_px(src, xi + 1, yi);
+                p01 = vin_px(src, xi, yi + 1); p11 = vin_px(src, xi + 1, yi + 1);
+            }
+            o[x] = vin_lerp(vin_lerp(p00, p10, fx), vin_lerp(p01, p11, fx), fy) | 0xFF000000u;   /* opaque: see below */
+        }
+    }
+    lv_image_cache_drop(&g_vodsc);
+    if (g_vinyl) lv_obj_invalidate(g_vinyl);
+}
 
 static void vinyl_update_vis(void)
 {
@@ -73,46 +128,94 @@ static void vinyl_update_vis(void)
  * screen-off delay, so there's no power regression. */
 int saver_wants_bright(void) { return g_style == 4 && g_have_track && g_vbuf_valid; }
 
-/* Decode cover.jpg -> native 360px ARGB into g_vbuf (once per track). The decode is BOUNDED
- * (ffmpeg to a temp raw file via ui_run_bounded, a killable child with a hard timeout) so a stuck
- * decoder can never freeze the LVGL thread - saver_show_sync runs this during the screen transition.
- * Only runs while the vinyl saver is on-screen (idle), so the hitch is invisible. On any failure the
- * current track's cover is marked invalid + hidden (never fall back to the PREVIOUS track's art). */
-/* Decode scratch lives in /usr/data (root-owned NAND), NOT world-writable /tmp - so a predictable
- * name can't be pre-planted as a symlink for `ffmpeg -y` to follow. Written only while the vinyl
- * saver is on-screen (idle), so the occasional NAND write is negligible. */
-#define VIN_TMP "/usr/data/.diskos_vinyl.bgra"
-static void vinyl_load_sharp_cover(void)
+/* Sharp vinyl cover, decoded OFF the UI thread.
+ *
+ * The UI thread only posts a request (the track's path + a generation number) and returns. A worker thread takes
+ * the shared decode lock and runs diskos-artdec in "saver" mode on the TRACK ITSELF (embedded art, else its sidecar
+ * cover), through art_make_saver: the same SD lease, deadline, revocation and staged-publish rules as all artwork.
+ * It reads the result into a NEW buffer and hands it back. A poll timer on the UI thread installs it only if its
+ * generation is still the current one, so a track change during the decode can never show the previous cover.
+ * A track change hides the old cover at once. If the worker cannot start, the cover simply stays hidden. */
+#include <pthread.h>
+#include <fcntl.h>
+#include "art.h"
+void ui_decode_lock(void); void ui_decode_unlock(void);
+static char g_vpath[1024];               /* UI thread: the track the vinyl cover is for ("" = none) */
+static unsigned g_vgen;                  /* UI thread: bumped on every track change */
+static pthread_mutex_t g_vmu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_vcv = PTHREAD_COND_INITIALIZER;
+static int g_vwork_started, g_vwant;     /* under g_vmu: worker running; a request is pending */
+static char g_vwant_path[1024];          /* under g_vmu */
+static unsigned g_vwant_gen;             /* under g_vmu */
+static int64_t g_vwant_deadline;         /* under g_vmu: CLOCK_MONOTONIC ms, fixed when the request was posted */
+static int g_vfails;                     /* UI thread: failed attempts for the current track (retry limit) */
+#define VIN_RETRIES 3
+static int64_t vin_now_ms(void){ struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
+static uint8_t *g_vres; static unsigned g_vres_gen; static int g_vres_ready;   /* under g_vmu: finished decode */
+static unsigned g_vasked_gen = ~0u;      /* UI thread: generation last requested (no duplicate requests) */
+static lv_timer_t *g_vpoll;
+
+static void *vinyl_worker(void *arg)
 {
-    if (!g_vinyl || !g_have_track) return;   /* no track loaded -> show no cover, not a stale one */
-    struct stat stt;
-    if (stat("/usr/data/fiio/cover.jpg", &stt) != 0) {        /* current track has no cover art */
-        g_vbuf_valid = 0; g_vsig[0] = 0; vinyl_update_vis(); return;
-    }
-    char sig[48];
-    snprintf(sig, sizeof sig, "%ld_%lld", (long)stt.st_mtime, (long long)stt.st_size);
-    if (g_vbuf && g_vbuf_valid && strcmp(sig, g_vsig) == 0) return;  /* already loaded this exact cover */
+    (void)arg;
+    const size_t need = (size_t)VIN_W * VIN_W * 4;
+    for (;;) {
+        pthread_mutex_lock(&g_vmu);
+        while (!g_vwant) pthread_cond_wait(&g_vcv, &g_vmu);
+        char path[1024]; snprintf(path, sizeof path, "%s", g_vwant_path);
+        unsigned gen = g_vwant_gen; int64_t deadline = g_vwant_deadline; g_vwant = 0;
+        pthread_mutex_unlock(&g_vmu);
 
-    if (!g_vbuf) g_vbuf = malloc((size_t)VIN_W * VIN_W * 4);
-    if (!g_vbuf) return;
-    size_t need = (size_t)VIN_W * VIN_W * 4;
-    char *a[] = { "sh", "-c",
-                  "ffmpeg -y -loglevel quiet -i /usr/data/fiio/cover.jpg "
-                  "-vf scale=360:360 -pix_fmt bgra -f rawvideo " VIN_TMP " 2>/dev/null", NULL };
-    ui_decode_lock();                   /* serialize with the NP + prewarm decoders (no two ffmpeg at once) */
-    int rc = ui_run_bounded(a, 5000);   /* hard 5s cap; a hung ffmpeg is SIGKILLed, never blocks us */
-    ui_decode_unlock();
-    size_t got = 0;
-    if (rc == 0) {
-        FILE *f = fopen(VIN_TMP, "rb");
-        if (f) { size_t n; while (got < need && (n = fread(g_vbuf + got, 1, need - got, f)) > 0) got += n; fclose(f); }
+        char out[64]; snprintf(out, sizeof out, "/tmp/.diskos-vinyl-%u.bgra", gen);
+        uint8_t *buf = NULL;
+        ui_decode_lock();                               /* one decoder at a time, shared with NP + prewarm */
+        /* after waiting for the lock: a newer request, or a spent deadline, means this one is not worth decoding */
+        pthread_mutex_lock(&g_vmu);
+        int superseded = g_vwant && g_vwant_gen != gen;
+        pthread_mutex_unlock(&g_vmu);
+        int rc = (superseded || vin_now_ms() >= deadline) ? -1 : art_make_saver(path, out, deadline);
+        ui_decode_unlock();
+        if (rc == 0) {
+            int fd = open(out, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+            buf = malloc(need);
+            size_t got = 0;
+            if (fd >= 0 && buf) {
+                ssize_t n;
+                while (got < need && (n = read(fd, buf + got, need - got)) > 0) got += (size_t)n;
+                char extra; if (got == need && read(fd, &extra, 1) != 0) got = 0;   /* too long is as bad as too short */
+            }
+            if (fd >= 0) close(fd);
+            if (got != need) { free(buf); buf = NULL; }
+        }
+        unlink(out);
+        pthread_mutex_lock(&g_vmu);
+        free(g_vres);                                   /* an older, never-collected result */
+        g_vres = buf; g_vres_gen = gen; g_vres_ready = 1;
+        pthread_mutex_unlock(&g_vmu);
     }
-    unlink(VIN_TMP);
-    if (got != need) {                                         /* decode failed/timed out */
-        g_vbuf_valid = 0; g_vsig[0] = 0; vinyl_update_vis(); return;
-    }
-    g_vbuf_valid = 1;
+    return NULL;
+}
 
+/* UI thread: install a finished decode if it belongs to the current track */
+static void vinyl_poll(lv_timer_t *t)
+{
+    (void)t;
+    pthread_mutex_lock(&g_vmu);
+    if (!g_vres_ready) { pthread_mutex_unlock(&g_vmu); return; }
+    uint8_t *buf = g_vres; unsigned gen = g_vres_gen;
+    g_vres = NULL; g_vres_ready = 0;
+    pthread_mutex_unlock(&g_vmu);
+    if (gen != g_vgen || !buf || !g_vinyl) {            /* stale (track changed) or failed: show nothing */
+        free(buf);
+        if (gen == g_vgen) {
+            g_vbuf_valid = 0; vinyl_update_vis();
+            if (++g_vfails < VIN_RETRIES) g_vasked_gen = ~0u;   /* allow a retry the next time the saver shows */
+        }
+        return;
+    }
+    uint8_t *old = g_vbuf;
+    if (old) lv_image_cache_drop(&g_vdsc);             /* LVGL must not keep the old pixels cached */
+    g_vbuf = buf; g_vbuf_valid = 1;
     memset(&g_vdsc, 0, sizeof g_vdsc);
     g_vdsc.header.magic  = LV_IMAGE_HEADER_MAGIC;
     g_vdsc.header.cf     = LV_COLOR_FORMAT_ARGB8888;
@@ -120,14 +223,48 @@ static void vinyl_load_sharp_cover(void)
     g_vdsc.header.h      = VIN_W;
     g_vdsc.header.stride = VIN_W * 4;
     g_vdsc.data          = g_vbuf;
-    g_vdsc.data_size     = need;
-    strncpy(g_vsig, sig, sizeof g_vsig - 1); g_vsig[sizeof g_vsig - 1] = 0;
-
-    lv_image_set_src(g_vinyl, &g_vdsc);
-    lv_image_set_pivot(g_vinyl, VIN_W / 2, VIN_W / 2);   /* 180,180 -> spin about centre */
+    g_vdsc.data_size     = (uint32_t)VIN_W * VIN_W * 4;
+    if (!g_vout) g_vout = calloc((size_t)VIN_W * VIN_W, 4);   /* zeroed: outside the round area stays transparent */
+    if (g_vout) {                                            /* show the diskOS-rotated copy (see vinyl_rotate) */
+        g_vodsc = g_vdsc;
+        g_vodsc.data = g_vout;
+        /* OPAQUE: a square cover turned about its centre always covers the round screen, so no visible pixel is ever
+         * see-through - and an opaque image is a plain copy for LVGL instead of a per-pixel alpha blend (~4-5 ms of
+         * the frame). Outside the circle (invisible on the round panel) stays black. */
+        g_vodsc.header.cf = LV_COLOR_FORMAT_XRGB8888;
+        vinyl_rotate(g_vangle);
+        lv_image_set_src(g_vinyl, &g_vodsc);
+        lv_image_set_rotation(g_vinyl, 0);
+    } else {                                                 /* no memory for the copy: LVGL rotates, as before */
+        lv_image_set_src(g_vinyl, &g_vdsc);
+        lv_image_set_pivot(g_vinyl, VIN_W / 2, VIN_W / 2);
+    }
     lv_image_set_scale(g_vinyl, 256);                    /* 1x - already 360px, no upscale */
     lv_obj_center(g_vinyl);
+    free(old);
     vinyl_update_vis();
+}
+
+/* UI thread: ask for the current track's sharp cover (returns at once) */
+static void vinyl_load_sharp_cover(void)
+{
+    if (!g_vinyl || !g_have_track || !g_vpath[0]) { g_vbuf_valid = 0; vinyl_update_vis(); return; }
+    if (g_vbuf_valid || g_vasked_gen == g_vgen) return;  /* already showing it, or already asked */
+    if (!g_vpoll) g_vpoll = lv_timer_create(vinyl_poll, 150, NULL);
+    pthread_mutex_lock(&g_vmu);
+    if (!g_vwork_started) {
+        pthread_t th;
+        if (pthread_create(&th, NULL, vinyl_worker, NULL) == 0) { pthread_detach(th); g_vwork_started = 1; }
+    }
+    if (g_vwork_started) {
+        snprintf(g_vwant_path, sizeof g_vwant_path, "%s", g_vpath);
+        g_vwant_gen = g_vgen; g_vwant = 1;
+        g_vwant_deadline = vin_now_ms() + 15000;       /* time spent queued behind other decodes counts */
+        pthread_cond_signal(&g_vcv);
+        g_vasked_gen = g_vgen;
+    }
+    pthread_mutex_unlock(&g_vmu);
+    vinyl_update_vis();                                  /* stays hidden until the new cover arrives */
 }
 
 #define CX 180
@@ -188,13 +325,15 @@ static void saver_anim_cb(lv_timer_t *t)
 static void vspin_cb(void *var, int32_t v){
     static uint32_t last = 0;
     uint32_t now = lv_tick_get();
-    /* No effective cap (16ms). The AA-on render (~52ms) is the real limiter, giving a
-     * consistent ~19fps cadence = smoothest. A throttle NEAR the render time makes the
-     * cadence irregular (stutter); one far above it (~10fps) is even but choppy. So we
-     * run render-limited. Calm feel comes from the slow 27s/rev, not a lower fps. */
-    if (now - last < 16) return;
+    /* 30 fps. With diskOS's own rotation (vinyl_rotate) a frame costs ~7 ms, so the loop would otherwise run ~60 fps
+     * and spend the saving on frames nobody needs: at 27 s/rev, 30 fps is under half a degree per frame (smooth), and
+     * the cap sits far above the render time, so the cadence stays even. Device: ~58% CPU (old LVGL transform) ->
+     * ~44% uncapped -> see the cap's figure in plans (measured with /proc stat ticks over 10 s). */
+    if (now - last < 33) return;
     last = now;
-    lv_image_set_rotation((lv_obj_t *)var, v % 3600);
+    g_vangle = v % 3600;
+    if (g_vout && lv_image_get_src((lv_obj_t *)var) == (const void *)&g_vodsc) vinyl_rotate(g_vangle);
+    else lv_image_set_rotation((lv_obj_t *)var, g_vangle);
 }
 void saver_vinyl_spin(int want)
 {
@@ -203,7 +342,7 @@ void saver_vinyl_spin(int want)
     if (want == g_vspin) return;
     g_vspin = want;
     if (want) {
-        int32_t cur = lv_image_get_rotation(g_vinyl);
+        int32_t cur = g_vout ? g_vangle : lv_image_get_rotation(g_vinyl);
         lv_anim_t a; lv_anim_init(&a);
         lv_anim_set_var(&a, g_vinyl);
         lv_anim_set_exec_cb(&a, vspin_cb);
@@ -224,6 +363,8 @@ static void relayout(int style)
     int cover  = (style == 0);
     int minim  = (style == 2);
     int vinyl  = (style == 4);
+    /* a unique theme's clock + date block sits on the round screen's optical centre (Default keeps its layout) */
+    int theme_dy = (theme_def() && style == 3) ? 24 : 0;   /* Cover keeps its stack: with a track it is centred */
 
     /* backdrop only in Cover AND only when a track is loaded (never reveal a stale cover on an
      * idle player when the style changes or the saver is entered manually) */
@@ -248,31 +389,40 @@ static void relayout(int style)
     if (g_clock) {
         if (analog || vinyl) lv_obj_add_flag(g_clock, LV_OBJ_FLAG_HIDDEN);
         else { lv_obj_remove_flag(g_clock, LV_OBJ_FLAG_HIDDEN);
-               lv_obj_align(g_clock, LV_ALIGN_TOP_MID, 0, minim ? 150 : 110); }
+               lv_obj_align(g_clock, LV_ALIGN_TOP_MID, 0, minim ? 150 : 110 + theme_dy); }
+        saver_clock_fit();   /* a style without a clock (Analog, Vinyl) must hide the AM/PM beside it too, now */
     }
     /* date: every style except vinyl, position varies */
     if (g_date) {
         if (vinyl) lv_obj_add_flag(g_date, LV_OBJ_FLAG_HIDDEN);
         else { lv_obj_remove_flag(g_date, LV_OBJ_FLAG_HIDDEN);
-               lv_obj_align(g_date, LV_ALIGN_TOP_MID, 0, analog ? 250 : (minim ? 206 : 170)); }
+               /* under the clock with room for the theme's clock face (Default's 40 px face: 170 / 206 as before) */
+               int lh = lv_font_get_line_height(TF(SAVER_CLOCK));
+               int below = minim ? 56 : 60; if (lh + 12 > below) below = lh + 12;
+               lv_obj_align(g_date, LV_ALIGN_TOP_MID, 0, analog ? 250 : (minim ? 150 : 110 + theme_dy) + below); }
     }
-    /* weather: Cover + Digital */
-    if (g_weather) { if (cover || style == 3) lv_obj_remove_flag(g_weather, LV_OBJ_FLAG_HIDDEN);
+    /* weather: Cover + Digital, 30 px under the date (Default: y 200 as before) */
+    if (g_weather) { if (cover || style == 3){ lv_obj_remove_flag(g_weather, LV_OBJ_FLAG_HIDDEN);
+                         if (g_date){ lv_obj_update_layout(g_date); lv_obj_align(g_weather, LV_ALIGN_TOP_MID, 0, lv_obj_get_y(g_date) + 30); } }
                      else lv_obj_add_flag(g_weather, LV_OBJ_FLAG_HIDDEN); }
     /* track/artist: Cover only */
     if (g_track)  { if (cover) lv_obj_remove_flag(g_track, LV_OBJ_FLAG_HIDDEN);  else lv_obj_add_flag(g_track, LV_OBJ_FLAG_HIDDEN); }
     if (g_artist) { if (cover) lv_obj_remove_flag(g_artist, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(g_artist, LV_OBJ_FLAG_HIDDEN); }
+    if (theme_kit()->saver) {                         /* the active theme's touches on this style */
+        saver_parts_t sp = { lv_obj_get_parent(g_clock), g_clock, g_date, g_weather, g_track, g_artist, g_face, style };
+        theme_kit()->saver(&sp);
+    }
 }
 
 void saver_create(lv_obj_t *root)
 {
-    lv_obj_set_style_bg_color(root, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
 
     g_bg = lv_image_create(root);
     lv_obj_set_size(g_bg, 360, 360);
     lv_obj_align(g_bg, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_image_recolor(g_bg, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_image_recolor(g_bg, TC(IMAGE_TINT), 0);
     lv_obj_set_style_image_recolor_opa(g_bg, 185, 0);
     lv_obj_add_flag(g_bg, LV_OBJ_FLAG_HIDDEN);
 
@@ -283,15 +433,15 @@ void saver_create(lv_obj_t *root)
         int big = (i % 3 == 0);
         lv_obj_set_size(d, big ? 8 : 5, big ? 8 : 5);
         lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_color(d, lv_color_hex(big ? 0xFFFFFF : 0x8E8E93), 0);
+        lv_obj_set_style_bg_color(d, (big ? TC(TEXT_PRIMARY) : TC(TEXT_MUTED)), 0);
         lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
         double r = i * 30 * 3.14159265 / 180.0;
         int x = (int)(CX + 150 * sin(r)), y = (int)(CY - 150 * cos(r));
         lv_obj_set_pos(d, x - (big?4:2), y - (big?4:2));
         g_tick[i] = d;
     }
-    g_hour = mk_hand(root, 6, lv_color_hex(0xFFFFFF), g_hpts);
-    g_min  = mk_hand(root, 4, lv_color_hex(0xC7C7CC), g_mpts);
+    g_hour = mk_hand(root, 6, TC(TEXT_PRIMARY), g_hpts);
+    g_min  = mk_hand(root, 4, TC(TEXT_SECONDARY), g_mpts);
     g_sec  = mk_hand(root, 2, ui_current_accent(), g_spts);
     g_hub  = lv_obj_create(root);
     lv_obj_remove_style_all(g_hub);
@@ -313,15 +463,16 @@ void saver_create(lv_obj_t *root)
     lv_image_set_antialias(g_vinyl, false);   /* pivot + scale set per-cover in saver_set_track */
     lv_obj_add_flag(g_vinyl, LV_OBJ_FLAG_HIDDEN);
 
-    s_swfont = lv_font_montserrat_16;
+    s_swfont = *TF(UI_16);
     s_swfont.fallback = &font_weather16;
 
-    g_clock   = mk(root, &lv_font_montserrat_40, lv_color_hex(0xFFFFFF), 110);
-    g_date    = mk(root, &lv_font_montserrat_16, lv_color_hex(0xC7C7CC), 170);
-    g_weather = mk(root, &s_swfont,              lv_color_hex(0xC7C7CC), 200);
-    g_track   = mk(root, &lv_font_montserrat_16, lv_color_hex(0xFFFFFF), 254);
-    g_artist  = mk(root, &lv_font_montserrat_14, lv_color_hex(0x8E8E93), 278);
+    g_clock   = mk(root, TF(SAVER_CLOCK), TC(TEXT_PRIMARY), 110);
+    g_date    = mk(root, TF(UI_16), TC(TEXT_SECONDARY), 170);
+    g_weather = mk(root, &s_swfont,              TC(TEXT_SECONDARY), 200);
+    g_track   = mk(root, TF(UI_16), TC(TEXT_PRIMARY), 254);
+    g_artist  = mk(root, TF(UI_14), TC(TEXT_MUTED), 278);
     lv_label_set_text(g_clock, "--:--");
+    lv_obj_add_event_cb(g_clock, saver_clock_style_cb, LV_EVENT_STYLE_CHANGED, NULL);   /* refit after the theme's face lands */
 
     relayout(cfg_get_int("saver_style", 0));
     g_style = cfg_get_int("saver_style", 0);
@@ -350,14 +501,73 @@ void saver_show_sync(void)
     if (g_style == 4) { if (g_have_track) vinyl_load_sharp_cover(); else vinyl_update_vis(); }
 }
 
+/* The time as set (a dotted label edits its own copy, so the fit always starts from this). */
+static char g_clock_text[32] = "--:--";
+/* Fit the whole time in the saver: a big theme face can make "12:59 PM" wider than the 320 px box, and the label would
+ * end in "..." (bauhaus showed "5:53..."). Then the label takes the text's natural width (one line; its alignment keeps
+ * it centred) and is drawn scaled down about its centre. Runs on every time change AND whenever the label's style
+ * changes - the theme's styling pass sets the final (bigger) face after the first time is set. */
+static lv_obj_t *g_mer;   /* AM/PM in a text face, for a theme whose clock face has no letters (saver_mer_apart) */
+static void saver_clock_fit(void)
+{
+    if (!g_clock) return;
+    char digits[32]; snprintf(digits, sizeof digits, "%s", g_clock_text);
+    const char *mer = "";
+    char *sp = strrchr(digits, ' ');
+    if (theme_kit()->saver_mer_apart && sp && (!strcmp(sp + 1, "AM") || !strcmp(sp + 1, "PM"))) { *sp = 0; mer = g_clock_text + (sp - digits) + 1; }
+    lv_label_set_text(g_clock, digits);
+    lv_point_t sz;
+    lv_text_get_size(&sz, digits, lv_obj_get_style_text_font(g_clock, 0),
+                     lv_obj_get_style_text_letter_space(g_clock, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    int32_t room = 320 - 4;
+    int32_t sc = (sz.x > room && sz.x > 0) ? (int32_t)(256L * room / sz.x) : 256;
+    lv_obj_set_width(g_clock, sc < 256 ? sz.x + 4 : 320);
+    lv_obj_update_layout(g_clock);
+    lv_obj_set_style_transform_pivot_x(g_clock, lv_obj_get_width(g_clock) / 2, 0);
+    lv_obj_set_style_transform_pivot_y(g_clock, lv_obj_get_height(g_clock) / 2, 0);
+    lv_obj_set_style_transform_scale(g_clock, sc, 0);
+    /* AM/PM beside the digits' foot, the pair centred as one group */
+    if (mer[0] && !g_mer) {
+        g_mer = lv_label_create(lv_obj_get_parent(g_clock));
+        kit_keep(g_mer);
+        lv_obj_set_style_text_font(g_mer, theme_kit()->saver_mer_apart == 2 ? TF(DATE) : TF(UI_14), 0);
+    }
+    if (g_mer) {
+        int show = mer[0] && !lv_obj_has_flag(g_clock, LV_OBJ_FLAG_HIDDEN);
+        if (!show) { lv_obj_add_flag(g_mer, LV_OBJ_FLAG_HIDDEN); lv_obj_set_style_translate_x(g_clock, 0, 0); }
+        else {
+            lv_label_set_text(g_mer, mer);
+            lv_obj_set_style_text_color(g_mer, lv_obj_get_style_text_color(g_clock, 0), 0);
+            lv_obj_remove_flag(g_mer, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_update_layout(g_mer);
+            int32_t mw = lv_obj_get_width(g_mer) + 6;
+            lv_obj_set_width(g_clock, sz.x + 4);                  /* the digits' own width, so AM/PM sits right beside them */
+            lv_obj_set_style_translate_x(g_clock, -mw / 2, 0);   /* centre digits + AM/PM together */
+            lv_obj_update_layout(g_clock);
+            lv_obj_align_to(g_mer, g_clock, LV_ALIGN_OUT_RIGHT_BOTTOM, 6, -lv_obj_get_height(g_clock) / 5);   /* coords include the translate */
+        }
+    }
+}
+static void saver_clock_style_cb(lv_event_t *e)
+{
+    (void)e;
+    static int busy;                     /* the fit sets styles itself: don't recurse */
+    if (busy) return;
+    busy = 1; saver_clock_fit(); busy = 0;
+}
+
 void saver_set_clock(const char *t, const char *date)
 {
     /* re-apply layout if the style setting changed */
     int s = cfg_get_int("saver_style", 0);
     if (s != g_style) { relayout(s); g_style = s; }
 
-    if (g_clock) lv_label_set_text(g_clock, t ? t : "--:--");
-    if (g_date)  lv_label_set_text(g_date, date ? date : "");
+    if (g_clock) {
+        snprintf(g_clock_text, sizeof g_clock_text, "%s", t ? t : "--:--");
+        saver_clock_fit();
+    }
+    if (g_date)  theme_case_text(g_date, date ? date : "");   /* the theme's case, as on Home (was always "Thu 14 Nov") */
+    if (theme_kit()->saver_clock) theme_kit()->saver_clock(t ? t : "--:--");
 
     /* analog hands from the live time */
     if (g_style == 1) {
@@ -372,17 +582,22 @@ void saver_set_weather(const char *text)
     if (g_weather) lv_label_set_text(g_weather, text ? text : "");
 }
 
-void saver_set_track(const char *title, const char *artist, const void *backdrop_src)
+void saver_set_track(const char *title, const char *artist, const void *backdrop_src, const char *path)
 {
     /* The caller passes a non-NULL title iff st.have_track (NULL when no track), so key off
      * NULL-ness, not emptiness - a valid but untitled file still counts as a loaded track. */
     g_have_track = (title != NULL);
+    const char *p = (g_have_track && path) ? path : "";
+    if (strcmp(p, g_vpath) != 0) {                       /* a different track: the old cover is no longer valid */
+        snprintf(g_vpath, sizeof g_vpath, "%s", p);
+        g_vgen++; g_vbuf_valid = 0; g_vfails = 0;
+    }
     if (g_track)  lv_label_set_text(g_track, title ? title : "");
     if (g_artist) lv_label_set_text(g_artist, artist ? artist : "");
 
     /* vinyl cover: re-decode the sharp 360px cover only when the vinyl saver is
      * actually on-screen (track auto-advanced while idle); otherwise just refresh
-     * visibility - the decode runs on the next saver show. Never run ffmpeg for a
+     * visibility - the decode runs on the next saver show. Never run the decoder for a
      * track change while NOT showing the vinyl saver (would hitch the live UI). */
     if (g_vinyl) {
         if (g_style == 4 && screen_current() == SCR_SAVER) vinyl_load_sharp_cover();

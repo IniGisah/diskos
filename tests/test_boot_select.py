@@ -31,12 +31,13 @@ S96 = PAYLOAD / 'S96diskos_select'
 S97 = PAYLOAD / 'S97diskos_install'
 # the stock firmware whose shell runs S96/S97: DISKOS_FW_BASE (default V2.40) and its extracted rootfs
 FW_BASE = os.environ.get('DISKOS_FW_BASE', '240')
-FW_ROOT = Path(os.environ.get('DISKOS_FW_ROOT') or os.environ.get('DISKOS_V240_ROOT', '/tmp/vs6'))
+FW_ROOT = Path(os.environ.get('DISKOS_FW_ROOT') or os.environ.get('DISKOS_V240_ROOT')
+               or Path(__file__).resolve().parents[2] / 'scratch' / 'fixtures' / ('v' + FW_BASE))
 QEMU = shutil.which('qemu-mipsel-static')
 RELEASED = 0xF6EFE127     # live V2.40 read, all keys released (bit 13 high)
 HELD = 0xF6EFC127         # the same with bit 13 low = Vol-Up held
 FW_BUSYBOX_MD5 = {'209': 'e6b2bb328e1c08238878991c0aae062d', '228': 'c1af60e81cea22b040b957c00404de9e',
-                  '240': '5d8a5e60ee7d40002fe70f43228596cb'}
+                  '240': '5d8a5e60ee7d40002fe70f43228596cb', '257': '8651f07f6387df9f10a22a73f0f9450f'}
 FW_APPLETS = ('mkdir', 'rm', 'mv', 'cat')
 _SRC = Path(__file__).resolve().parents[2] / 'native-ui' / 'ipodos-native' / 'tools' / 'diskos_bootprobe.c'
 PROBE_SRC = _SRC if _SRC.is_file() else Path(__file__).resolve().parents[1] / 'ui' / 'tools' / 'diskos_bootprobe.c'

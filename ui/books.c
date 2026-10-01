@@ -4,6 +4,8 @@
  * you left off. Audiobooks are kept out of the music Songs/Albums/Artists views (mdb_load excludes
  * .m4b); this is the one place they show. */
 #include "books.h"
+#include "theme.h"
+#include "theme_kit.h"
 #include "screens.h"
 #include "musicdb.h"
 #include "artcache.h"
@@ -70,8 +72,7 @@ static void book_row_cb(lv_event_t *e){
         long rw = ui_smart_rewind_ms(idle);
         resume -= rw; if(resume < 0) resume = 0;
     }
-    ui_play_book(g_books[i].path, resume);
-    screen_show(SCR_NOWPLAYING);   /* a book tap opens Now Playing, like a song tap does */
+    if(ui_play_book(g_books[i].path, resume)) screen_show(SCR_NOWPLAYING);   /* a book tap opens Now Playing, like a song tap does (not on a refusal) */
 }
 
 /* Left-edge cover for one row: the cached 42px thumb if this book has been played (and so
@@ -83,7 +84,7 @@ static void books_add_cover(lv_obj_t *row, const book_t *b, int i){
     lv_obj_set_pos(tile, 12, 8); lv_obj_set_size(tile, 42, 42);
     lv_obj_set_style_radius(tile, 8, 0);
     lv_obj_set_style_clip_corner(tile, true, 0);
-    lv_obj_set_style_bg_color(tile, lv_color_hex(0x3A3A3C), 0);
+    lv_obj_set_style_bg_color(tile, TC(SURFACE_STRONG), 0);
     lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
     /* lv_obj_create() is CLICKABLE by default; if the tile keeps that it eats the tap
      * meant for the row's play handler. Clear both flags so taps pass through to the row. */
@@ -103,8 +104,8 @@ static void books_add_cover(lv_obj_t *row, const book_t *b, int i){
     } else {
         lv_obj_t *g = lv_label_create(tile);     /* no cached cover yet -> glyph */
         lv_label_set_text(g, LV_SYMBOL_AUDIO);
-        lv_obj_set_style_text_font(g, &lv_font_montserrat_20, 0);
-        lv_obj_set_style_text_color(g, lv_color_hex(0xC7C7CC), 0);
+        lv_obj_set_style_text_font(g, TF(UI_20), 0);
+        lv_obj_set_style_text_color(g, TC(TEXT_SECONDARY), 0);
         lv_obj_center(g);
     }
 }
@@ -122,8 +123,8 @@ static void books_rebuild(void){
         lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(l, 260);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(0x8E8E93), 0);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(l, TC(TEXT_MUTED), 0);
+        lv_obj_set_style_text_font(l, TF(UI_16), 0);
         return;
     }
     g_nbooks = rc;
@@ -133,30 +134,30 @@ static void books_rebuild(void){
         lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(l, 260);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(0x8E8E93), 0);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(l, TC(TEXT_MUTED), 0);
+        lv_obj_set_style_text_font(l, TF(UI_16), 0);
         return;
     }
     for(int i = 0; i < g_nbooks; i++){
         book_t *b = &g_books[i];
         lv_obj_t *r = lv_button_create(g_list);
         lv_obj_remove_style_all(r);
-        lv_obj_set_size(r, 288, 58);
+        lv_obj_set_size(r, 268, 58);
         lv_obj_set_style_radius(r, 10, 0);
-        lv_obj_set_style_bg_color(r, lv_color_hex(0x1C1C1E), 0);
+        lv_obj_set_style_bg_color(r, TC(SURFACE), 0);
         lv_obj_set_style_bg_opa(r, LV_OPA_50, 0);
-        lv_obj_set_style_bg_color(r, lv_color_hex(0x2C2C2E), LV_STATE_PRESSED);
+        lv_obj_set_style_bg_color(r, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
         lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_event_cb(r, book_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        ui_on(r, book_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i, "books.book_row", UI_CORE);
 
         books_add_cover(r, b, i);                               /* 42px cover / glyph on the left */
 
         lv_obj_t *t = lv_label_create(r);                       /* title (book names may be non-Latin) */
         lv_label_set_text(t, b->title[0] ? b->title : "Untitled");
         lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
-        lv_obj_set_pos(t, 64, 8); lv_obj_set_size(t, 210, 20);
-        lv_obj_set_style_text_font(t, ui_font_cjk(16), 0);
-        lv_obj_set_style_text_color(t, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_pos(t, 64, 8); lv_obj_set_size(t, 190, 20);
+        lv_obj_set_style_text_font(t, TF(USER_16), 0);
+        lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
 
         char prog[32]; progress_text(b, prog, sizeof prog);
         char sub[224];
@@ -165,15 +166,15 @@ static void books_rebuild(void){
         lv_obj_t *s = lv_label_create(r);                       /* author - progress */
         lv_label_set_text(s, sub);
         lv_label_set_long_mode(s, LV_LABEL_LONG_DOT);
-        lv_obj_set_pos(s, 64, 32); lv_obj_set_size(s, 210, 18);
-        lv_obj_set_style_text_font(s, ui_font_cjk(14), 0);
-        lv_obj_set_style_text_color(s, lv_color_hex(0x8E8E93), 0);
+        lv_obj_set_pos(s, 64, 32); lv_obj_set_size(s, 190, 18);
+        lv_obj_set_style_text_font(s, TF(USER_14), 0);
+        lv_obj_set_style_text_color(s, TC(TEXT_MUTED), 0);
     }
     lv_obj_scroll_to_y(g_list, 0, LV_ANIM_OFF);
 }
 
 void books_create(lv_obj_t *root){
-    lv_obj_set_style_bg_color(root, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
     ui_header(root, "Books");
 
@@ -232,8 +233,8 @@ static void chap_empty(const char *msg){
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(l, 260);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(l, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(l, TC(TEXT_MUTED), 0);
+    lv_obj_set_style_text_font(l, TF(UI_16), 0);
 }
 
 static void chapters_rebuild(void){
@@ -255,34 +256,34 @@ static void chapters_rebuild(void){
 
         lv_obj_t *r = lv_button_create(g_chap_list);
         lv_obj_remove_style_all(r);
-        lv_obj_set_size(r, 288, 52);
+        lv_obj_set_size(r, 268, 52);
         lv_obj_set_style_radius(r, 10, 0);
-        lv_obj_set_style_bg_color(r, lv_color_hex(i == cur ? 0x2C2C2E : 0x1C1C1E), 0);
+        lv_obj_set_style_bg_color(r, (i == cur ? TC(SURFACE_RAISED) : TC(SURFACE)), 0);
         lv_obj_set_style_bg_opa(r, i == cur ? LV_OPA_COVER : LV_OPA_50, 0);
-        lv_obj_set_style_bg_color(r, lv_color_hex(0x3A3A3C), LV_STATE_PRESSED);
+        lv_obj_set_style_bg_color(r, TC(RAISED_PRESSED), LV_STATE_PRESSED);
         lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_event_cb(r, chap_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        ui_on(r, chap_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i, "books.chap_row", UI_CORE);
 
         lv_obj_t *num = lv_label_create(r);                     /* chapter number, accent when current */
         char nb[8]; snprintf(nb, sizeof nb, "%d", i + 1);
         lv_label_set_text(num, nb);
         lv_obj_set_pos(num, 12, 16); lv_obj_set_size(num, 34, 20);
-        lv_obj_set_style_text_font(num, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(num, lv_color_hex(i == cur ? 0x0A84FF : 0x8E8E93), 0);
+        lv_obj_set_style_text_font(num, TF(UI_14), 0);
+        lv_obj_set_style_text_color(num, (i == cur ? TC(STATUS_INFO) : TC(TEXT_MUTED)), 0);
 
         lv_obj_t *t = lv_label_create(r);                       /* chapter title (may be non-Latin) */
         lv_label_set_text(t, g_chlist[i].title);
         lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
-        lv_obj_set_pos(t, 50, 16); lv_obj_set_size(t, 168, 20);
-        lv_obj_set_style_text_font(t, ui_font_cjk(16), 0);
-        lv_obj_set_style_text_color(t, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_pos(t, 50, 16); lv_obj_set_size(t, 148, 20);
+        lv_obj_set_style_text_font(t, TF(USER_16), 0);
+        lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
 
         lv_obj_t *d = lv_label_create(r);                       /* chapter duration, right-aligned */
         lv_label_set_text(d, durbuf);
-        lv_obj_set_pos(d, 220, 16); lv_obj_set_size(d, 56, 20);
+        lv_obj_set_pos(d, 200, 16); lv_obj_set_size(d, 56, 20);
         lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_RIGHT, 0);
-        lv_obj_set_style_text_font(d, &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_color(d, lv_color_hex(0x8E8E93), 0);
+        lv_obj_set_style_text_font(d, TF(UI_12), 0);
+        lv_obj_set_style_text_color(d, TC(TEXT_MUTED), 0);
 
         if(i == cur) cur_row = r;
     }
@@ -290,7 +291,7 @@ static void chapters_rebuild(void){
 }
 
 void chapters_create(lv_obj_t *root){
-    lv_obj_set_style_bg_color(root, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
     ui_header(root, "Chapters");
 

@@ -1,8 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
+#include "fwcaps.h"
+#include "theme.h"
+#include "theme_kit.h"
 #include "screens.h"
 #include "ipc.h"
 #include "config.h"
+#include "i18n.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -25,46 +29,43 @@ LV_FONT_DECLARE(font_icons_20)          /* FontAwesome 20px - EQ + Search glyphs
 #define WI_HP     "\xEF\x80\xA5"        /* f025 headphones = DRE */
 #define WI_LINK   "\xEF\x83\x81"        /* f0c1 chain = gapless */
 #define WI_MIC    "\xEF\x84\xB0"        /* f130 microphone = lyrics */
+#define WI_TINT   "\xEF\x81\x83"        /* f043 drop = colour theme */
 
-#define QS_CARD   0x1C1C1E
-#define QS_PRESS  0x2C2C2E
-#define QS_TRACK  0x2C2C2E
-#define QS_OFF    0x3A3A3C
-#define QS_GRAB   0x5A5A5E
-#define QS_TXT2   0x8E8E93
 
 #define QS_MAX_TILES 6                  /* grid holds two rows of three */
 
 /* ---- tile palette ---------------------------------------------------------------------------- */
 enum { QT_WIFI, QT_BT, QT_EQ, QT_SEARCH, QT_RESCAN, QT_MODE, QT_SCREENOFF,
-       QT_SHUFFLE, QT_FAV, QT_LYRICS, QT_TIMER, QT_GAPLESS, QT_GAIN, QT_DRE, QT_RG, QT_COUNT };
+       QT_SHUFFLE, QT_FAV, QT_LYRICS, QT_TIMER, QT_GAPLESS, QT_GAIN, QT_DRE, QT_RG, QT_OUTDOOR, QT_THEME, QT_COUNT };
 
 typedef struct {
     const char       *cfg;      /* per-tile enable key */
     const char       *cap;      /* caption under the circle */
     const char       *glyph;
-    const lv_font_t  *font;
+    theme_font_role_t font;     /* a font ROLE (a table initialiser can't call theme_font) */
     int               def_on;   /* enabled by default */
     int               has_long; /* has a long-press action (opens a screen) */
 } qtile_t;
 
 static const qtile_t QTILES[QT_COUNT] = {
-    [QT_WIFI]      = { "qs_t_wifi",      "Wi-Fi",      LV_SYMBOL_WIFI,      &lv_font_montserrat_20, 1, 1 },
-    [QT_BT]        = { "qs_t_bt",        "Bluetooth",  LV_SYMBOL_BLUETOOTH, &lv_font_montserrat_20, 1, 1 },
-    [QT_EQ]        = { "qs_t_eq",        "EQ",         WI_EQ,               &font_icons_20,         1, 1 },
-    [QT_SEARCH]    = { "qs_t_search",    "Search",     WI_SEARCH,           &font_icons_20,         1, 0 },
-    [QT_RESCAN]    = { "qs_t_rescan",    "Rescan",     LV_SYMBOL_REFRESH,   &lv_font_montserrat_20, 1, 0 },
-    [QT_MODE]      = { "qs_t_mode",      "Source",     LV_SYMBOL_AUDIO,     &lv_font_montserrat_20, 1, 0 },
-    [QT_SCREENOFF] = { "qs_t_screenoff", "Screen off", LV_SYMBOL_EYE_CLOSE, &lv_font_montserrat_20, 0, 0 },
+    [QT_WIFI]      = { "qs_t_wifi",      "Wi-Fi",      LV_SYMBOL_WIFI,      THEME_FONT_UI_20, 1, 1 },
+    [QT_BT]        = { "qs_t_bt",        "Bluetooth",  LV_SYMBOL_BLUETOOTH, THEME_FONT_UI_20, 1, 1 },
+    [QT_EQ]        = { "qs_t_eq",        "EQ",         WI_EQ,               THEME_FONT_ICON_20,         1, 1 },
+    [QT_SEARCH]    = { "qs_t_search",    "Search",     WI_SEARCH,           THEME_FONT_ICON_20,         1, 0 },
+    [QT_RESCAN]    = { "qs_t_rescan",    "Rescan",     LV_SYMBOL_REFRESH,   THEME_FONT_UI_20, 1, 0 },
+    [QT_MODE]      = { "qs_t_mode",      "Source",     LV_SYMBOL_AUDIO,     THEME_FONT_UI_20, 1, 0 },
+    [QT_SCREENOFF] = { "qs_t_screenoff", "Screen off", LV_SYMBOL_EYE_CLOSE, THEME_FONT_UI_20, 0, 0 },
     /* opt-in audio/playback tiles (default off; enable in Settings > Display > Quick Settings) */
-    [QT_SHUFFLE]   = { "qs_t_shuffle",   "Shuffle",    LV_SYMBOL_SHUFFLE,   &lv_font_montserrat_20, 0, 1 },
-    [QT_FAV]       = { "qs_t_fav",       "Favourite",  WI_HEART,            &font_icons_20,         0, 0 },
-    [QT_LYRICS]    = { "qs_t_lyrics",    "Lyrics",     WI_MIC,              &font_icons_20,         0, 0 },
-    [QT_TIMER]     = { "qs_t_timer",     "Timer",      WI_CLOCK,            &font_icons_20,         0, 0 },
-    [QT_GAPLESS]   = { "qs_t_gapless",   "Gapless",    WI_LINK,             &font_icons_20,         0, 1 },
-    [QT_GAIN]      = { "qs_t_gain",      "High Gain",  LV_SYMBOL_VOLUME_MAX,&lv_font_montserrat_20, 0, 1 },
-    [QT_DRE]       = { "qs_t_dre",       "DRE",        WI_HP,               &font_icons_20,         0, 1 },
-    [QT_RG]        = { "qs_t_rg",        "ReplayGain", LV_SYMBOL_VOLUME_MID,&lv_font_montserrat_20, 0, 0 },
+    [QT_SHUFFLE]   = { "qs_t_shuffle",   "Shuffle",    LV_SYMBOL_SHUFFLE,   THEME_FONT_UI_20, 0, 1 },
+    [QT_FAV]       = { "qs_t_fav",       "Favourite",  WI_HEART,            THEME_FONT_ICON_20,         0, 0 },
+    [QT_LYRICS]    = { "qs_t_lyrics",    "Lyrics",     WI_MIC,              THEME_FONT_ICON_20,         0, 0 },
+    [QT_TIMER]     = { "qs_t_timer",     "Timer",      WI_CLOCK,            THEME_FONT_ICON_20,         0, 0 },
+    [QT_GAPLESS]   = { "qs_t_gapless",   "Gapless",    WI_LINK,             THEME_FONT_ICON_20,         0, 1 },
+    [QT_GAIN]      = { "qs_t_gain",      "High Gain",  LV_SYMBOL_VOLUME_MAX,THEME_FONT_UI_20, 0, 1 },
+    [QT_DRE]       = { "qs_t_dre",       "DRE",        WI_HP,               THEME_FONT_ICON_20,         0, 1 },
+    [QT_RG]        = { "qs_t_rg",        "ReplayGain", LV_SYMBOL_VOLUME_MID,THEME_FONT_UI_20, 0, 0 },
+    [QT_OUTDOOR]   = { "qs_t_outdoor",   "Outdoor",    WI_SUN,              THEME_FONT_ICON_20,         0, 1 },
+    [QT_THEME]     = { "qs_t_theme",     "Theme",      WI_TINT,             THEME_FONT_ICON_20,         0, 1 },
 };
 
 static lv_obj_t *g_qs_root;
@@ -72,6 +73,7 @@ static lv_obj_t *g_bright;
 static lv_obj_t *g_prev_glyph, *g_next_glyph;
 static lv_obj_t *g_pp_glyph;                 /* transport play/pause glyph (NULL when transport is off) */
 static lv_obj_t *g_tile_dot[QT_COUNT];       /* the circle per shown tile, recoloured on refresh */
+static lv_obj_t *g_tile_lbl[QT_COUNT];       /* its caption (the ring style colours it too) */
 
 /* the drawer shows at most this many tiles - one fewer with the transport row, so the second row never
  * pushes its outer captions off the round bezel. */
@@ -93,15 +95,45 @@ static int qtile_is_on(int id){
         case QT_EQ:      return cfg_get_int("eq_preset", 0) > 0;
         case QT_SHUFFLE: return cfg_get_int("work_mode", 0) == 1;
         case QT_GAPLESS: return cfg_get_int("gapless", 0) == 1;
-        case QT_GAIN:    return cfg_get_int("audio_gain", 0) == 1;
+        case QT_GAIN:    return fw_gain_tag() && cfg_get_int("audio_gain", 0) == 1;   /* unmapped firmware: never lit */
         case QT_DRE:     return cfg_get_int("audio_dre", 1) == 1;
+        case QT_OUTDOOR: return theme_outdoor();
         case QT_FAV:   { track_state_t st; ipc_get_state(&st); return st.path[0] && st.is_favorite; }
         default:         return 0;   /* action tiles (Search/Rescan/Source/Screen off/Lyrics/Timer/RG) never lit */
     }
 }
 
+static void tile_paint(int id, int on);
+/* paint a tile, then centre its icon by INK (after the theme's final font: icon glyphs sit high or low in their line, so
+ * centring the line box left them 2 px low in some themes); word tiles (terminal) keep their baseline */
 static void tile_recolor(int id, int on){
-    if(g_tile_dot[id]) lv_obj_set_style_bg_color(g_tile_dot[id], on ? ui_current_accent() : lv_color_hex(QS_OFF), 0);
+    tile_paint(id, on);
+    if(g_tile_dot[id]) ui_glyph_center_ink(lv_obj_get_child(g_tile_dot[id], 0));
+}
+static void tile_paint(int id, int on){
+    if(!g_tile_dot[id]) return;
+    lv_obj_t *c = g_tile_dot[id], *g = lv_obj_get_child(c, 0);
+    if(theme_kit()->qs_tile){                         /* the theme's own tile */
+        int toggle = id == QT_WIFI || id == QT_BT || id == QT_EQ || id == QT_SHUFFLE || id == QT_FAV || id == QT_GAPLESS
+                  || id == QT_GAIN || id == QT_DRE || id == QT_OUTDOOR;   /* the tiles qtile_is_on() can light */
+        kit_keep(c);                                  /* the theme painted it: the styling pass leaves it */
+        theme_kit()->qs_tile(c, g, g_tile_lbl[id], on, toggle); return;
+    }
+    if(theme_trait(THEME_TRAIT_QS_RING)){
+        /* lit = accent ring + a faint accent halo (a wide translucent outline: no blur, cheap on this CPU) with an
+         * accent glyph and caption; off = a plain dark disc */
+        lv_obj_set_style_bg_color(c, on ? TC(SURFACE) : TC(SURFACE_RAISED), 0);
+        lv_obj_set_style_border_width(c, on ? 2 : 0, 0);
+        lv_obj_set_style_border_color(c, TC(ACCENT_PRIMARY), 0);
+        lv_obj_set_style_outline_width(c, on ? 5 : 0, 0);
+        lv_obj_set_style_outline_color(c, TC(ACCENT_PRIMARY), 0);
+        lv_obj_set_style_outline_opa(c, LV_OPA_20, 0);
+        if(g) lv_obj_set_style_text_color(g, on ? TC(ACCENT_PRIMARY) : TC(TEXT_PRIMARY), 0);
+        if(g_tile_lbl[id]) lv_obj_set_style_text_color(g_tile_lbl[id], on ? TC(ACCENT_PRIMARY) : TC(TEXT_SECONDARY), 0);
+        return;
+    }
+    lv_obj_set_style_bg_color(c, on ? ui_current_accent() : TC(CONTROL_OFF), 0);
+    if(g) lv_obj_set_style_text_color(g, on ? TC(ON_ACCENT) : TC(TEXT_PRIMARY), 0);   /* on the accent fill when lit */
 }
 
 /* ---- EQ A/B toggle (drawer): flip Off <-> the last-used preset, all persisted centrally --------- */
@@ -149,6 +181,7 @@ static void tile_short_cb(lv_event_t *e){
             tile_recolor(QT_GAPLESS, on); ui_toast(on ? "Gapless on" : "Gapless off");
         } break;
         case QT_GAIN: {
+            if(!fw_gain_tag()){ ui_toast("Not supported on this firmware yet"); break; }   /* nothing would be sent */
             int on = cfg_get_int("audio_gain", 0) ? 0 : 1;
             cfg_set_int("audio_gain", on); ui_set_gain(on);
             tile_recolor(QT_GAIN, on); ui_toast(on ? "High gain" : "Low gain");
@@ -159,6 +192,16 @@ static void tile_short_cb(lv_event_t *e){
             tile_recolor(QT_DRE, on); ui_toast(on ? "DRE on" : "DRE off");
         } break;
         case QT_RG:     settings_open_key("replay_gain"); break;    /* opens the ReplayGain chooser */
+        case QT_OUTDOOR: {                                          /* redraws the UI in the new palette */
+            int was = cfg_get_int("outdoor", 0) == 1;
+            cfg_set_int("outdoor", !was);
+            if(ui_theme_reload("quick") != 0) cfg_set_int("outdoor", was);   /* refused (scan): nothing changes */
+        } break;
+        case QT_THEME: {                                            /* next colour preset */
+            int was = theme_preset();
+            cfg_set_int("theme_preset", (was + 1) % THEME_PRESET_COUNT);
+            if(ui_theme_reload("quick") != 0) cfg_set_int("theme_preset", was);
+        } break;
     }
 }
 static void tile_long_cb(lv_event_t *e){
@@ -171,6 +214,8 @@ static void tile_long_cb(lv_event_t *e){
         case QT_GAPLESS: settings_open_key("gapless");    break;
         case QT_GAIN:    settings_open_key("audio_gain"); break;
         case QT_DRE:     settings_open_key("audio_dre");  break;
+        case QT_OUTDOOR: settings_open_key("outdoor");    break;
+        case QT_THEME:   settings_open_key("theme_preset"); break;
         default: break;
     }
 }
@@ -183,32 +228,43 @@ static void build_tile(lv_obj_t *root, int id, int x, int y){
     lv_obj_set_size(c, 58, 58);
     lv_obj_align(c, LV_ALIGN_TOP_MID, x, y);
     lv_obj_set_style_radius(c, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(c, qtile_is_on(id) ? ui_current_accent() : lv_color_hex(QS_OFF), 0);
+    lv_obj_set_style_bg_color(c, qtile_is_on(id) ? ui_current_accent() : TC(CONTROL_OFF), 0);
     lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
     lv_obj_set_style_opa(c, LV_OPA_80, LV_STATE_PRESSED);   /* gentle press dim on either state colour */
     lv_obj_set_ext_click_area(c, 4);
+    char an[32], al[32];
+    lv_snprintf(an, sizeof an, "qs.tile.%d", id); lv_snprintf(al, sizeof al, "qs.tile.%d.long", id);
     if(t->has_long){
         /* SHORT_CLICKED so a long press fires ONLY the long action, never the toggle too */
-        lv_obj_add_event_cb(c, tile_short_cb, LV_EVENT_SHORT_CLICKED, (void*)(intptr_t)id);
-        lv_obj_add_event_cb(c, tile_long_cb,  LV_EVENT_LONG_PRESSED,  (void*)(intptr_t)id);
+        ui_on(c, tile_short_cb, LV_EVENT_SHORT_CLICKED, (void*)(intptr_t)id, an, UI_CORE);
+        ui_on(c, tile_long_cb, LV_EVENT_LONG_PRESSED, (void*)(intptr_t)id, al, UI_CORE);
     }else{
-        lv_obj_add_event_cb(c, tile_short_cb, LV_EVENT_CLICKED, (void*)(intptr_t)id);
+        ui_on(c, tile_short_cb, LV_EVENT_CLICKED, (void*)(intptr_t)id, an, UI_CORE);
     }
     lv_obj_t *g = lv_label_create(c);
     lv_obj_clear_flag(g, LV_OBJ_FLAG_CLICKABLE);
     lv_label_set_text(g, t->glyph);
-    lv_obj_set_style_text_font(g, t->font, 0);
-    lv_obj_set_style_text_color(g, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(g, theme_font(t->font), 0);
+    lv_obj_set_style_text_color(g, qtile_is_on(id) ? TC(ON_ACCENT) : TC(TEXT_PRIMARY), 0);
     lv_obj_center(g);
 
     lv_obj_t *lb = lv_label_create(root);
     lv_obj_clear_flag(lb, LV_OBJ_FLAG_CLICKABLE);
-    lv_label_set_text(lb, t->cap);
-    lv_obj_set_style_text_font(lb, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(lb, lv_color_hex(QS_TXT2), 0);
+    lv_label_set_text(lb, tr(t->cap));
+    lv_obj_set_style_text_font(lb, TF(UI_14), 0);
+    lv_obj_set_style_text_color(lb, TC(TEXT_MUTED), 0);
     lv_obj_align(lb, LV_ALIGN_TOP_MID, x, y + 62);
 
     g_tile_dot[id] = c;
+    g_tile_lbl[id] = lb;
+    if(theme_trait(THEME_TRAIT_QS_RING)){               /* upper-case bold captions, ring styling */
+        char up[24];
+        lv_label_set_text(lb, theme_upper(up, sizeof up, tr(t->cap)));
+        lv_obj_set_style_text_font(lb, TF(UI_12), 0);
+        lv_obj_align(lb, LV_ALIGN_TOP_MID, x, y + 64);
+        tile_recolor(id, qtile_is_on(id));
+    }
+    if(theme_kit()->qs_tile) tile_recolor(id, qtile_is_on(id));
 }
 
 /* ---- optional transport row -------------------------------------------------------------------- */
@@ -222,51 +278,65 @@ static lv_obj_t *tp_btn(lv_obj_t *root, const char *sym, const lv_font_t *font, 
     lv_obj_set_size(b, sz, sz);
     lv_obj_align(b, LV_ALIGN_TOP_MID, x, y);
     lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(b, lv_color_hex(QS_CARD), 0);
+    lv_obj_set_style_bg_color(b, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(b, lv_color_hex(QS_PRESS), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(b, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
     lv_obj_set_ext_click_area(b, 6);
-    lv_obj_add_event_cb(b, cmd_cb, LV_EVENT_CLICKED, cmd);
+    char an[24];
+    ui_on(b, cmd_cb, LV_EVENT_CLICKED, cmd, ui_transport_action(cmd, "qs", an, sizeof an), UI_CORE);
     lv_obj_t *l = lv_label_create(b);
     lv_obj_clear_flag(l, LV_OBJ_FLAG_CLICKABLE);
     lv_label_set_text(l, sym);
     lv_obj_set_style_text_font(l, font, 0);
-    lv_obj_set_style_text_color(l, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_color(l, TC(TEXT_PRIMARY), 0);
     lv_obj_center(l);
     return l;
 }
 static void build_transport(lv_obj_t *root, int y){
-    g_prev_glyph = tp_btn(root, LV_SYMBOL_PREV, &lv_font_montserrat_22, -84, y + 5, 46, (void*)"0201000C0002");
-    g_pp_glyph = tp_btn(root, LV_SYMBOL_PAUSE, &lv_font_montserrat_28, 0, y, 56, (void*)"0201000C0000");
-    g_next_glyph = tp_btn(root, LV_SYMBOL_NEXT, &lv_font_montserrat_22, 84, y + 5, 46, (void*)"0201000C0001");
-    if(g_pp_glyph) lv_label_set_text(g_pp_glyph, ui_is_playing() ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+    g_prev_glyph = tp_btn(root, LV_SYMBOL_PREV, TF(UI_22), -84, y + 5, 46, (void*)"0201000C0002");
+    g_pp_glyph = tp_btn(root, LV_SYMBOL_PAUSE, TF(UI_28), 0, y, 56, (void*)"0201000C0000");
+    g_next_glyph = tp_btn(root, LV_SYMBOL_NEXT, TF(UI_22), 84, y + 5, 46, (void*)"0201000C0001");
+    if(g_pp_glyph) ui_pp_glyph(g_pp_glyph, ui_is_playing());
 }
 
 /* ---- brightness bar ---------------------------------------------------------------------------- */
-static void bright_change_cb(lv_event_t *e){ ui_backlight(lv_slider_get_value(lv_event_get_target(e))); }
-static void bright_release_cb(lv_event_t *e){ ui_set_brightness(lv_slider_get_value(lv_event_get_target(e))); }
+static void bright_change_cb(lv_event_t *e){ if(!theme_outdoor()) ui_backlight(lv_slider_get_value(lv_event_get_target(e))); }
+static void bright_release_cb(lv_event_t *e){ if(!theme_outdoor()) ui_set_brightness(lv_slider_get_value(lv_event_get_target(e))); }
 static void build_brightness(lv_obj_t *root, int y){
     g_bright = lv_slider_create(root);
     lv_obj_set_size(g_bright, 216, 34);
     lv_obj_set_ext_click_area(g_bright, 8);
     lv_obj_align(g_bright, LV_ALIGN_TOP_MID, 0, y);
     lv_slider_set_range(g_bright, 4, 40);
-    lv_slider_set_value(g_bright, ui_get_brightness(), LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(g_bright, lv_color_hex(QS_TRACK), LV_PART_MAIN);
+    lv_slider_set_value(g_bright, ui_effective_brightness(), LV_ANIM_OFF);
+    if(theme_outdoor()) lv_obj_add_state(g_bright, LV_STATE_DISABLED);   /* Outdoor holds full brightness */
+    lv_obj_set_style_bg_color(g_bright, TC(CONTROL_TRACK), LV_PART_MAIN);
     lv_obj_set_style_radius(g_bright, 17, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(g_bright, lv_color_hex(0xFFFFFF), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(g_bright, TC(CONTROL_FILL), LV_PART_INDICATOR);
     lv_obj_set_style_radius(g_bright, 17, LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(g_bright, LV_OPA_TRANSP, LV_PART_KNOB);
     lv_obj_set_style_pad_all(g_bright, 0, LV_PART_KNOB);
-    lv_obj_add_event_cb(g_bright, bright_change_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    ui_on(g_bright, bright_change_cb, LV_EVENT_VALUE_CHANGED, NULL, "quicksettings.bright_change.value", UI_CORE);
     lv_obj_add_event_cb(g_bright, bright_release_cb, LV_EVENT_RELEASED, NULL);
     lv_obj_add_event_cb(g_bright, bright_release_cb, LV_EVENT_PRESS_LOST, NULL);
     lv_obj_t *sun = lv_label_create(g_bright);
     lv_obj_clear_flag(sun, LV_OBJ_FLAG_CLICKABLE);
     lv_label_set_text(sun, WI_SUN);
-    lv_obj_set_style_text_font(sun, &font_icons_28, 0);
-    lv_obj_set_style_text_color(sun, lv_color_hex(QS_OFF), 0);
+    lv_obj_set_style_text_font(sun, TF(ICON_28), 0);
+    lv_obj_set_style_text_color(sun, TC(ON_CONTROL), 0);
     lv_obj_align(sun, LV_ALIGN_LEFT_MID, 12, 0);
+    if(theme_trait(THEME_TRAIT_QS_RING)){
+        /* a thin bar with the sun beside it (the whole old height stays touchable) */
+        lv_obj_set_size(g_bright, 196, 6);
+        lv_obj_align(g_bright, LV_ALIGN_TOP_MID, 14, y + 14);
+        lv_obj_set_ext_click_area(g_bright, 16);
+        lv_obj_set_style_radius(g_bright, 3, LV_PART_MAIN);
+        lv_obj_set_style_radius(g_bright, 3, LV_PART_INDICATOR);
+        lv_obj_set_parent(sun, root);
+        lv_obj_set_style_text_font(sun, TF(ICON_20), 0);
+        lv_obj_set_style_text_color(sun, TC(TEXT_PRIMARY), 0);
+        lv_obj_align_to(sun, g_bright, LV_ALIGN_OUT_LEFT_MID, -12, 0);
+    }
 }
 
 /* ---- build / refresh --------------------------------------------------------------------------- */
@@ -277,9 +347,9 @@ void quicksettings_build(void){
     if(!g_qs_root) return;
     lv_obj_clean(g_qs_root);
     g_bright = NULL; g_pp_glyph = NULL; g_prev_glyph = NULL; g_next_glyph = NULL;
-    for(int i=0;i<QT_COUNT;i++) g_tile_dot[i] = NULL;
+    for(int i=0;i<QT_COUNT;i++){ g_tile_dot[i] = NULL; g_tile_lbl[i] = NULL; }
 
-    lv_obj_set_style_bg_color(g_qs_root, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(g_qs_root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(g_qs_root, LV_OPA_COVER, 0);
 
     /* grabber */
@@ -289,7 +359,7 @@ void quicksettings_build(void){
     lv_obj_set_size(grab, 36, 5);
     lv_obj_align(grab, LV_ALIGN_TOP_MID, 0, 12);
     lv_obj_set_style_radius(grab, 3, 0);
-    lv_obj_set_style_bg_color(grab, lv_color_hex(QS_GRAB), 0);
+    lv_obj_set_style_bg_color(grab, TC(GRABBER), 0);
     lv_obj_set_style_bg_opa(grab, LV_OPA_COVER, 0);
 
     int have_tr = cfg_get_int("qs_transport", 0) ? 1 : 0;
@@ -314,22 +384,29 @@ void quicksettings_build(void){
         }
         y += H_ROW + GAP;
     }
+    if(theme_kit()->quicksettings){                   /* the active theme lays the drawer out its own way */
+        qs_parts_t q = { g_qs_root, grab, g_bright, g_prev_glyph ? lv_obj_get_parent(g_prev_glyph) : NULL,
+                         g_pp_glyph ? lv_obj_get_parent(g_pp_glyph) : NULL,
+                         g_next_glyph ? lv_obj_get_parent(g_next_glyph) : NULL, nt, {0}, {0} };
+        for(int i = 0; i < nt; i++){ q.tile[i] = g_tile_dot[ids[i]]; q.cap[i] = g_tile_lbl[ids[i]]; }
+        theme_kit()->quicksettings(&q);
+    }
     quicksettings_refresh(ui_is_playing());
 }
 
 /* light update while the panel is open (playstate ticks, radio/EQ state changes) - no rebuild */
 void quicksettings_refresh(int playing){
     if(g_bright && !lv_obj_has_state(g_bright, LV_STATE_PRESSED))
-        lv_slider_set_value(g_bright, ui_get_brightness(), LV_ANIM_OFF);
-    if(g_pp_glyph) lv_label_set_text(g_pp_glyph, ui_pp_icon_playing(playing) ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+        lv_slider_set_value(g_bright, ui_effective_brightness(), LV_ANIM_OFF);
+    if(g_pp_glyph) ui_pp_glyph(g_pp_glyph, ui_pp_icon_playing(playing));
     int book = ui_book_active();
     if(g_prev_glyph){
         lv_label_set_text(g_prev_glyph, book ? "-15" : LV_SYMBOL_PREV);
-        lv_obj_set_style_text_font(g_prev_glyph, book ? &lv_font_montserrat_16 : &lv_font_montserrat_22, 0);
+        lv_obj_set_style_text_font(g_prev_glyph, book ? TF(UI_16) : TF(UI_22), 0);
     }
     if(g_next_glyph){
         lv_label_set_text(g_next_glyph, book ? "+30" : LV_SYMBOL_NEXT);
-        lv_obj_set_style_text_font(g_next_glyph, book ? &lv_font_montserrat_16 : &lv_font_montserrat_22, 0);
+        lv_obj_set_style_text_font(g_next_glyph, book ? TF(UI_16) : TF(UI_22), 0);
     }
     for(int i=0;i<QT_COUNT;i++)
         if(g_tile_dot[i]) tile_recolor(i, qtile_is_on(i));
@@ -370,24 +447,24 @@ static void qscfg_sw_cb(lv_event_t *e){
 static void qscfg_row(lv_obj_t *list, const char *label, int id, int on){
     lv_obj_t *row = lv_obj_create(list);
     lv_obj_remove_style_all(row);
-    lv_obj_set_size(row, 288, 50);
+    lv_obj_set_size(row, 268, 50);
     lv_obj_set_style_radius(row, 12, 0);
-    lv_obj_set_style_bg_color(row, lv_color_hex(QS_CARD), 0);
+    lv_obj_set_style_bg_color(row, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_70, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *lbl = lv_label_create(row);
-    lv_label_set_text(lbl, label);
+    lv_label_set_text(lbl, tr(label));
     lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 16, 0);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(lbl, TF(UI_16), 0);
+    lv_obj_set_style_text_color(lbl, TC(TEXT_PRIMARY), 0);
 
     lv_obj_t *sw = lv_switch_create(row);
     lv_obj_set_size(sw, 48, 26);
     lv_obj_align(sw, LV_ALIGN_RIGHT_MID, -12, 0);
     if(on) lv_obj_add_state(sw, LV_STATE_CHECKED);
     lv_obj_set_style_bg_color(sw, ui_current_accent(), LV_PART_INDICATOR | LV_STATE_CHECKED);
-    lv_obj_add_event_cb(sw, qscfg_sw_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)id);
+    ui_on(sw, qscfg_sw_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)id, "quicksettings.qscfg_sw.value", UI_CORE);
 }
 
 void qsconfig_create(lv_obj_t *root){ g_qscfg_root = root; }
@@ -395,7 +472,7 @@ void qsconfig_create(lv_obj_t *root){ g_qscfg_root = root; }
 void qsconfig_refresh(void){
     if(!g_qscfg_root) return;
     lv_obj_clean(g_qscfg_root);
-    lv_obj_set_style_bg_color(g_qscfg_root, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(g_qscfg_root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(g_qscfg_root, LV_OPA_COVER, 0);
     ui_header_cb(g_qscfg_root, "Quick Settings", qscfg_back_cb);
 
@@ -416,11 +493,11 @@ void qsconfig_refresh(void){
         qscfg_row(list, QTILES[i].cap, i, cfg_get_int(QTILES[i].cfg, QTILES[i].def_on));
 
     lv_obj_t *hint = lv_label_create(list);
-    lv_label_set_text(hint, "The drawer shows up to 6 tiles (5 with playback controls).");
+    lv_label_set_text(hint, tr("The drawer shows up to 6 tiles (5 with playback controls)."));
     lv_obj_set_width(hint, 288);
     lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(hint, lv_color_hex(QS_TXT2), 0);
+    lv_obj_set_style_text_font(hint, TF(UI_14), 0);
+    lv_obj_set_style_text_color(hint, TC(TEXT_MUTED), 0);
     lv_obj_set_style_pad_top(hint, 6, 0);
     lv_obj_set_style_pad_left(hint, 6, 0);
 }

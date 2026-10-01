@@ -5,7 +5,7 @@
 # Produces, for the Mac's current arch (arm64 or x86_64):
 #   vendor/macos-<arch>/usbboot                 (compiled from ../src/usbboot)
 #   vendor/macos-<arch>/mksquashfs, unsquashfs  (lzo-capable)
-#   vendor/macos-<arch>/my_write5_dram.bin, disc_spl_lpddr3.bin  (device blobs)
+#   vendor/macos-<arch>/my_write6_dram.bin, disc_spl_lpddr3.bin  (device blobs)
 #   vendor/macos-<arch>/lib/*.dylib             (bundled deps; load paths rewritten)
 #
 # Build-time deps (Homebrew): libusb, squashfs, lzo, dylibbundler.
@@ -34,7 +34,26 @@ brew list pkg-config    >/dev/null 2>&1 || brew install pkg-config
 brew list libusb        >/dev/null 2>&1 || brew install libusb
 brew list lzo           >/dev/null 2>&1 || brew install lzo
 brew list squashfs      >/dev/null 2>&1 || brew install squashfs
+brew list lz4           >/dev/null 2>&1 || brew install lz4
+brew list xz            >/dev/null 2>&1 || brew install xz
+brew list zstd          >/dev/null 2>&1 || brew install zstd
 brew list dylibbundler  >/dev/null 2>&1 || brew install dylibbundler
+
+# Keep bundled binaries aligned with corresponding-source/macos-arm64/.
+check_brew_version() {
+  local name="$1" version="$2" installed
+  installed="$(brew list --versions "$name")"
+  if [ "$installed" != "$name $version" ]; then
+    echo "ERROR: expected Homebrew $name $version; found '${installed:-not installed}'. Install the pinned version before rebuilding." >&2
+    exit 2
+  fi
+}
+check_brew_version squashfs 4.7.5
+check_brew_version libusb 1.0.30
+check_brew_version lzo 2.10
+check_brew_version lz4 1.10.0
+check_brew_version xz 5.8.4
+check_brew_version zstd 1.5.7
 
 # a C compiler (clang via Xcode CLT) is required
 if ! command -v cc >/dev/null 2>&1; then
@@ -70,7 +89,7 @@ cp "$UNSQ" "$OUT/unsquashfs"
 echo "   squashfs-tools: lzo OK"
 
 # --- device blobs (arch-neutral) --------------------------------------------
-cp flash/my_write5_dram.bin  "$OUT/my_write5_dram.bin"
+cp flash/my_write6_dram.bin  "$OUT/my_write6_dram.bin"
 cp flash/disc_spl_lpddr3.bin "$OUT/disc_spl_lpddr3.bin"
 
 # --- make every binary self-contained (bundle dylibs, rewrite to @loader_path)
@@ -89,6 +108,7 @@ check_macho() {   # $1 = mach-o file
     echo "   !! $1 still references external paths:"; otool -L "$1" | grep -E "$BREW_PREFIX|homebrew|Cellar" || true
     leak=1
   }
+  return 0          # a clean file must not trip set -e (grep -q finding nothing is the good case)
 }
 for b in usbboot mksquashfs unsquashfs; do check_macho "$OUT/$b"; done
 for d in "$LIB"/*; do [ -f "$d" ] && check_macho "$d"; done   # every copied dylib too (B2.3)
