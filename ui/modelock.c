@@ -31,6 +31,7 @@ static lv_obj_t *g_cont_storage;
 
 /* Bluetooth Receiver view widgets */
 static lv_obj_t *g_bt_disc;
+static lv_obj_t *g_bt_spindle;
 static lv_obj_t *g_bt_track_title;
 static lv_obj_t *g_bt_track_sub;
 static lv_obj_t *g_bt_codec_badge;
@@ -400,10 +401,16 @@ static void modelock_poll_cb(lv_timer_t *t){
     if(g_bt_codec_lbl){
         if(st.connected && st.codec[0]){
             lv_label_set_text(g_bt_codec_lbl, st.codec);
-            if(g_bt_codec_badge) lv_obj_remove_flag(g_bt_codec_badge, LV_OBJ_FLAG_HIDDEN);
+            if(g_bt_codec_badge){
+                lv_obj_remove_flag(g_bt_codec_badge, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 212);
+            }
         } else if(st.connected){
             lv_label_set_text(g_bt_codec_lbl, "BT Audio");
-            if(g_bt_codec_badge) lv_obj_remove_flag(g_bt_codec_badge, LV_OBJ_FLAG_HIDDEN);
+            if(g_bt_codec_badge){
+                lv_obj_remove_flag(g_bt_codec_badge, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 212);
+            }
         } else {
             if(g_bt_codec_badge) lv_obj_add_flag(g_bt_codec_badge, LV_OBJ_FLAG_HIDDEN);
         }
@@ -530,17 +537,22 @@ void modelock_create(lv_obj_t *root){
 
     /* 1. Header (Mode title + Status badge) */
     g_hdr_title = lv_label_create(root);
-    lv_obj_set_pos(g_hdr_title, 20, 20);
-    lv_obj_set_size(g_hdr_title, 320, 28);
+    lv_obj_set_pos(g_hdr_title, 20, 16);
+    lv_obj_set_width(g_hdr_title, 320);
+    lv_obj_set_height(g_hdr_title, LV_SIZE_CONTENT);
+    lv_obj_clear_flag(g_hdr_title, LV_OBJ_FLAG_SCROLLABLE);
     lv_label_set_text(g_hdr_title, "Mode Lockdown");
     lv_obj_set_style_text_align(g_hdr_title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_hdr_title, ui_font_cjk(18), 0);
+    lv_obj_set_style_text_font(g_hdr_title, ui_font_cjk(16), 0);
     lv_obj_set_style_text_color(g_hdr_title, lv_color_hex(0xFFFFFF), 0);
 
     g_hdr_status = lv_label_create(root);
-    lv_obj_set_pos(g_hdr_status, 20, 48);
-    lv_obj_set_size(g_hdr_status, 320, 22);
+    lv_obj_set_pos(g_hdr_status, 20, 40);
+    lv_obj_set_width(g_hdr_status, 320);
+    lv_obj_set_height(g_hdr_status, LV_SIZE_CONTENT);
+    lv_obj_clear_flag(g_hdr_status, LV_OBJ_FLAG_SCROLLABLE);
     lv_label_set_text(g_hdr_status, "Active");
+    lv_label_set_long_mode(g_hdr_status, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(g_hdr_status, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(g_hdr_status, ui_font_cjk(14), 0);
     lv_obj_set_style_text_color(g_hdr_status, lv_color_hex(0x8E8E93), 0);
@@ -548,17 +560,16 @@ void modelock_create(lv_obj_t *root){
     /* 2. Container for Bluetooth Receiving (Mode 2) */
     g_cont_bt = lv_obj_create(root);
     lv_obj_remove_style_all(g_cont_bt);
-    lv_obj_set_pos(g_cont_bt, 0, 72);
-    lv_obj_set_size(g_cont_bt, 360, 224);
+    lv_obj_set_pos(g_cont_bt, 0, 0);
+    lv_obj_set_size(g_cont_bt, 360, 360);
+    lv_obj_clear_flag(g_cont_bt, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(g_cont_bt, LV_OBJ_FLAG_SCROLLABLE);
-
-
 
     /* Vinyl disc visual */
     g_bt_disc = lv_obj_create(g_cont_bt);
     lv_obj_remove_style_all(g_bt_disc);
     lv_obj_set_size(g_bt_disc, 84, 84);
-    lv_obj_set_pos(g_bt_disc, 138, 2);
+    lv_obj_set_pos(g_bt_disc, 138, 62);
     lv_obj_set_style_radius(g_bt_disc, 42, 0);
     lv_obj_set_style_bg_color(g_bt_disc, lv_color_hex(0x18181A), 0);
     lv_obj_set_style_bg_opa(g_bt_disc, LV_OPA_COVER, 0);
@@ -575,16 +586,24 @@ void modelock_create(lv_obj_t *root){
     lv_obj_set_style_border_width(ring1, 1, 0);
     lv_obj_set_style_border_color(ring1, lv_color_hex(0x28282A), 0);
 
-    /* Center spindle label */
-    lv_obj_t *spindle = lv_obj_create(g_bt_disc);
-    lv_obj_remove_style_all(spindle);
-    lv_obj_set_size(spindle, 28, 28);
-    lv_obj_center(spindle);
-    lv_obj_set_style_radius(spindle, 14, 0);
-    lv_obj_set_style_bg_color(spindle, ui_current_accent(), 0);
-    lv_obj_set_style_bg_opa(spindle, LV_OPA_COVER, 0);
+    lv_obj_t *ring2 = lv_obj_create(g_bt_disc);
+    lv_obj_remove_style_all(ring2);
+    lv_obj_set_size(ring2, 46, 46);
+    lv_obj_center(ring2);
+    lv_obj_set_style_radius(ring2, 23, 0);
+    lv_obj_set_style_border_width(ring2, 1, 0);
+    lv_obj_set_style_border_color(ring2, lv_color_hex(0x222224), 0);
 
-    lv_obj_t *bt_icon = lv_label_create(spindle);
+    /* Center spindle label */
+    g_bt_spindle = lv_obj_create(g_bt_disc);
+    lv_obj_remove_style_all(g_bt_spindle);
+    lv_obj_set_size(g_bt_spindle, 28, 28);
+    lv_obj_center(g_bt_spindle);
+    lv_obj_set_style_radius(g_bt_spindle, 14, 0);
+    lv_obj_set_style_bg_color(g_bt_spindle, ui_current_accent(), 0);
+    lv_obj_set_style_bg_opa(g_bt_spindle, LV_OPA_COVER, 0);
+
+    lv_obj_t *bt_icon = lv_label_create(g_bt_spindle);
     lv_label_set_text(bt_icon, LV_SYMBOL_BLUETOOTH);
     lv_obj_center(bt_icon);
     lv_obj_set_style_text_color(bt_icon, lv_color_hex(0x000000), 0);
@@ -592,34 +611,37 @@ void modelock_create(lv_obj_t *root){
 
     /* Track Title */
     g_bt_track_title = lv_label_create(g_cont_bt);
-    lv_obj_set_pos(g_bt_track_title, 20, 88);
+    lv_obj_set_pos(g_bt_track_title, 20, 152);
     lv_obj_set_width(g_bt_track_title, 320);
     lv_obj_set_height(g_bt_track_title, LV_SIZE_CONTENT);
     lv_obj_clear_flag(g_bt_track_title, LV_OBJ_FLAG_SCROLLABLE);
     lv_label_set_text(g_bt_track_title, "Ready to Connect");
     lv_label_set_long_mode(g_bt_track_title, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_style_text_align(g_bt_track_title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_bt_track_title, ui_font_cjk(16), 0);
+    lv_obj_set_style_text_font(g_bt_track_title, ui_font_cjk(20), 0);
     lv_obj_set_style_text_color(g_bt_track_title, lv_color_hex(0xFFFFFF), 0);
 
     /* Track Sub (Artist / Album) */
     g_bt_track_sub = lv_label_create(g_cont_bt);
-    lv_obj_set_pos(g_bt_track_sub, 20, 114);
-    lv_obj_set_width(g_bt_track_sub, 320);
+    lv_obj_set_pos(g_bt_track_sub, 25, 182);
+    lv_obj_set_width(g_bt_track_sub, 310);
     lv_obj_set_height(g_bt_track_sub, LV_SIZE_CONTENT);
     lv_obj_clear_flag(g_bt_track_sub, LV_OBJ_FLAG_SCROLLABLE);
     lv_label_set_text(g_bt_track_sub, "Select 'SNOWSKY DISC' on phone");
     lv_label_set_long_mode(g_bt_track_sub, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_style_text_align(g_bt_track_sub, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_bt_track_sub, ui_font_cjk(14), 0);
+    lv_obj_set_style_text_font(g_bt_track_sub, ui_font_cjk(16), 0);
     lv_obj_set_style_text_color(g_bt_track_sub, lv_color_hex(0x8E8E93), 0);
 
     /* Codec pill badge */
     g_bt_codec_badge = lv_obj_create(g_cont_bt);
     lv_obj_remove_style_all(g_bt_codec_badge);
-    lv_obj_set_size(g_bt_codec_badge, 220, 22);
-    lv_obj_set_pos(g_bt_codec_badge, 70, 138);
-    lv_obj_set_style_radius(g_bt_codec_badge, 11, 0);
+    lv_obj_set_size(g_bt_codec_badge, LV_SIZE_CONTENT, 24);
+    lv_obj_set_style_min_width(g_bt_codec_badge, 80, 0);
+    lv_obj_set_style_pad_hor(g_bt_codec_badge, 14, 0);
+    lv_obj_set_style_pad_ver(g_bt_codec_badge, 2, 0);
+    lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 212);
+    lv_obj_set_style_radius(g_bt_codec_badge, 12, 0);
     lv_obj_set_style_bg_color(g_bt_codec_badge, lv_color_hex(0x18181A), 0);
     lv_obj_set_style_bg_opa(g_bt_codec_badge, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(g_bt_codec_badge, 1, 0);
@@ -629,23 +651,23 @@ void modelock_create(lv_obj_t *root){
     g_bt_codec_lbl = lv_label_create(g_bt_codec_badge);
     lv_label_set_text(g_bt_codec_lbl, "Bluetooth Audio");
     lv_obj_center(g_bt_codec_lbl);
-    lv_obj_set_style_text_font(g_bt_codec_lbl, ui_font_cjk(12), 0);
+    lv_obj_set_style_text_font(g_bt_codec_lbl, ui_font_cjk(14), 0);
     lv_obj_set_style_text_color(g_bt_codec_lbl, ui_current_accent(), 0);
 
     /* Transport Controls Row */
     lv_obj_t *ctrl_row = lv_obj_create(g_cont_bt);
     lv_obj_remove_style_all(ctrl_row);
-    lv_obj_set_pos(ctrl_row, 60, 164);
-    lv_obj_set_size(ctrl_row, 240, 56);
+    lv_obj_set_size(ctrl_row, 240, 60);
+    lv_obj_align(ctrl_row, LV_ALIGN_TOP_MID, 0, 246);
     lv_obj_set_flex_flow(ctrl_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(ctrl_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(ctrl_row, 20, 0);
+    lv_obj_set_style_pad_column(ctrl_row, 22, 0);
 
     /* Prev button */
     g_btn_prev = lv_button_create(ctrl_row);
     lv_obj_remove_style_all(g_btn_prev);
-    lv_obj_set_size(g_btn_prev, 44, 44);
-    lv_obj_set_style_radius(g_btn_prev, 22, 0);
+    lv_obj_set_size(g_btn_prev, 46, 46);
+    lv_obj_set_style_radius(g_btn_prev, 23, 0);
     lv_obj_set_style_bg_color(g_btn_prev, lv_color_hex(0x242426), 0);
     lv_obj_set_style_bg_opa(g_btn_prev, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(g_btn_prev, lv_color_hex(0x3A3A3C), LV_STATE_PRESSED);
@@ -654,12 +676,13 @@ void modelock_create(lv_obj_t *root){
     lv_label_set_text(lbl_prev, LV_SYMBOL_PREV);
     lv_obj_center(lbl_prev);
     lv_obj_set_style_text_color(lbl_prev, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(lbl_prev, &lv_font_montserrat_20, 0);
 
     /* Play/Pause button */
     g_btn_pp = lv_button_create(ctrl_row);
     lv_obj_remove_style_all(g_btn_pp);
-    lv_obj_set_size(g_btn_pp, 52, 52);
-    lv_obj_set_style_radius(g_btn_pp, 26, 0);
+    lv_obj_set_size(g_btn_pp, 56, 56);
+    lv_obj_set_style_radius(g_btn_pp, 28, 0);
     lv_obj_set_style_bg_color(g_btn_pp, lv_color_hex(0x2C2C2E), 0);
     lv_obj_set_style_bg_opa(g_btn_pp, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(g_btn_pp, 2, 0);
@@ -670,13 +693,13 @@ void modelock_create(lv_obj_t *root){
     lv_label_set_text(g_lbl_pp, LV_SYMBOL_PLAY);
     lv_obj_center(g_lbl_pp);
     lv_obj_set_style_text_color(g_lbl_pp, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(g_lbl_pp, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(g_lbl_pp, &lv_font_montserrat_24, 0);
 
     /* Next button */
     g_btn_next = lv_button_create(ctrl_row);
     lv_obj_remove_style_all(g_btn_next);
-    lv_obj_set_size(g_btn_next, 44, 44);
-    lv_obj_set_style_radius(g_btn_next, 22, 0);
+    lv_obj_set_size(g_btn_next, 46, 46);
+    lv_obj_set_style_radius(g_btn_next, 23, 0);
     lv_obj_set_style_bg_color(g_btn_next, lv_color_hex(0x242426), 0);
     lv_obj_set_style_bg_opa(g_btn_next, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(g_btn_next, lv_color_hex(0x3A3A3C), LV_STATE_PRESSED);
@@ -685,6 +708,7 @@ void modelock_create(lv_obj_t *root){
     lv_label_set_text(lbl_next, LV_SYMBOL_NEXT);
     lv_obj_center(lbl_next);
     lv_obj_set_style_text_color(lbl_next, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(lbl_next, &lv_font_montserrat_20, 0);
 
     /* 3. Container for USB DAC (Mode 1) */
     g_cont_dac = lv_obj_create(root);
@@ -767,7 +791,7 @@ void modelock_create(lv_obj_t *root){
     /* Subtle exit hint at bottom */
     lv_obj_t *hint = lv_label_create(root);
     lv_label_set_text(hint, LV_SYMBOL_LEFT " Swipe right to exit");
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -16);
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -10);
     lv_obj_set_style_text_font(hint, ui_font_cjk(12), 0);
     lv_obj_set_style_text_color(hint, lv_color_hex(0x555558), 0);
 }
@@ -845,7 +869,8 @@ void modelock_open(int mode){
     }
 
     /* Update colors to current accent */
-    if(g_btn_pp)   lv_obj_set_style_border_color(g_btn_pp, ui_current_accent(), 0);
+    if(g_bt_spindle)     lv_obj_set_style_bg_color(g_bt_spindle, ui_current_accent(), 0);
+    if(g_btn_pp)         lv_obj_set_style_border_color(g_btn_pp, ui_current_accent(), 0);
     if(g_bt_codec_badge) lv_obj_set_style_border_color(g_bt_codec_badge, ui_current_accent(), 0);
     if(g_bt_codec_lbl)   lv_obj_set_style_text_color(g_bt_codec_lbl, ui_current_accent(), 0);
 
