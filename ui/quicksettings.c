@@ -123,11 +123,29 @@ static void tile_short_cb(lv_event_t *e){
     int id = (int)(intptr_t)lv_event_get_user_data(e);
     switch(id){
         case QT_WIFI:      { int on = wifi_toggle(); tile_recolor(QT_WIFI, on); ui_toast(on ? "Turning on Wi-Fi..." : "Wi-Fi off"); } break;
-        case QT_BT:        { int on = bt_toggle();   tile_recolor(QT_BT,   on); ui_toast(on ? "Turning on Bluetooth..." : "Bluetooth off"); } break;
+        case QT_BT: {
+            if(modelock_is_active() && modelock_get_mode() == 2){
+                ui_toast("Exit Bluetooth Receiver first");
+                break;
+            }
+            int on = bt_toggle();
+            tile_recolor(QT_BT, on);
+            ui_toast(on ? "Turning on Bluetooth..." : "Bluetooth off");
+        } break;
         case QT_EQ:        eq_toggle(); break;
-        case QT_SEARCH:    screen_show(SCR_SEARCH); break;
+        case QT_SEARCH:
+            if(modelock_is_active()){ ui_toast("Exit current mode first"); break; }
+            screen_show(SCR_SEARCH);
+            break;
         case QT_RESCAN:    ui_rescan_library(); break;
-        case QT_MODE:      modes_open(); break;
+        case QT_MODE:
+            if(modelock_is_active()){
+                screen_back();
+                modelock_prompt_exit();
+                break;
+            }
+            modes_open();
+            break;
         case QT_SCREENOFF: ui_request_sleep(); screen_show(SCR_SAVER); break;
         case QT_SHUFFLE: {
             if(ui_book_active()){ ui_toast("Not available in books"); break; }   /* books stay in Single */
@@ -141,8 +159,14 @@ static void tile_short_cb(lv_event_t *e){
             int nv = !st.is_favorite; ui_set_favorite(nv);
             tile_recolor(QT_FAV, nv); ui_toast(nv ? "Loved" : "Unloved");
         } break;
-        case QT_LYRICS: lyrics_open(); break;
-        case QT_TIMER:  settings_open_key("sleep_idx"); break;      /* opens the Sleep Timer chooser */
+        case QT_LYRICS:
+            if(modelock_is_active()){ ui_toast("Exit current mode first"); break; }
+            lyrics_open();
+            break;
+        case QT_TIMER:
+            if(modelock_is_active()){ ui_toast("Exit current mode first"); break; }
+            settings_open_key("sleep_idx");
+            break;      /* opens the Sleep Timer chooser */
         case QT_GAPLESS: {
             int on = cfg_get_int("gapless", 0) ? 0 : 1;
             cfg_set_int("gapless", on); ui_set_gapless(on);
@@ -158,10 +182,17 @@ static void tile_short_cb(lv_event_t *e){
             cfg_set_int("audio_dre", on); ui_set_dre(on);
             tile_recolor(QT_DRE, on); ui_toast(on ? "DRE on" : "DRE off");
         } break;
-        case QT_RG:     settings_open_key("replay_gain"); break;    /* opens the ReplayGain chooser */
+        case QT_RG:
+            if(modelock_is_active()){ ui_toast("Exit current mode first"); break; }
+            settings_open_key("replay_gain");
+            break;    /* opens the ReplayGain chooser */
     }
 }
 static void tile_long_cb(lv_event_t *e){
+    if(modelock_is_active()){
+        ui_toast("Exit current mode first");
+        return;
+    }
     int id = (int)(intptr_t)lv_event_get_user_data(e);
     switch(id){
         case QT_WIFI: wifi_open(); break;

@@ -197,13 +197,17 @@ void screen_show(int which)
         which != SCR_MODELOCK && which != SCR_HOME && which != SCR_SAVER && which != SCR_QUICK) return;
     int from = s_current;
     if (which != s_current) {
-        int cap = (int)(sizeof(s_stack)/sizeof(s_stack[0]));
-        if (s_sp >= cap) {            /* full: keep the root (s_stack[0]) so Back still
-                                       * reaches Home; drop the 2nd-oldest instead */
-            for (int i = 2; i < cap; i++) s_stack[i-1] = s_stack[i];
-            s_sp = cap - 1;
+        if (which == SCR_HOME) {
+            s_sp = 0;
+        } else if (s_current != SCR_MODELOCK || which == SCR_QUICK || which == SCR_SAVER) {
+            int cap = (int)(sizeof(s_stack)/sizeof(s_stack[0]));
+            if (s_sp >= cap) {            /* full: keep the root (s_stack[0]) so Back still
+                                           * reaches Home; drop the 2nd-oldest instead */
+                for (int i = 2; i < cap; i++) s_stack[i-1] = s_stack[i];
+                s_sp = cap - 1;
+            }
+            s_stack[s_sp++] = s_current;
         }
-        s_stack[s_sp++] = s_current;
     }
     s_current = which;
     transition(from, which, +1);
@@ -212,12 +216,24 @@ void screen_show(int which)
 /* Pop the nav stack (swipe / back gesture). Home is the root: no-op. */
 void screen_back(void)
 {
-    if (s_current == SCR_MODELOCK) return;
-    if (s_sp <= 0) return;
-    int from = s_current;
-    int prev = s_stack[--s_sp];
-    s_current = prev;
-    transition(from, prev, -1);
+    if (s_current == SCR_HOME || s_current == SCR_MODELOCK) return;
+    while (s_sp > 0) {
+        int prev = s_stack[--s_sp];
+        if (prev == SCR_MODELOCK && !modelock_is_active()) continue;
+        if (prev >= 0 && prev < SCR_COUNT && prev != s_current) {
+            int from = s_current;
+            s_current = prev;
+            transition(from, prev, -1);
+            return;
+        }
+    }
+    if (s_current == SCR_SAVER || s_current == SCR_QUICK) {
+        /* Overlay dismissed with empty stack: return to active lockmode or Home */
+        int fallback = modelock_is_active() ? SCR_MODELOCK : SCR_HOME;
+        int from = s_current;
+        s_current = fallback;
+        transition(from, fallback, -1);
+    }
 }
 
 lv_obj_t *screen_get_root(int which)

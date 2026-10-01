@@ -10,6 +10,8 @@ void modelock_create(lv_obj_t *root);     /* SCR_MODELOCK: mode lockdown screen 
 void modelock_open(int mode);             /* 1=USB DAC, 2=BT Receiver, 3=USB Storage */
 void modelock_close(void);
 int  modelock_is_active(void);
+int  modelock_get_mode(void);
+void modelock_prompt_exit(void);
 void screens_init(void);
 void screen_show(int which);
 void screen_back(void);
