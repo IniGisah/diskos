@@ -25,6 +25,7 @@ typedef struct {
     unsigned pos_seq;    /* value of seq when position was last reported (an a1 frame). pos_seq > path_seq
                           * means the current position was reported AFTER the current track loaded, i.e. it
                           * belongs to this track and not a stale one - used to gate audiobook checkpoints. */
+    int  uac_srate;   /* USB DAC (UAC) live sample rate code from aa1b (0=idle, 44=44.1k, 48=48k, etc.) */
 } track_state_t;
 
 #define VOL_MAX 120   /* device MAX_VOL (sysconfig); a714 VV is on this same 0..120 scale */
@@ -41,4 +42,6 @@ int  ipc_take_reconnected(void);       /* 1 (and clears) after a recovery reatta
 unsigned ipc_rx_frames(void);          /* count of /ui frames received from the player (>0 => player up) */
 int  ipc_player_mode(void);            /* last a607 player mode this gen: -1=none, 8=LOCALPLAYER (v2.40 oracle) */
 unsigned ipc_generation(void);         /* bumps on each /ui reattach (player restart) - v2.40 one-shot re-arm */
+int  ipc_get_uac_srate(void);          /* live USB DAC sample rate code (0=idle, 44, 48, etc.) */
+void ipc_reset_uac_srate(void);        /* reset UAC sample rate cache on mode transitions */
 #endif

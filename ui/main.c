@@ -372,6 +372,16 @@ void ui_set_maxvol(int v){     if(v<0) v=0; if(v>120) v=120; char f[16]; snprint
 void ui_set_balance(int v){ if(v < -10 || v > 10) return;   /* enforce UI range; avoids -INT_MIN UB */
                             int fv = (v>0) ? (v & 0xFF) : (v<0) ? (0x0100 | ((-v) & 0xFF)) : 0;
                             char f[16]; snprintf(f,sizeof f,"0713000C%04X",fv); ipc_send_cmd(f); }
+void ui_set_dsd_mode(int mode){ if(mode<0||mode>2) return; char f[16]; snprintf(f,sizeof f,"0807000C%04X",mode); ipc_send_cmd(f); }
+void ui_set_charge_protect(int on){ if(on<0) return; char f[16]; snprintf(f,sizeof f,"0808000C%04X",on?1:0); ipc_send_cmd(f); }
+void ui_set_lock_key_remap(int mode){
+    if(mode<0||mode>1) return;
+    char f1[16], f2[16];
+    snprintf(f1, sizeof f1, "0820000C%04X", mode ? 1 : 0);
+    snprintf(f2, sizeof f2, "0822000C%04X", mode ? 1 : 0);
+    ipc_send_cmd(f1);
+    ipc_send_cmd(f2);
+}
 
 /* ---- Bluetooth audio output routing (live-captured from working stock mq_ui) --------------
  * Follow stock's pre-stop/mode/work/BT-init/route/work/codec/volume transition. The
@@ -738,6 +748,9 @@ void ui_reapply_audio(void){
         int gp = cfg_get_int("gapless", -1);     if(gp >= 0)             ui_set_gapless(gp);
         int mv = cfg_get_int("max_vol", -1);     if(mv >= 10)            ui_set_maxvol(mv);    /* <10 or unset = skip */
         int bl = cfg_get_int("balance", -100);   if(bl >= -10 && bl<=10) ui_set_balance(bl);   /* -1 is a VALID balance */
+        int dsd = cfg_get_int("dsd_mode", -1);   if(dsd >= 0 && dsd <= 2) ui_set_dsd_mode(dsd);
+        int cp  = cfg_get_int("charge_protect", -1); if(cp >= 0)         ui_set_charge_protect(cp);
+        int kr  = cfg_get_int("lock_key_remap", -1); if(kr >= 0)         ui_set_lock_key_remap(kr);
     }
 }
 /* "<type>:<name>" of the list currently built into the player's LIST_SONG_0 (see

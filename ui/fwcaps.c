@@ -19,13 +19,7 @@ static const struct { int ver; const char *tag; } GAIN_MAP[] = {
     { 209, "0645" },
     { 228, "0649" },
     { 240, "0649" },
-#if defined(DISKOS_TEST_V257_GAIN) && DISKOS_TEST_V257_GAIN
-    /* V2.57's player implements 0649 (RE-confirmed handler identity), but it is NOT yet
-     * gain-tested on device. Ordinary builds leave this out so fw_gain_tag() fails closed
-     * (returns NULL -> no gain command sent). A dedicated gain-test build defines
-     * DISKOS_TEST_V257_GAIN=1; after successful on-device qualification, drop the guard. */
     { 257, "0649" },
-#endif
 };
 
 static int parse_os_ver(void){

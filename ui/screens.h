@@ -142,6 +142,9 @@ void ui_set_gapless(int on);
 void ui_set_memory(int mode);
 void ui_set_maxvol(int v);
 void ui_set_balance(int v);
+void ui_set_dsd_mode(int mode);        /* 0=DoP 1=Native 2=D2P */
+void ui_set_charge_protect(int on);    /* 0=Off 1=On (80% charge cap) */
+void ui_set_lock_key_remap(int mode);  /* 0=Vol/Track 1=Track/Vol */
 void ui_reapply_audio(void);  /* resend managed audio settings (DRE/filter/etc.) on player-ready / reconnect */
 void ui_request_sleep(void);  /* Quick Settings "Sleep": manual screen-off request (works with saver Off) */
 void ui_set_brightness(int v);   /* persist + apply */

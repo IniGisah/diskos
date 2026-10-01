@@ -64,6 +64,9 @@ void ui_set_gapless(int on);
 void ui_set_memory(int mode);
 void ui_set_maxvol(int v);
 void ui_set_balance(int v);
+void ui_set_dsd_mode(int mode);
+void ui_set_charge_protect(int on);
+void ui_set_lock_key_remap(int mode);
 
 static void apply_open_colorpick(int v){ (void)v; colorpick_open(); }   /* seed sliders from cfg + open */
 static void apply_debug_mode(int v){ (void)v; debug_open(); }           /* Settings -> System -> Debug Mode */
@@ -85,6 +88,9 @@ static void apply_gapless(int v){ ui_set_gapless(v); }
 static void apply_memory(int v){ ui_set_memory(v); }
 static void apply_maxvol(int v){ ui_set_maxvol(v); }
 static void apply_balance(int v){ ui_set_balance(v); }
+static void apply_dsd_mode(int v){ ui_set_dsd_mode(v); }
+static void apply_charge_protect(int v){ ui_set_charge_protect(v); }
+static void apply_lock_key_remap(int v){ ui_set_lock_key_remap(v); }
 static void apply_time(int v){ (void)v; ui_clock_refresh(); }
 static void apply_sleep(int idx){
     static const int M[] = {0,15,30,45,60,90};
@@ -351,6 +357,17 @@ static const char *const OPT_REPLAYGAIN[] = { "Off", "Track", "Album" };
 static const char *const OPT_GAIN[]   = { "Low", "High" };
 static const char *const OPT_DFILTER[]= { "Fast LL","Slow LL","Slow PC","Fast PC","NOS","Wideband" };
 static const char *const OPT_MEMORY[] = { "Off", "Position", "Song" };
+static const char *const OPT_DSD_MODE[] = { "DoP", "Native", "D2P" };
+static const char *const OPT_KEY_REMAP[] = { "Vol / Track", "Track / Vol" };
+static const char *const D_DSD_MODE[] = {
+    "DSD over PCM. Packages DSD audio in standard PCM frames for external DACs.",
+    "Native DSD stream directly to the CS43131 DACs without conversion.",
+    "Converts DSD to high-resolution PCM before analog output.",
+};
+static const char *const D_KEY_REMAP[] = {
+    "When screen is locked: Single click adjusts volume, long press skips track (default).",
+    "When screen is locked: Single click skips track, long press adjusts volume.",
+};
 static const char *const D_ARTCACHE[] = {
     "Album covers preload in the background so browsing stays smooth. Per-track art is decoded only as you play it (default).",
     "Covers preload, plus every track's art is pre-decoded while idle. Decoding can warm the player; it pauses automatically if it gets hot.",
@@ -377,8 +394,8 @@ static const setting_t TABLE[] = {
       "Tone preset sent to the player; audible effect is still being verified.", NULL },
     { "Playback", "Custom EQ",    ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_eq_custom, 0,
       "Adjust the 10-band custom EQ. Applies live and saves on the device.", NULL },
-    { "Playback", "DSD Output",  ST_READONLY, NULL, 0,0,0, NULL,0, "Auto", NULL, 0,
-      "The player auto-selects the DSD mode; this control isn't user-adjustable yet.", NULL },
+    { "Playback", "DSD Output Mode", ST_CYCLER, "dsd_mode", 0,0,0, OPT_DSD_MODE, 3, NULL, apply_dsd_mode, 0,
+      "Output format for DSD audio streams.", D_DSD_MODE },
     { "Playback", "Resume Playback", ST_CYCLER, "memory_play", 0,0,0, OPT_MEMORY, 3, NULL, apply_memory, 0,
       "On power-on: Off = start fresh, Position = resume the exact spot, Song = reopen the last track.", NULL },
     /* Audio/DAC cluster - cyclers with min=-1 so they can read "System default" (unmanaged):
@@ -436,6 +453,10 @@ static const setting_t TABLE[] = {
       "Pair Bluetooth devices. Audio routes to connected headphones or speakers (SBC, beta).", NULL },
     { "System",   "Sleep Timer", ST_CYCLER, "sleep_idx", 0,0,0, OPT_SLEEP, 6, NULL, apply_sleep, 0,
       "Pause playback after this long. Resets on restart.", NULL },
+    { "System",   "Lockscreen Key Remap", ST_CYCLER, "lock_key_remap", 0,0,0, OPT_KEY_REMAP, 2, NULL, apply_lock_key_remap, 0,
+      "Key function when screen is off / locked.", D_KEY_REMAP },
+    { "System",   "Battery Health Protection", ST_TOGGLE, "charge_protect", 0,1,1, NULL, 0, NULL, apply_charge_protect, 0,
+      "Cap charging at 80% to extend battery lifespan when connected to USB for long periods.", NULL },
     { "System",   "Rescan Library", ST_ACTION, NULL, 0,0,0, NULL,0, "Scan", apply_rescan, 0,
       "Re-scan the SD card for new or removed music.", NULL },
     { "System",   "Import Playlists", ST_ACTION, NULL, 0,0,0, NULL,0, "Import", apply_import_m3u, 0,

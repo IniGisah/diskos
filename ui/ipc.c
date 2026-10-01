@@ -227,6 +227,16 @@ static void parse_frame(const char*buf,int n){
         if(!all_hex(h,4)) return;
         int mode=(int)strtol(h,0,16);
         pthread_mutex_lock(&g_recov_mu); g_player_mode=mode; pthread_mutex_unlock(&g_recov_mu);
+    } else if(buf[0]=='a'&&buf[1]=='a'&&buf[2]=='1'&&buf[3]=='b' && n>=12){
+        /* "aa1b000C<RATE>" - USB DAC (UAC) live sample rate from mq_player.
+         * RATE is 4 hex chars (e.g. 002C = 44 -> 44.1kHz, 0030 = 48 -> 48kHz, 0000 = idle). */
+        char h[5]={buf[8],buf[9],buf[10],buf[11],0};
+        if(!all_hex(h,4)) return;
+        int rate=(int)strtol(h,0,16);
+        pthread_mutex_lock(&g_mu);
+        g_state.uac_srate = rate;
+        g_state.seq++;
+        pthread_mutex_unlock(&g_mu);
     }
     /* NB: for playback the player emits a1/a2/a714 to /ui (a2=state/love/work_mode/track, a1=position,
      * a714=volume) - no a622/a639/a704 completion replies. SEPARATELY, a 0657 mode CHANGE makes it announce
@@ -449,3 +459,17 @@ int ipc_is_ready(void){
 }
 /* 1 (and clears) if a command send failed since the last call - UI surfaces a toast. */
 int ipc_take_send_error(void){ int e=g_send_err; g_send_err=0; return e; }
+
+int ipc_get_uac_srate(void){
+    pthread_mutex_lock(&g_mu);
+    int r = g_state.uac_srate;
+    pthread_mutex_unlock(&g_mu);
+    return r;
+}
+
+void ipc_reset_uac_srate(void){
+    pthread_mutex_lock(&g_mu);
+    g_state.uac_srate = 0;
+    g_state.seq++;
+    pthread_mutex_unlock(&g_mu);
+}

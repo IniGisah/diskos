@@ -29,6 +29,10 @@ static lv_obj_t *g_cont_bt;
 static lv_obj_t *g_cont_dac;
 static lv_obj_t *g_cont_storage;
 
+/* USB DAC view widgets */
+static lv_obj_t *g_dac_srate_badge;
+static lv_obj_t *g_dac_srate_lbl;
+
 /* Bluetooth Receiver view widgets */
 static lv_obj_t *g_bt_disc;
 static lv_obj_t *g_bt_spindle;
@@ -353,6 +357,43 @@ void bt_rx_sync_volume(int vol){
 /* UI poll timer: updates LVGL labels and button icons on main thread */
 static void modelock_poll_cb(lv_timer_t *t){
     (void)t;
+    if(g_lock_mode == 1){
+        int rate = ipc_get_uac_srate();
+        const char *srate_str = "Idle";
+        char custom_rate[32];
+        switch(rate){
+            case 0:   srate_str = "Idle"; break;
+            case 32:  srate_str = "32 kHz"; break;
+            case 44:  srate_str = "44.1 kHz"; break;
+            case 48:  srate_str = "48 kHz"; break;
+            case 88:  srate_str = "88.2 kHz"; break;
+            case 96:  srate_str = "96 kHz"; break;
+            case 176: srate_str = "176.4 kHz"; break;
+            case 192: srate_str = "192 kHz"; break;
+            case 352: srate_str = "352.8 kHz"; break;
+            case 384: srate_str = "384 kHz"; break;
+            default:
+                if(rate > 0){
+                    snprintf(custom_rate, sizeof custom_rate, "%d kHz", rate);
+                    srate_str = custom_rate;
+                }
+                break;
+        }
+        if(g_hdr_status){
+            char s[64];
+            if(rate > 0) snprintf(s, sizeof s, "Connected • %s", srate_str);
+            else snprintf(s, sizeof s, "Connected • Standby");
+            lv_label_set_text(g_hdr_status, s);
+            lv_obj_set_style_text_color(g_hdr_status, rate > 0 ? ui_current_accent() : lv_color_hex(0x8E8E93), 0);
+        }
+        if(g_dac_srate_lbl){
+            char b[64];
+            if(rate > 0) snprintf(b, sizeof b, "USB Audio • %s", srate_str);
+            else snprintf(b, sizeof b, "USB Audio • Standby");
+            lv_label_set_text(g_dac_srate_lbl, b);
+        }
+        return;
+    }
     if(g_lock_mode != 2) return;
 
     bt_rx_state_t st;
@@ -720,9 +761,9 @@ void modelock_create(lv_obj_t *root){
 
     lv_obj_t *dac_circle = lv_obj_create(g_cont_dac);
     lv_obj_remove_style_all(dac_circle);
-    lv_obj_set_size(dac_circle, 84, 84);
-    lv_obj_set_pos(dac_circle, 138, 14);
-    lv_obj_set_style_radius(dac_circle, 42, 0);
+    lv_obj_set_size(dac_circle, 80, 80);
+    lv_obj_set_pos(dac_circle, 140, 10);
+    lv_obj_set_style_radius(dac_circle, 40, 0);
     lv_obj_set_style_bg_color(dac_circle, lv_color_hex(0x18181A), 0);
     lv_obj_set_style_bg_opa(dac_circle, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(dac_circle, 2, 0);
@@ -734,20 +775,41 @@ void modelock_create(lv_obj_t *root){
     lv_obj_set_style_text_font(dac_icon, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(dac_icon, ui_current_accent(), 0);
 
+    /* Live Sample Rate pill badge */
+    g_dac_srate_badge = lv_obj_create(g_cont_dac);
+    lv_obj_remove_style_all(g_dac_srate_badge);
+    lv_obj_set_size(g_dac_srate_badge, LV_SIZE_CONTENT, 24);
+    lv_obj_set_style_min_width(g_dac_srate_badge, 80, 0);
+    lv_obj_set_style_pad_hor(g_dac_srate_badge, 14, 0);
+    lv_obj_set_style_pad_ver(g_dac_srate_badge, 2, 0);
+    lv_obj_align(g_dac_srate_badge, LV_ALIGN_TOP_MID, 0, 100);
+    lv_obj_set_style_radius(g_dac_srate_badge, 12, 0);
+    lv_obj_set_style_bg_color(g_dac_srate_badge, lv_color_hex(0x18181A), 0);
+    lv_obj_set_style_bg_opa(g_dac_srate_badge, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_dac_srate_badge, 1, 0);
+    lv_obj_set_style_border_color(g_dac_srate_badge, ui_current_accent(), 0);
+    lv_obj_clear_flag(g_dac_srate_badge, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_dac_srate_lbl = lv_label_create(g_dac_srate_badge);
+    lv_label_set_text(g_dac_srate_lbl, "USB Audio • Standby");
+    lv_obj_center(g_dac_srate_lbl);
+    lv_obj_set_style_text_font(g_dac_srate_lbl, ui_font_cjk(14), 0);
+    lv_obj_set_style_text_color(g_dac_srate_lbl, ui_current_accent(), 0);
+
     lv_obj_t *dac_msg1 = lv_label_create(g_cont_dac);
-    lv_obj_set_pos(dac_msg1, 20, 116);
-    lv_obj_set_size(dac_msg1, 320, 26);
+    lv_obj_set_pos(dac_msg1, 20, 132);
+    lv_obj_set_size(dac_msg1, 320, 24);
     lv_label_set_text(dac_msg1, "USB Audio Class Active");
     lv_obj_set_style_text_align(dac_msg1, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(dac_msg1, ui_font_cjk(16), 0);
+    lv_obj_set_style_text_font(dac_msg1, ui_font_cjk(15), 0);
     lv_obj_set_style_text_color(dac_msg1, lv_color_hex(0xFFFFFF), 0);
 
     lv_obj_t *dac_msg2 = lv_label_create(g_cont_dac);
-    lv_obj_set_pos(dac_msg2, 20, 148);
-    lv_obj_set_size(dac_msg2, 320, 44);
+    lv_obj_set_pos(dac_msg2, 20, 160);
+    lv_obj_set_size(dac_msg2, 320, 40);
     lv_label_set_text(dac_msg2, "Playing audio from PC / Mac.\nHardware DAC volume active.");
     lv_obj_set_style_text_align(dac_msg2, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(dac_msg2, ui_font_cjk(14), 0);
+    lv_obj_set_style_text_font(dac_msg2, ui_font_cjk(13), 0);
     lv_obj_set_style_text_color(dac_msg2, lv_color_hex(0x8E8E93), 0);
 
     /* 4. Container for USB Storage (Mode 3) */
@@ -811,10 +873,15 @@ void modelock_open(int mode){
 
     if(mode == 1){
         /* USB DAC */
+        ipc_reset_uac_srate();
         if(g_hdr_title)  lv_label_set_text(g_hdr_title, LV_SYMBOL_AUDIO " USB DAC Mode");
-        if(g_hdr_status) lv_label_set_text(g_hdr_status, "Connected to computer");
+        if(g_hdr_status) lv_label_set_text(g_hdr_status, "Connected • Standby");
+        if(g_dac_srate_lbl) lv_label_set_text(g_dac_srate_lbl, "USB Audio • Standby");
         if(g_cont_dac)   lv_obj_remove_flag(g_cont_dac, LV_OBJ_FLAG_HIDDEN);
         bt_disc_spin(0);
+        if(!g_poll_timer){
+            g_poll_timer = lv_timer_create(modelock_poll_cb, 300, NULL);
+        }
     } else if(mode == 2){
         /* Bluetooth Receiving */
         if(g_hdr_title)  lv_label_set_text(g_hdr_title, LV_SYMBOL_BLUETOOTH " Bluetooth Receiver");
@@ -874,6 +941,8 @@ void modelock_open(int mode){
     if(g_btn_pp)         lv_obj_set_style_border_color(g_btn_pp, ui_current_accent(), 0);
     if(g_bt_codec_badge) lv_obj_set_style_border_color(g_bt_codec_badge, ui_current_accent(), 0);
     if(g_bt_codec_lbl)   lv_obj_set_style_text_color(g_bt_codec_lbl, ui_current_accent(), 0);
+    if(g_dac_srate_badge) lv_obj_set_style_border_color(g_dac_srate_badge, ui_current_accent(), 0);
+    if(g_dac_srate_lbl)   lv_obj_set_style_text_color(g_dac_srate_lbl, ui_current_accent(), 0);
 
     screen_show(SCR_MODELOCK);
 }
