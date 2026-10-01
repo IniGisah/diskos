@@ -4,6 +4,7 @@
 #include "screens.h"
 #include "anim.h"
 #include "ipc.h"
+#include "config.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -773,6 +774,9 @@ void modelock_create(lv_obj_t *root){
 
 void modelock_open(int mode){
     if(mode != 1 && mode != 2 && mode != 3) return;
+    if(g_lock_mode != 0 && g_lock_mode != mode){
+        modelock_close();
+    }
     g_lock_mode = mode;
 
     /* Hide all sub-containers first */
@@ -849,14 +853,56 @@ void modelock_open(int mode){
 }
 
 void modelock_close(void){
+    int prev_mode = g_lock_mode;
     g_lock_mode = 0;
     exit_modal_close();
     bt_disc_spin(0);
 
-    system("killall -9 bluealsa-aplay 2>/dev/null &");
     if(g_poll_timer){
         lv_timer_del(g_poll_timer);
         g_poll_timer = NULL;
+    }
+
+    if(prev_mode == 2){
+        char mac[20] = {0};
+        char dbus_mac[32] = {0};
+        pthread_mutex_lock(&g_bt_mu);
+        if(g_bt_state.connected && g_bt_state.mac[0]){
+            snprintf(mac, sizeof mac, "%s", g_bt_state.mac);
+            snprintf(dbus_mac, sizeof dbus_mac, "%s", g_bt_state.dbus_mac);
+        }
+        memset(&g_bt_state, 0, sizeof(g_bt_state));
+        pthread_mutex_unlock(&g_bt_mu);
+
+        char tear_down_cmd[512];
+        if(mac[0]){
+            snprintf(tear_down_cmd, sizeof tear_down_cmd,
+                "( dbus-send --system --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.Device1.Disconnect 2>/dev/null; "
+                "  bluetoothctl disconnect %s 2>/dev/null; "
+                "  bluetoothctl discoverable off 2>/dev/null; "
+                "  bluetoothctl pairable off 2>/dev/null; "
+                "  killall -9 bluealsa-aplay bt-agent 2>/dev/null; "
+                "  killall -9 bluealsa bluetoothd 2>/dev/null; "
+                "  %s ) >/dev/null 2>&1 &",
+                dbus_mac, mac,
+                (cfg_get_int("bt_on", 0) == 1) ? "true" : "hciconfig hci0 down 2>/dev/null; rfkill block bluetooth 2>/dev/null");
+        } else {
+            snprintf(tear_down_cmd, sizeof tear_down_cmd,
+                "( bluetoothctl disconnect 2>/dev/null; "
+                "  bluetoothctl discoverable off 2>/dev/null; "
+                "  bluetoothctl pairable off 2>/dev/null; "
+                "  killall -9 bluealsa-aplay bt-agent 2>/dev/null; "
+                "  killall -9 bluealsa bluetoothd 2>/dev/null; "
+                "  %s ) >/dev/null 2>&1 &",
+                (cfg_get_int("bt_on", 0) == 1) ? "true" : "hciconfig hci0 down 2>/dev/null; rfkill block bluetooth 2>/dev/null");
+        }
+        system(tear_down_cmd);
+
+        if(cfg_get_int("bt_on", 0) == 1){
+            bt_boot_restore();
+        }
+    } else {
+        system("killall -9 bluealsa-aplay 2>/dev/null &");
     }
 }
 
