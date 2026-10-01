@@ -5,6 +5,7 @@
 #include "books.h"
 #include "anim.h"
 #include "config.h"
+#include "modelock.h"
 #include <unistd.h>
 
 #define SCR_W 360
@@ -187,9 +188,13 @@ static void transition(int from, int to, int dir)
     }
 }
 
+#include "modelock.h"
+
 void screen_show(int which)
 {
     if (which < 0 || which >= SCR_COUNT) return;
+    if ((s_current == SCR_MODELOCK || modelock_is_active()) &&
+        which != SCR_MODELOCK && which != SCR_HOME && which != SCR_SAVER && which != SCR_QUICK) return;
     int from = s_current;
     if (which != s_current) {
         int cap = (int)(sizeof(s_stack)/sizeof(s_stack[0]));
@@ -207,6 +212,7 @@ void screen_show(int which)
 /* Pop the nav stack (swipe / back gesture). Home is the root: no-op. */
 void screen_back(void)
 {
+    if (s_current == SCR_MODELOCK) return;
     if (s_sp <= 0) return;
     int from = s_current;
     int prev = s_stack[--s_sp];
@@ -273,6 +279,7 @@ void screens_init(void)
     s_roots[SCR_SETLIST] = screen_make_root(parent);
     s_roots[SCR_QSCONFIG] = screen_make_root(parent);
     s_roots[SCR_ALBUMWALL] = screen_make_root(parent);
+    s_roots[SCR_MODELOCK] = screen_make_root(parent);
 
     /* depth scrim: a full-screen translucent-black overlay, created LAST so it sits above the
      * roots in sibling order; re-parented in z during a transition to dim the screen beneath the
@@ -319,6 +326,7 @@ void screens_init(void)
     bt_create(s_roots[SCR_BT]);
     bt_info_create(s_roots[SCR_BT_INFO]);
     lastfm_create(s_roots[SCR_LASTFM]);
+    modelock_create(s_roots[SCR_MODELOCK]);
 
     screen_show(SCR_HOME);
 }

@@ -55,6 +55,8 @@ static _Atomic int g_source_mode;
 static uint32_t lv_tick_get(void){ return test_clock; }
 static void ui_toast(const char *s){ (void)s; }
 static void art_cancel(void){}
+static void modelock_open(int mode){ (void)mode; }
+static void modelock_close(void){}
 static int scanner_active(void){ return test_scan; }
 static int scanner_start(void){ return 0; }
 static int mdb_total_song_count(void){ return 1; }
