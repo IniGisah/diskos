@@ -199,7 +199,7 @@ void screen_show(int which)
     if (which != s_current) {
         if (which == SCR_HOME) {
             s_sp = 0;
-        } else if (s_current != SCR_MODELOCK || which == SCR_QUICK) {
+        } else if (s_current != SCR_MODELOCK || which == SCR_QUICK || which == SCR_SAVER) {
             int cap = (int)(sizeof(s_stack)/sizeof(s_stack[0]));
             if (s_sp >= cap) {            /* full: keep the root (s_stack[0]) so Back still
                                            * reaches Home; drop the 2nd-oldest instead */
@@ -226,6 +226,13 @@ void screen_back(void)
             transition(from, prev, -1);
             return;
         }
+    }
+    if (s_current == SCR_SAVER || s_current == SCR_QUICK) {
+        /* Overlay dismissed with empty stack: return to active lockmode or Home */
+        int fallback = modelock_is_active() ? SCR_MODELOCK : SCR_HOME;
+        int from = s_current;
+        s_current = fallback;
+        transition(from, fallback, -1);
     }
 }
 

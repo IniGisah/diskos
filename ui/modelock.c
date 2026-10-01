@@ -450,9 +450,10 @@ static void exit_modal_cancel_cb(lv_event_t *e){
 static void exit_modal_confirm_cb(lv_event_t *e){
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     exit_modal_close();
-    ui_set_source_mode(0);
-    modelock_close();
-    screen_show(SCR_HOME);
+    if(ui_set_source_mode(0) == 0){
+        modelock_close();
+        screen_show(SCR_HOME);
+    }
 }
 
 void modelock_prompt_exit(void){
