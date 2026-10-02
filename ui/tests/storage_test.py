@@ -18,6 +18,7 @@ a = source.index("static int storage_player_guarded(void){")
 b = source.index("static int source_send(", a)
 source = source[:a] + "static int storage_player_guarded(void){ return test_guarded; }\n" + source[b:]
 source = source.replace("static int rmguard_dir_ok(const char *dir);", "")
+source = source.replace("static int usb_audio_out_detected(void);", "")
 
 def run_harness(exe, timeout):
     """Run a compiled harness; its LAST stdout line must be HARNESS COMPLETE, so an early return 0 fails."""

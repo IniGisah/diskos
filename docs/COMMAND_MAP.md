@@ -51,7 +51,7 @@ match values 0-3.
 | 0201 | Transport play/pause toggle (generic, VALUE1-driven) - verified NOT Roon-specific |
 | 0622 | Rescan SD / rebuild DB |
 | 0657 | **SOURCE switch** (NOT play-mode) - see section above |
-| 0666 | Output route (->set_out_device 0x461e74): 2=BTSRC 4=SPDIF 6=local-DAC. V2.09-confirmed; the "close_player" sighting was a shared teardown preamble, not this cmd's meaning. |
+| 0666 | Output route (->set_out_device 0x461e74): 2=BTSRC 3=USB_HOST 4=SPDIF 6=local-DAC. V2.09/V2.40/V2.57 confirmed. |
 | 0715 | Volume absolute 0-120  [verified] 2026-06-25 (set 20 via 0715000C0014, persisted+displayed) |
 
 ## BT AUDIO OUTPUT (transmit to a BT speaker, a2dp-source) - [verified] WORKING (2026-08-03)
@@ -70,6 +70,18 @@ Working route-to-BT sequence (diskOS, MAC = the connected speaker, uppercased):
 ```
 Then play normally (`0100...`). Reverse (BT->local) = `ui_route_analog()`: `0666000C0006` then `0657000C0008`.
 **No-stutter requires bluealsa `--sbc-quality=medium`** (bit-pool ~33): stock default-quality stutters; medium plays clean stereo (~86% CPU idle on device). Set in `bt.c` bt_enable/bt_ensure_services. `--a2dp-force-mono` also works but is NOT needed (stereo is fine at medium quality).
+
+## USB DAC OUTPUT (transmit digital audio to an external USB DAC) - [verified] WORKING (2026-09-29)
+Reverse-engineered from stock V2.40/V2.57 firmware (`mq_ui` and `mq_player` host mode handler). In stock firmware this is named "USB AUDIO" under Working Mode. In diskOS this is exposed as "USB DAC Output" (mode 4 under Working Mode).
+
+Working route-to-USB-DAC sequence:
+```
+0666000C0003   route: out_dev = 3 (USB_HOST)
+0642000C0005   gadget selector 5: switches DWC2 to USB host mode, powers 5V VBUS via SGM41513 OTG boost, probes /proc/asound/cards for USB-Audio
+0657000C0008   work-mode 8 (LOCALPLAYER playback engine)
+```
+Reverse (USB-DAC->local analog) = `0666000C0006`, `0642000C0000`, `0657000C0008`.
+Local playback and playlists route directly to the external USB DAC over USB-C OTG. If the external DAC is unplugged, playback automatically pauses and transport/playback commands are safely guarded until reconnected.
 
 ## Table A @0x7c9d30 - 131 entries (terminator 0x7ca148)
 | tag | thunk | meaning | conf |

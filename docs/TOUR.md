@@ -238,11 +238,11 @@ Playback controls what plays next and how the player treats a resumed track. Tap
 
 ### Settings: Audio and working mode
 
-Audio rows control the output path, DAC options, and volume limits. Tap Working Mode to choose Local Playback, USB DAC, Bluetooth Receiving, or USB Storage; the selected mode is marked in the list. USB Storage gives the computer the card: eject it safely there before returning to Local Playback. The SPDIF and external USB Audio controls are absent from the normal build.
+Audio rows control the output path, DAC options, and volume limits. Tap Working Mode to choose Local Playback, USB DAC, USB Audio, Bluetooth Receiving, or USB Storage; the selected mode is marked in the list. USB Storage gives the computer the card: eject it safely there before returning to Local Playback.
 
 | Row | Action and default |
 |---|---|
-| Working Mode | Open the four source modes; Local Playback is the usual music mode. |
+| Working Mode | Open the source modes (Local Playback, USB DAC, USB Audio on supported firmware, Bluetooth Receiving, USB Storage); Local Playback is the usual music mode. |
 | Gain | Low by default; choose High for a higher headphone gain. Unknown firmware says "Not on this firmware". |
 | DAC Filter | Slow LL by default; choose Fast LL, Slow PC, Fast PC, NOS, or Wideband. |
 | ReplayGain | Off by default; choose Track or Album leveling. |
@@ -412,6 +412,8 @@ folder-only queue. V2.09 playlist and book playback may fail. V2.57's Custom EQ 
 view-only, although Gain is available; older firmware has no Bluetooth codec choice. Up Next can
 jump within the player queue but cannot edit it, and network services and Bluetooth codec behavior
 remain experimental.
+
+When using USB Audio mode, if the external DAC is unplugged, on-screen controls safely block playback and warn the user. Reconnect the DAC or switch back to Local Playback before pressing the physical hardware play button to avoid the stock audio engine searching for the missing sound card.
 
 After a restart, Wi-Fi can take up to about a minute to connect; if it shows no IP, reconnect in
 Settings > Wi-Fi. A fix is planned for 1.2.1.

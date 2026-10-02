@@ -14,6 +14,7 @@ int  modes_output_mode_switch(int target); /* Working Mode entry (adds 0642 + st
 void modes_output_reset(void);          /* another path (source change, BT route) put the player back on the internal DAC */
 int  modes_output_busy(void);           /* 1 while a switch waits for silence or recovers: play/next/source/BT must refuse */
 int  modes_local_init(int with_gadget); /* route-aware local init: 0642/0666/0657 for the current route; -1 if a send failed */
+int  modes_usb_dac_connected(void);     /* 1 when an external USB DAC is detected (/proc/asound/card1 or cards) */
 
 /* main.c: NULL when an output switch may run now, else a short reason for the toast */
 const char *ui_output_blocked(void);

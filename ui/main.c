@@ -393,6 +393,7 @@ int ui_get_source_mode(void){ return g_source_mode; }
 static int sd_exported_to_host(void);
 static int coldplug_mounted(void);
 static int rmguard_dir_ok(const char *dir);
+static int usb_audio_out_detected(void);
 static _Atomic int g_sd_writable = 1;
 static _Atomic int g_sd_writers = 0;
 static _Atomic int g_sd_hold = 0;
@@ -412,6 +413,8 @@ static void storage_tick(lv_timer_t *t);
 static int storage_media_local(void);
 static int storage_host_confirmed(void);
 int ui_local_playback_allowed(void){
+    int m = atomic_load(&g_source_mode);
+    if(m != 0 && m != 4) return 0;
     return atomic_load(&g_launch_verdict) == 1 && g_sd_phase == SD_LOCAL && !g_sd_hold && sd_io_healthy();
 }
 
@@ -483,20 +486,27 @@ static int storage_player_guarded(void){
     return found > 0 && ok;
 }
 static int source_send(int mode){
-    if(ipc_send_cmd("0666000C0006") < 0) return -1;
     modes_output_reset();                                /* every source change starts from the internal DAC route */
     switch(mode){
         case 0:
+            if(ipc_send_cmd("0666000C0006") < 0) return -1;
             if(ipc_send_cmd("0642000C0000") < 0) return -1;
             return ipc_send_cmd("0657000C0008");
         case 1:
+            if(ipc_send_cmd("0666000C0006") < 0) return -1;
             if(ipc_send_cmd("0642000C0002") < 0) return -1;
             return ipc_send_cmd("0657000C0008");
         case 2:
+            if(ipc_send_cmd("0666000C0006") < 0) return -1;
             if(ipc_send_cmd("0818000C0000") < 0 || ipc_send_cmd("0642000C0000") < 0) return -1;
             return ipc_send_cmd("0657000C0006");
         case 3:
+            if(ipc_send_cmd("0666000C0006") < 0) return -1;
             if(ipc_send_cmd("0642000C0001") < 0) return -1;
+            return ipc_send_cmd("0657000C0008");
+        case 4:
+            if(ipc_send_cmd("0666000C0003") < 0) return -1;
+            if(ipc_send_cmd("0642000C0005") < 0) return -1;
             return ipc_send_cmd("0657000C0008");
     }
     return -1;
@@ -508,7 +518,7 @@ static void storage_unknown(const char *why){
 }
 int ui_set_source_mode(int mode){
     if(modes_output_busy()){ ui_toast("Switching output - try again"); return -1; }
-    if(mode < 0 || mode > 3) return -1;
+    if(mode < 0 || mode > 4) return -1;
     if(ui_source_switch_pending()){ ui_toast("Storage is switching"); return -1; }
     if(g_sd_phase == SD_UNKNOWN || g_sd_hold || !sd_io_healthy()){ ui_toast("SD access is held this boot"); return -1; }
     /* Every source change drives the player (and USB/card ownership with it), so none may happen before this
@@ -540,7 +550,7 @@ int ui_set_source_mode(int mode){
     if(was_playing && ipc_send_cmd("0201000C0000") < 0){ ui_toast("Player is busy - try again"); return -1; }
     if(source_send(mode) < 0){ ui_toast("Couldn't switch mode"); return -1; }
     g_source_mode = mode;
-    if(mode == 0 && was_playing) ipc_send_cmd("0201000C0000");
+    if((mode == 0 || mode == 4) && was_playing) ipc_send_cmd("0201000C0000");
     return 0;
 }
 static void storage_resume_local(void){
@@ -608,7 +618,7 @@ static void storage_init(void){
         } else if(n == 2 && phase == 'E' && mode == 3){
             g_sd_phase = SD_WAIT_HOST; g_source_mode = 3; g_sd_reissue = 1;
             g_sd_deadline = lv_tick_get() + 20000;
-        } else if(n == 2 && phase == 'R' && mode >= 0 && mode < 3){
+        } else if(n == 2 && phase == 'R' && mode >= 0 && mode <= 4 && mode != 3){
             g_sd_phase = SD_WAIT_LOCAL; g_sd_return_mode = mode; g_source_mode = 3; g_sd_reissue = 1;
             g_sd_deadline = lv_tick_get() + 20000;
         } else if(n == 2 && phase == 'D' && !sd_exported_to_host()){
@@ -873,6 +883,9 @@ static uint32_t g_book_noadopt_until = 0;  /* after an explicit play, don't let 
 static int ui_play_list_ex(int list_type, const char *name, int pos1, int build_idx){
     if(modes_output_busy()){ ui_toast("Switching output - try again"); return 0; }   /* an output switch (0666 re-init) is in flight or recovering */
     if(!ui_local_playback_allowed()){ ui_toast("Return to local playback first"); return 0; }
+    if(ui_get_source_mode() == 4 && !ui_usb_dac_connected()){
+        ui_toast("USB DAC not connected"); return 0;
+    }
     /* A music list play (not a custom playlist, type 5) makes the stock player build its queue from the
      * UNFILTERED SONG table. If a .m4b hasn't migrated out yet, it would leak into that queue - so ensure
      * migration first, and refuse the play (rather than queue a book) if it still can't complete. */
@@ -903,8 +916,13 @@ static int ui_play_list_ex(int list_type, const char *name, int pos1, int build_
     /* Not while a previous play is still starting (g_playing lags the stream by seconds): 0666 releases the local
      * output under it (seen live). Only the idle / long-gap case needs the preamble. */
     int recent_play = play_recent();
-    if(fw_needs_localplayer_init() && ui_get_source_mode() == 0 && !g_route_mac[0] && !g_playing && !recent_play){
-        modes_local_init(0);   /* 0666 local route (6 internal, 4 SPDIF, 3 + 0642 5 USB audio), then 0657 8 LOCALPLAYER work-mode */
+    if(fw_needs_localplayer_init() && !g_route_mac[0] && !g_playing && !recent_play){
+        if(ui_get_source_mode() == 0){
+            modes_local_init(0);   /* 0666 local route (6 internal, 4 SPDIF), then 0657 8 LOCALPLAYER work-mode */
+        } else if(ui_get_source_mode() == 4){
+            ipc_send_cmd("0666000C0003");   /* out_dev = USB_HOST (3) */
+            ipc_send_cmd("0657000C0008");   /* LOCALPLAYER work-mode */
+        }
     }
     {   /* always rebuild: the player's queue can change under us (Play Through Folders), so no type-0 shortcut */
         int datalen = 8 + (int)strlen(name);          /* f1(4)+f2(4)+name */
@@ -953,7 +971,7 @@ int ui_play_playlist(long pid, int pos){
     if(n <= 0){ ui_toast("Playlist is empty"); return 0; }
     g_book_single_mode = 0;                                 /* not a book */
     send_play_mode(cfg_get_int("work_mode", 0));  /* set the music play-mode explicitly - a song-row tap in a playlist does not, and a prior book left Single */
-    if(ui_get_source_mode() == 0 && !g_route_mac[0]) ipc_send_cmd("0657000C0008");  /* local work-mode: a type-5 play from an idle player needs it (same as a book) */
+    if((ui_get_source_mode() == 0 || ui_get_source_mode() == 4) && !g_route_mac[0]) ipc_send_cmd("0657000C0008");  /* local work-mode: a type-5 play from an idle player needs it (same as a book) */
     if(pos < 1) pos = 1;
     int ppos = mdb_reserved_slot_player_pos(pid, pos);      /* the tapped row in the player's read of the slot */
     if(ppos < 1){ ui_toast("Couldn't find that song"); return 0; }   /* never start a guessed, possibly different song */
@@ -966,12 +984,20 @@ int ui_play_playlist(long pid, int pos){
 int ui_queue_jump(int ord1){
     if(modes_output_busy()){ ui_toast("Switching output - try again"); return -1; }
     if(!ui_local_playback_allowed()){ ui_toast("Return to local playback first"); return -1; }
+    if(ui_get_source_mode() == 4 && !ui_usb_dac_connected()){
+        ui_toast("USB DAC not connected"); return -1;
+    }
     if(g_play_pending){ ui_toast("Queue is updating - try again"); return -1; }
     if(ord1 < 1 || ord1 > 0xFFFF) return -1;
     ui_cancel_book_resume();
     ui_disarm_book_eoc();
-    if(fw_needs_localplayer_init() && ui_get_source_mode() == 0 && !g_route_mac[0] && !g_playing && !play_recent()){
-        modes_local_init(0);   /* 0666 local route (6 internal, 4 SPDIF, 3 + 0642 5 USB audio), then 0657 8 LOCALPLAYER work-mode */
+    if(fw_needs_localplayer_init() && !g_route_mac[0] && !g_playing && !play_recent()){
+        if(ui_get_source_mode() == 0){
+            modes_local_init(0);   /* 0666 local route (6 internal, 4 SPDIF), then 0657 8 LOCALPLAYER work-mode */
+        } else if(ui_get_source_mode() == 4){
+            ipc_send_cmd("0666000C0003");   /* out_dev = USB_HOST (3) */
+            ipc_send_cmd("0657000C0008");   /* LOCALPLAYER work-mode */
+        }
     }
     g_play_sent_gen = ipc_generation();
     char f[24]; snprintf(f, sizeof f, "0100%04X%04X0000", 16, (ord1 - 1) & 0xFFFF);
@@ -992,7 +1018,7 @@ int ui_play_plan(mdb_plan_t *plan, int song_id){
         if(pos < 1){ ui_toast("Couldn't find that song"); return 0; }
         g_book_single_mode = 0;
         send_play_mode(cfg_get_int("work_mode", 0));
-        if(ui_get_source_mode() == 0 && !g_route_mac[0]) ipc_send_cmd("0657000C0008");
+        if((ui_get_source_mode() == 0 || ui_get_source_mode() == 4) && !g_route_mac[0]) ipc_send_cmd("0657000C0008");
         return ui_play_list_ex(5, "", pos, -1);
     }
     if(plan->list_type != 2 && plan->list_type != 3 && plan->list_type != 7){ ui_toast("Couldn't play that list"); return 0; }
@@ -1125,6 +1151,9 @@ void ui_book_user_seeked(long target_ms){
 int ui_play_book(const char *path, long resume_ms){
     if(modes_output_busy()){ ui_toast("Switching output - try again"); return 0; }
     if(!ui_local_playback_allowed()){ ui_toast("Return to local playback first"); return 0; }
+    if(ui_get_source_mode() == 4 && !ui_usb_dac_connected()){
+        ui_toast("USB DAC not connected"); return 0;
+    }
     if(!path || !*path) return 0;
     /* The path must round-trip the player's 256-byte track path AND survive the a2 frame's JSON
      * re-escape (the decoder reserves 4 bytes), or st.path won't match and resume/checkpoint would
@@ -1140,10 +1169,10 @@ int ui_play_book(const char *path, long resume_ms){
     /* A type-5 play from an idle player can leave the work-mode NULL (player logs NO_WORK_MODE and never
      * starts). Re-assert the local-play route + work-mode first - device-verified this is what a book
      * play needs; ui_play_list's own preamble is gated to V2.40, but a book must start on V2.09/V2.28 too.
-     * Local analog route only (never a BT A2DP path). */
-    if(ui_get_source_mode() == 0 && !g_route_mac[0]){
+     * Local analog or USB DAC route (never a BT A2DP path). */
+    if((ui_get_source_mode() == 0 || ui_get_source_mode() == 4) && !g_route_mac[0]){
         ipc_send_cmd("0657000C0008");                      /* LOCALPLAYER work-mode (fixes NO_WORK_MODE). NOT 0666:
-                                                            * we're already on the local route (gated above), and a
+                                                            * we're already on the local/DAC route (gated above), and a
                                                             * redundant out_dev re-init pauses the stream ~1.5s in. */
     }
     if(send_play_mode(4) != 0){ ui_toast("Couldn't start book"); return 0; }   /* Single play-mode is REQUIRED for clean EOF isolation; if it can't be set, don't start the book unguarded */
@@ -1931,13 +1960,32 @@ static int uac_bound(void){
     for(size_t i = 0; i < n; i++) if(b[i] > ' ') return 1;      /* non-blank UDC -> bound */
     return 0;
 }
+static int usb_audio_out_detected(void){
+    if(access("/proc/asound/card1", F_OK) == 0) return 1;
+    FILE *f = fopen("/proc/asound/cards", "r");
+    if(!f) return 0;
+    char line[256];
+    int found = 0;
+    while(fgets(line, sizeof line, f)){
+        if(strstr(line, "USB-Audio") || strstr(line, "USB Audio")){
+            found = 1;
+            break;
+        }
+    }
+    fclose(f);
+    return found;
+}
 /* M17: detect the source mode from the REAL USB gadget state, not our intent mirror: Storage =
- * storage_demo exported, USB-DAC = uac_demo bound, else no USB gadget (Local; BT sink is
- * gadget-invisible so it reads as Local here). */
+ * storage_demo exported, USB-DAC = uac_demo bound, USB DAC Output = card1 / external DAC,
+ * else no USB gadget (Local; BT sink is gadget-invisible so it reads as Local here). */
 int ui_detect_source_mode(void){
     if(sd_exported_to_host()) return 3;
     if(uac_bound())           return 1;
-    return 0;
+    if(usb_audio_out_detected()) return 4;
+    return (atomic_load(&g_source_mode) == 4) ? 4 : 0;
+}
+int ui_usb_dac_connected(void){
+    return usb_audio_out_detected();
 }
 /* May the V2.40 worker direct-mount the card RIGHT NOW? Checked (under g_sd_mode_mu) immediately before
  * EACH mount attempt: absolute cold-boot window (fail-closed on unreadable uptime) AND the card is not
@@ -1990,7 +2038,7 @@ static void *coldplug_thread(void *arg){
     for(int i = 0; i < 120; i++){                  /* ~6 min cap (120 x 3s) covers the ~100s listener */
         if(coldplug_mounted()){ coldplug_log("SD mounted - done"); return NULL; }
         pthread_mutex_lock(&g_sd_mode_mu);
-        if(ui_get_source_mode() == 0 && !sd_exported_to_host() && !coldplug_mounted() && atomic_load(&g_sd_writable)){
+        if((ui_get_source_mode() == 0 || ui_get_source_mode() == 4) && !sd_exported_to_host() && !coldplug_mounted() && atomic_load(&g_sd_writable)){
             if(!direct_sd_mount || nudged || i >= 10){
                 /* V2.09/V2.28: the player's uevent listener mounts the card (bound ~100s in) - bounded retries,
                  * each only while genuinely unmounted (checked above). V2.40/V2.57: fallback only, after ~30s
@@ -2057,7 +2105,7 @@ static int coldplug_should_run(void){
     /* fail-closed: an unreadable/malformed uptime is NOT treated as a cold boot (0 would be fail-open,
      * enabling the SD mount on a late restart where the card may be exported to a host). */
     if(up < 0.0 || up > 150.0){ coldplug_log("skip: uptime unreadable or late (not a verified cold boot)"); return 0; }
-    if(ui_get_source_mode() != 0){ coldplug_log("skip: not in Local mode (card may be exported to a host)"); return 0; }
+    if(ui_get_source_mode() != 0 && ui_get_source_mode() != 4){ coldplug_log("skip: not in Local/Host mode (card may be exported to a host)"); return 0; }
     return 1;
 }
 static void coldplug_start(void){
@@ -2822,6 +2870,19 @@ int main(int argc, char **argv){
         if(playing) g_play_sent_gen = ipc_generation();   /* playback observed this generation (any start, incl. hardware keys): its one-shot is moot */
         g_playing = playing;   /* publish for ui_route_bt/ui_route_analog (raw st.state is unreliable) */
         st.state = playing ? 2 : 1;
+
+        /* USB DAC disconnection guard: if in mode 4 and the external DAC is unplugged,
+         * pause playback to avoid lockups and notify the user. */
+        static uint32_t last_usb_dac_poll = 0;
+        if(ui_get_source_mode() == 4 && lv_tick_elaps(last_usb_dac_poll) >= 500){
+            last_usb_dac_poll = lv_tick_get();
+            if(!ui_usb_dac_connected()){
+                if(playing){
+                    ipc_send_cmd("0201000C0000");   /* pause playback */
+                    ui_toast("USB DAC disconnected");
+                }
+            }
+        }
         /* when the backlight is off (deep idle) nothing is visible - skip the whole
          * UI refresh; it catches up on wake (last/ last_playing stay stale). */
         /* clear a pending play on a REAL track change (different path) OR a restart of
