@@ -494,16 +494,6 @@ static int source_send(int mode){
             if(ipc_send_cmd("0642000C0002") < 0) return -1;
             return ipc_send_cmd("0657000C0008");
         case 2:
-            /* Bluetooth Receiving Mode: stock sends 0666 6, 0642 0, 0657 6 (Mode 6: BT SINK).
-             * Switch mq_player to source mode 6. mq_player natively handles bluetoothd/bluealsa/fiio_bluetoothctl,
-             * captures the A2DP stream, and routes directly to the CS43131 DAC. */
-            system(
-                "( rfkill unblock bluetooth 2>/dev/null; "
-                "  killall -9 bluealsa-aplay bt-agent 2>/dev/null; "
-                "  for dev in $(bluetoothctl paired-devices 2>/dev/null | awk '{print $2}'); do "
-                "    bluetoothctl trust \"$dev\" 2>/dev/null; "
-                "  done ) >/dev/null 2>&1 &"
-            );
             if(ipc_send_cmd("0642000C0000") < 0) return -1;
             return ipc_send_cmd("0657000C0006");
         case 3:

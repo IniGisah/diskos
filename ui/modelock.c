@@ -847,14 +847,6 @@ void modelock_open(int mode){
         if(g_hdr_status) lv_label_set_text(g_hdr_status, "Ready to connect");
         if(g_cont_bt)    lv_obj_remove_flag(g_cont_bt, LV_OBJ_FLAG_HIDDEN);
 
-        /* Ensure paired devices are trusted in BlueZ so incoming A2DP profile requests are accepted */
-        system(
-            "killall -9 bluealsa-aplay bt-agent 2>/dev/null; "
-            "for dev in $(bluetoothctl paired-devices 2>/dev/null | awk '{print $2}'); do "
-            "  bluetoothctl trust \"$dev\" 2>/dev/null; "
-            "done &"
-        );
-
         /* Start background worker thread if not running */
         if(!g_worker_run){
             g_worker_run = 1;
@@ -909,7 +901,6 @@ void modelock_close(void){
                 "  bluetoothctl disconnect %s 2>/dev/null; "
                 "  bluetoothctl discoverable off 2>/dev/null; "
                 "  bluetoothctl pairable off 2>/dev/null; "
-                "  killall -9 bluealsa-aplay bt-agent 2>/dev/null; "
                 "  %s ) >/dev/null 2>&1 &",
                 dbus_mac, mac,
                 (cfg_get_int("bt_on", 0) == 1) ? "true" : "hciconfig hci0 down 2>/dev/null; rfkill block bluetooth 2>/dev/null");
@@ -918,7 +909,6 @@ void modelock_close(void){
                 "( bluetoothctl disconnect 2>/dev/null; "
                 "  bluetoothctl discoverable off 2>/dev/null; "
                 "  bluetoothctl pairable off 2>/dev/null; "
-                "  killall -9 bluealsa-aplay bt-agent 2>/dev/null; "
                 "  %s ) >/dev/null 2>&1 &",
                 (cfg_get_int("bt_on", 0) == 1) ? "true" : "hciconfig hci0 down 2>/dev/null; rfkill block bluetooth 2>/dev/null");
         }
@@ -927,8 +917,6 @@ void modelock_close(void){
         if(cfg_get_int("bt_on", 0) == 1){
             bt_boot_restore();
         }
-    } else {
-        system("killall -9 bluealsa-aplay bt-agent 2>/dev/null &");
     }
 }
 
