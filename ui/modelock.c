@@ -46,6 +46,14 @@ static lv_obj_t *g_lbl_pp;
 /* Exit confirmation modal */
 static lv_obj_t *g_exit_modal = NULL;
 
+/* USB DAC view widgets */
+static lv_obj_t *g_dac_circle;
+static lv_obj_t *g_dac_icon;
+static lv_obj_t *g_dac_title;
+static lv_obj_t *g_dac_sub;
+static lv_obj_t *g_dac_badge;
+static lv_obj_t *g_dac_badge_lbl;
+
 /* Bluetooth AVRCP state cache (thread-safe) */
 typedef struct {
     int connected;
@@ -365,6 +373,60 @@ void bt_rx_prev(void){
     }
 }
 
+static void uac_query_status(int *out_connected, char *out_fmt, size_t fmt_sz){
+    if(out_connected) *out_connected = 0;
+    if(out_fmt && fmt_sz > 0) out_fmt[0] = 0;
+
+    /* Check UDC state */
+    FILE *f = fopen("/sys/class/udc/13500000.otg_new/state", "r");
+    if(f){
+        char state[32] = {0};
+        if(fgets(state, sizeof state, f)){
+            if(strstr(state, "configured")) {
+                if(out_connected) *out_connected = 1;
+            }
+        }
+        fclose(f);
+    }
+
+    char rate[24] = {0};
+    char bits[16] = {0};
+
+    f = fopen("/proc/asound/card1/pcm0c/sub0/hw_params", "r");
+    if(!f) f = fopen("/proc/asound/card0/pcm3p/sub0/hw_params", "r");
+    if(f){
+        char line[128];
+        while(fgets(line, sizeof line, f)){
+            if(strstr(line, "closed")) break;
+            char *r = strstr(line, "rate: ");
+            if(r){
+                int hz = atoi(r + 6);
+                if(hz >= 1000){
+                    if(hz % 1000 == 0) snprintf(rate, sizeof rate, "%dkHz", hz / 1000);
+                    else snprintf(rate, sizeof rate, "%.1fkHz", (double)hz / 1000.0);
+                }
+            }
+            char *fmt = strstr(line, "format: ");
+            if(fmt){
+                if(strstr(fmt, "S32")) snprintf(bits, sizeof bits, "32bit");
+                else if(strstr(fmt, "S24")) snprintf(bits, sizeof bits, "24bit");
+                else if(strstr(fmt, "S16")) snprintf(bits, sizeof bits, "16bit");
+                else if(strstr(fmt, "DSD")) snprintf(bits, sizeof bits, "DSD");
+            }
+        }
+        fclose(f);
+    }
+
+    if(out_fmt && fmt_sz > 0){
+        if(rate[0]){
+            if(bits[0]) snprintf(out_fmt, fmt_sz, "PCM • %s • %s", rate, bits);
+            else snprintf(out_fmt, fmt_sz, "PCM • %s", rate);
+        } else {
+            snprintf(out_fmt, fmt_sz, "PCM • Idle");
+        }
+    }
+}
+
 static int g_bt_cached_vol = 40;
 
 void bt_rx_sync_volume(int vol){
@@ -383,6 +445,41 @@ void bt_rx_sync_volume(int vol){
 /* UI poll timer: updates LVGL labels and button icons on main thread */
 static void modelock_poll_cb(lv_timer_t *t){
     (void)t;
+    if(g_lock_mode == 1){
+        /* USB DAC Mode poll */
+        int connected = 0;
+        char fmt[64] = {0};
+        uac_query_status(&connected, fmt, sizeof fmt);
+
+        if(g_hdr_status){
+            if(connected){
+                lv_label_set_text(g_hdr_status, "Connected: PC / Mac");
+                lv_obj_set_style_text_color(g_hdr_status, ui_current_accent(), 0);
+            } else {
+                lv_label_set_text(g_hdr_status, "Waiting for USB connection...");
+                lv_obj_set_style_text_color(g_hdr_status, TC(TEXT_MUTED), 0);
+            }
+        }
+
+        if(g_dac_badge && g_dac_badge_lbl){
+            if(connected && fmt[0]){
+                lv_label_set_text(g_dac_badge_lbl, fmt);
+                lv_obj_remove_flag(g_dac_badge, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_align(g_dac_badge, LV_ALIGN_TOP_MID, 0, 138);
+            } else {
+                lv_obj_add_flag(g_dac_badge, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+
+        if(g_dac_sub){
+            if(connected){
+                lv_label_set_text(g_dac_sub, "Playing audio from PC / Mac.\nHardware DAC volume active.");
+            } else {
+                lv_label_set_text(g_dac_sub, "Connect to computer with USB-C cable.\nSelect 'SNOWSKY DISC' as output.");
+            }
+        }
+        return;
+    }
     if(g_lock_mode != 2) return;
 
     bt_rx_state_t st;
@@ -744,37 +841,56 @@ void modelock_create(lv_obj_t *root){
     lv_obj_set_size(g_cont_dac, 360, 220);
     lv_obj_clear_flag(g_cont_dac, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *dac_circle = lv_obj_create(g_cont_dac);
-    lv_obj_remove_style_all(dac_circle);
-    lv_obj_set_size(dac_circle, 84, 84);
-    lv_obj_set_pos(dac_circle, 138, 14);
-    lv_obj_set_style_radius(dac_circle, 42, 0);
-    lv_obj_set_style_bg_color(dac_circle, TC(SURFACE), 0);
-    lv_obj_set_style_bg_opa(dac_circle, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(dac_circle, 2, 0);
-    lv_obj_set_style_border_color(dac_circle, ui_current_accent(), 0);
+    g_dac_circle = lv_obj_create(g_cont_dac);
+    lv_obj_remove_style_all(g_dac_circle);
+    lv_obj_set_size(g_dac_circle, 84, 84);
+    lv_obj_set_pos(g_dac_circle, 138, 14);
+    lv_obj_set_style_radius(g_dac_circle, 42, 0);
+    lv_obj_set_style_bg_color(g_dac_circle, TC(SURFACE), 0);
+    lv_obj_set_style_bg_opa(g_dac_circle, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_dac_circle, 2, 0);
+    lv_obj_set_style_border_color(g_dac_circle, ui_current_accent(), 0);
 
-    lv_obj_t *dac_icon = lv_label_create(dac_circle);
-    lv_label_set_text(dac_icon, LV_SYMBOL_AUDIO);
-    lv_obj_center(dac_icon);
-    lv_obj_set_style_text_font(dac_icon, TF(UI_28), 0);
-    lv_obj_set_style_text_color(dac_icon, ui_current_accent(), 0);
+    g_dac_icon = lv_label_create(g_dac_circle);
+    lv_label_set_text(g_dac_icon, LV_SYMBOL_AUDIO);
+    lv_obj_center(g_dac_icon);
+    lv_obj_set_style_text_font(g_dac_icon, TF(UI_28), 0);
+    lv_obj_set_style_text_color(g_dac_icon, ui_current_accent(), 0);
 
-    lv_obj_t *dac_msg1 = lv_label_create(g_cont_dac);
-    lv_obj_set_pos(dac_msg1, 20, 116);
-    lv_obj_set_size(dac_msg1, 320, 26);
-    lv_label_set_text(dac_msg1, "USB Audio Class Active");
-    lv_obj_set_style_text_align(dac_msg1, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(dac_msg1, TF(USER_16), 0);
-    lv_obj_set_style_text_color(dac_msg1, TC(TEXT_PRIMARY), 0);
+    g_dac_title = lv_label_create(g_cont_dac);
+    lv_obj_set_pos(g_dac_title, 20, 110);
+    lv_obj_set_size(g_dac_title, 320, 26);
+    lv_label_set_text(g_dac_title, "USB Audio Class Active");
+    lv_obj_set_style_text_align(g_dac_title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(g_dac_title, TF(USER_16), 0);
+    lv_obj_set_style_text_color(g_dac_title, TC(TEXT_PRIMARY), 0);
 
-    lv_obj_t *dac_msg2 = lv_label_create(g_cont_dac);
-    lv_obj_set_pos(dac_msg2, 20, 148);
-    lv_obj_set_size(dac_msg2, 320, 44);
-    lv_label_set_text(dac_msg2, "Playing audio from PC / Mac.\nHardware DAC volume active.");
-    lv_obj_set_style_text_align(dac_msg2, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(dac_msg2, TF(USER_14), 0);
-    lv_obj_set_style_text_color(dac_msg2, TC(TEXT_MUTED), 0);
+    /* Sample Rate / Codec badge */
+    g_dac_badge = lv_obj_create(g_cont_dac);
+    lv_obj_remove_style_all(g_dac_badge);
+    lv_obj_set_size(g_dac_badge, LV_SIZE_CONTENT, 22);
+    lv_obj_align(g_dac_badge, LV_ALIGN_TOP_MID, 0, 138);
+    lv_obj_set_style_radius(g_dac_badge, 11, 0);
+    lv_obj_set_style_bg_color(g_dac_badge, TC(SURFACE_RAISED), 0);
+    lv_obj_set_style_bg_opa(g_dac_badge, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_dac_badge, 1, 0);
+    lv_obj_set_style_border_color(g_dac_badge, ui_current_accent(), 0);
+    lv_obj_set_style_pad_hor(g_dac_badge, 10, 0);
+    lv_obj_clear_flag(g_dac_badge, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_dac_badge_lbl = lv_label_create(g_dac_badge);
+    lv_label_set_text(g_dac_badge_lbl, "PCM • Idle");
+    lv_obj_center(g_dac_badge_lbl);
+    lv_obj_set_style_text_font(g_dac_badge_lbl, TF(USER_14), 0);
+    lv_obj_set_style_text_color(g_dac_badge_lbl, ui_current_accent(), 0);
+
+    g_dac_sub = lv_label_create(g_cont_dac);
+    lv_obj_set_pos(g_dac_sub, 20, 168);
+    lv_obj_set_size(g_dac_sub, 320, 44);
+    lv_label_set_text(g_dac_sub, "Playing audio from PC / Mac.\nHardware DAC volume active.");
+    lv_obj_set_style_text_align(g_dac_sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(g_dac_sub, TF(USER_14), 0);
+    lv_obj_set_style_text_color(g_dac_sub, TC(TEXT_MUTED), 0);
 
     /* 4. Container for USB Storage (Mode 3) */
     g_cont_storage = lv_obj_create(root);
@@ -838,9 +954,12 @@ void modelock_open(int mode){
     if(mode == 1){
         /* USB DAC */
         if(g_hdr_title)  lv_label_set_text(g_hdr_title, LV_SYMBOL_AUDIO " USB DAC Mode");
-        if(g_hdr_status) lv_label_set_text(g_hdr_status, "Connected to computer");
+        if(g_hdr_status) lv_label_set_text(g_hdr_status, "Checking USB connection...");
         if(g_cont_dac)   lv_obj_remove_flag(g_cont_dac, LV_OBJ_FLAG_HIDDEN);
         bt_disc_spin(0);
+        if(!g_poll_timer){
+            g_poll_timer = lv_timer_create(modelock_poll_cb, 300, NULL);
+        }
     } else if(mode == 2){
         /* Bluetooth Receiving */
         if(g_hdr_title)  lv_label_set_text(g_hdr_title, LV_SYMBOL_BLUETOOTH " Bluetooth Receiver");
@@ -868,6 +987,10 @@ void modelock_open(int mode){
     if(g_btn_pp)         lv_obj_set_style_border_color(g_btn_pp, ui_current_accent(), 0);
     if(g_bt_codec_badge) lv_obj_set_style_border_color(g_bt_codec_badge, ui_current_accent(), 0);
     if(g_bt_codec_lbl)   lv_obj_set_style_text_color(g_bt_codec_lbl, ui_current_accent(), 0);
+    if(g_dac_circle)     lv_obj_set_style_border_color(g_dac_circle, ui_current_accent(), 0);
+    if(g_dac_icon)       lv_obj_set_style_text_color(g_dac_icon, ui_current_accent(), 0);
+    if(g_dac_badge)      lv_obj_set_style_border_color(g_dac_badge, ui_current_accent(), 0);
+    if(g_dac_badge_lbl)  lv_obj_set_style_text_color(g_dac_badge_lbl, ui_current_accent(), 0);
 
     screen_show(SCR_MODELOCK);
 }

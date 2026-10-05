@@ -491,8 +491,9 @@ static int source_send(int mode){
             if(ipc_send_cmd("0642000C0000") < 0) return -1;
             return ipc_send_cmd("0657000C0008");
         case 1:
+            usleep(100000);
             if(ipc_send_cmd("0642000C0002") < 0) return -1;
-            return ipc_send_cmd("0657000C0008");
+            return ipc_send_cmd("0657000C0001");
         case 2:
             if(ipc_send_cmd("0642000C0000") < 0) return -1;
             return ipc_send_cmd("0657000C0006");
