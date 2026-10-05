@@ -54,6 +54,14 @@ static lv_obj_t *g_dac_sub;
 static lv_obj_t *g_dac_badge;
 static lv_obj_t *g_dac_badge_lbl;
 
+/* USB Storage view widgets */
+static lv_obj_t *g_stor_circle;
+static lv_obj_t *g_stor_icon;
+static lv_obj_t *g_stor_title;
+static lv_obj_t *g_stor_badge;
+static lv_obj_t *g_stor_badge_lbl;
+static lv_obj_t *g_stor_sub;
+
 /* Bluetooth AVRCP state cache (thread-safe) */
 typedef struct {
     int connected;
@@ -465,7 +473,7 @@ static void modelock_poll_cb(lv_timer_t *t){
             if(connected && fmt[0]){
                 lv_label_set_text(g_dac_badge_lbl, fmt);
                 lv_obj_remove_flag(g_dac_badge, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_align(g_dac_badge, LV_ALIGN_TOP_MID, 0, 138);
+                lv_obj_align(g_dac_badge, LV_ALIGN_TOP_MID, 0, 126);
             } else {
                 lv_obj_add_flag(g_dac_badge, LV_OBJ_FLAG_HIDDEN);
             }
@@ -530,13 +538,13 @@ static void modelock_poll_cb(lv_timer_t *t){
             lv_label_set_text(g_bt_codec_lbl, st.codec);
             if(g_bt_codec_badge){
                 lv_obj_remove_flag(g_bt_codec_badge, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 212);
+                lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 214);
             }
         } else if(st.connected){
             lv_label_set_text(g_bt_codec_lbl, "BT Audio");
             if(g_bt_codec_badge){
                 lv_obj_remove_flag(g_bt_codec_badge, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 212);
+                lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 214);
             }
         } else {
             if(g_bt_codec_badge) lv_obj_add_flag(g_bt_codec_badge, LV_OBJ_FLAG_HIDDEN);
@@ -545,6 +553,11 @@ static void modelock_poll_cb(lv_timer_t *t){
 
     if(g_lbl_pp){
         lv_label_set_text(g_lbl_pp, st.is_playing ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+        if(theme_trait(THEME_TRAIT_NP_BIG_PLAY)){
+            lv_obj_set_style_text_color(g_lbl_pp, TC(ON_ACCENT), 0);
+        } else {
+            lv_obj_set_style_text_color(g_lbl_pp, ui_current_accent(), 0);
+        }
     }
 
     bt_disc_spin(st.connected && st.is_playing);
@@ -596,7 +609,7 @@ void modelock_prompt_exit(void){
 
     lv_obj_t *card = lv_obj_create(g_exit_modal);
     lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, 280, 160);
+    lv_obj_set_size(card, 280, 164);
     lv_obj_center(card);
     lv_obj_set_style_radius(card, 18, 0);
     lv_obj_set_style_bg_color(card, TC(SURFACE), 0);
@@ -610,10 +623,10 @@ void modelock_prompt_exit(void){
     if(g_lock_mode == 1) title_txt = "Exit USB DAC?";
     else if(g_lock_mode == 2) title_txt = "Exit Bluetooth Receiver?";
     else if(g_lock_mode == 3) title_txt = "Exit USB Storage?";
-    lv_label_set_text(t, title_txt);
-    lv_obj_set_style_text_font(t, TF(USER_16), 0);
+    lv_obj_set_style_text_font(t, TF(UI_16), 0);
     lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
     lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 20);
+    theme_case_text(t, title_txt);
 
     lv_obj_t *sub = lv_label_create(card);
     lv_label_set_text(sub, "Return to local music playback?");
@@ -626,6 +639,7 @@ void modelock_prompt_exit(void){
     lv_obj_remove_style_all(btn_cancel);
     lv_obj_set_size(btn_cancel, 108, 42);
     lv_obj_align(btn_cancel, LV_ALIGN_BOTTOM_LEFT, 20, -18);
+    lv_obj_set_ext_click_area(btn_cancel, 4);
     lv_obj_set_style_radius(btn_cancel, 12, 0);
     lv_obj_set_style_bg_color(btn_cancel, TC(SURFACE_RAISED), 0);
     lv_obj_set_style_bg_opa(btn_cancel, LV_OPA_COVER, 0);
@@ -635,23 +649,25 @@ void modelock_prompt_exit(void){
     lv_obj_t *lbl_cancel = lv_label_create(btn_cancel);
     lv_label_set_text(lbl_cancel, "Cancel");
     lv_obj_center(lbl_cancel);
-    lv_obj_set_style_text_font(lbl_cancel, TF(USER_14), 0);
-    lv_obj_set_style_text_color(lbl_cancel, TC(TEXT_PRIMARY), 0);
+    lv_obj_set_style_text_font(lbl_cancel, TF(UI_16), 0);
+    lv_obj_set_style_text_color(lbl_cancel, TC(TEXT_SECONDARY), 0);
 
     /* Exit Pill */
     lv_obj_t *btn_exit = lv_button_create(card);
     lv_obj_remove_style_all(btn_exit);
     lv_obj_set_size(btn_exit, 108, 42);
     lv_obj_align(btn_exit, LV_ALIGN_BOTTOM_RIGHT, -20, -18);
+    lv_obj_set_ext_click_area(btn_exit, 4);
     lv_obj_set_style_radius(btn_exit, 12, 0);
     lv_obj_set_style_bg_color(btn_exit, ui_current_accent(), 0);
     lv_obj_set_style_bg_opa(btn_exit, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn_exit, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
     ui_on(btn_exit, exit_modal_confirm_cb, LV_EVENT_CLICKED, NULL, "modelock.exit", UI_CORE);
 
     lv_obj_t *lbl_exit = lv_label_create(btn_exit);
     lv_label_set_text(lbl_exit, "Exit");
     lv_obj_center(lbl_exit);
-    lv_obj_set_style_text_font(lbl_exit, TF(USER_14), 0);
+    lv_obj_set_style_text_font(lbl_exit, TF(UI_16), 0);
     lv_obj_set_style_text_color(lbl_exit, TC(ON_ACCENT), 0);
 }
 
@@ -665,13 +681,13 @@ void modelock_create(lv_obj_t *root){
     lv_obj_set_width(g_hdr_title, 320);
     lv_obj_set_height(g_hdr_title, LV_SIZE_CONTENT);
     lv_obj_clear_flag(g_hdr_title, LV_OBJ_FLAG_SCROLLABLE);
-    lv_label_set_text(g_hdr_title, "Mode Lockdown");
     lv_obj_set_style_text_align(g_hdr_title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_hdr_title, TF(USER_16), 0);
+    lv_obj_set_style_text_font(g_hdr_title, TF(HEADER), 0);
     lv_obj_set_style_text_color(g_hdr_title, TC(TEXT_PRIMARY), 0);
+    theme_title_text(g_hdr_title, "Mode Lockdown");
 
     g_hdr_status = lv_label_create(root);
-    lv_obj_set_pos(g_hdr_status, 20, 40);
+    lv_obj_set_pos(g_hdr_status, 20, 46);
     lv_obj_set_width(g_hdr_status, 320);
     lv_obj_set_height(g_hdr_status, LV_SIZE_CONTENT);
     lv_obj_clear_flag(g_hdr_status, LV_OBJ_FLAG_SCROLLABLE);
@@ -693,7 +709,7 @@ void modelock_create(lv_obj_t *root){
     g_bt_disc = lv_obj_create(g_cont_bt);
     lv_obj_remove_style_all(g_bt_disc);
     lv_obj_set_size(g_bt_disc, 84, 84);
-    lv_obj_set_pos(g_bt_disc, 138, 62);
+    lv_obj_set_pos(g_bt_disc, 138, 70);
     lv_obj_set_style_radius(g_bt_disc, 42, 0);
     lv_obj_set_style_bg_color(g_bt_disc, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(g_bt_disc, LV_OPA_COVER, 0);
@@ -735,7 +751,7 @@ void modelock_create(lv_obj_t *root){
 
     /* Track Title */
     g_bt_track_title = lv_label_create(g_cont_bt);
-    lv_obj_set_pos(g_bt_track_title, 20, 152);
+    lv_obj_set_pos(g_bt_track_title, 20, 160);
     lv_obj_set_width(g_bt_track_title, 320);
     lv_obj_set_height(g_bt_track_title, LV_SIZE_CONTENT);
     lv_obj_clear_flag(g_bt_track_title, LV_OBJ_FLAG_SCROLLABLE);
@@ -747,26 +763,26 @@ void modelock_create(lv_obj_t *root){
 
     /* Track Sub (Artist / Album) */
     g_bt_track_sub = lv_label_create(g_cont_bt);
-    lv_obj_set_pos(g_bt_track_sub, 25, 182);
+    lv_obj_set_pos(g_bt_track_sub, 25, 188);
     lv_obj_set_width(g_bt_track_sub, 310);
     lv_obj_set_height(g_bt_track_sub, LV_SIZE_CONTENT);
     lv_obj_clear_flag(g_bt_track_sub, LV_OBJ_FLAG_SCROLLABLE);
     lv_label_set_text(g_bt_track_sub, "Select 'SNOWSKY DISC' on phone");
     lv_label_set_long_mode(g_bt_track_sub, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_style_text_align(g_bt_track_sub, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_bt_track_sub, TF(USER_16), 0);
+    lv_obj_set_style_text_font(g_bt_track_sub, TF(USER_14), 0);
     lv_obj_set_style_text_color(g_bt_track_sub, TC(TEXT_MUTED), 0);
 
     /* Codec pill badge */
     g_bt_codec_badge = lv_obj_create(g_cont_bt);
     lv_obj_remove_style_all(g_bt_codec_badge);
-    lv_obj_set_size(g_bt_codec_badge, LV_SIZE_CONTENT, 24);
+    lv_obj_set_size(g_bt_codec_badge, LV_SIZE_CONTENT, 22);
     lv_obj_set_style_min_width(g_bt_codec_badge, 80, 0);
-    lv_obj_set_style_pad_hor(g_bt_codec_badge, 14, 0);
+    lv_obj_set_style_pad_hor(g_bt_codec_badge, 12, 0);
     lv_obj_set_style_pad_ver(g_bt_codec_badge, 2, 0);
-    lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 212);
-    lv_obj_set_style_radius(g_bt_codec_badge, 12, 0);
-    lv_obj_set_style_bg_color(g_bt_codec_badge, TC(SURFACE), 0);
+    lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 214);
+    lv_obj_set_style_radius(g_bt_codec_badge, 11, 0);
+    lv_obj_set_style_bg_color(g_bt_codec_badge, TC(SURFACE_RAISED), 0);
     lv_obj_set_style_bg_opa(g_bt_codec_badge, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(g_bt_codec_badge, 1, 0);
     lv_obj_set_style_border_color(g_bt_codec_badge, ui_current_accent(), 0);
@@ -791,6 +807,7 @@ void modelock_create(lv_obj_t *root){
     g_btn_prev = lv_button_create(ctrl_row);
     lv_obj_remove_style_all(g_btn_prev);
     lv_obj_set_size(g_btn_prev, 46, 46);
+    lv_obj_set_ext_click_area(g_btn_prev, 4);
     lv_obj_set_style_radius(g_btn_prev, 23, 0);
     lv_obj_set_style_bg_color(g_btn_prev, TC(SURFACE_RAISED), 0);
     lv_obj_set_style_bg_opa(g_btn_prev, LV_OPA_COVER, 0);
@@ -806,23 +823,30 @@ void modelock_create(lv_obj_t *root){
     g_btn_pp = lv_button_create(ctrl_row);
     lv_obj_remove_style_all(g_btn_pp);
     lv_obj_set_size(g_btn_pp, 56, 56);
+    lv_obj_set_ext_click_area(g_btn_pp, 4);
     lv_obj_set_style_radius(g_btn_pp, 28, 0);
-    lv_obj_set_style_bg_color(g_btn_pp, TC(BORDER), 0);
     lv_obj_set_style_bg_opa(g_btn_pp, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(g_btn_pp, 2, 0);
-    lv_obj_set_style_border_color(g_btn_pp, ui_current_accent(), 0);
-    lv_obj_set_style_bg_color(g_btn_pp, TC(RAISED_PRESSED), LV_STATE_PRESSED);
+    if(theme_trait(THEME_TRAIT_NP_BIG_PLAY)){
+        lv_obj_set_style_bg_color(g_btn_pp, ui_current_accent(), 0);
+        lv_obj_set_style_border_width(g_btn_pp, 0, 0);
+    } else {
+        lv_obj_set_style_bg_color(g_btn_pp, TC(SURFACE_RAISED), 0);
+        lv_obj_set_style_border_width(g_btn_pp, 2, 0);
+        lv_obj_set_style_border_color(g_btn_pp, ui_current_accent(), 0);
+    }
+    lv_obj_set_style_bg_color(g_btn_pp, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
     ui_on(g_btn_pp, transport_btn_cb, LV_EVENT_CLICKED, (void*)"pp", "modelock.pp", UI_CORE);
     g_lbl_pp = lv_label_create(g_btn_pp);
     lv_label_set_text(g_lbl_pp, LV_SYMBOL_PLAY);
     lv_obj_center(g_lbl_pp);
-    lv_obj_set_style_text_color(g_lbl_pp, TC(TEXT_PRIMARY), 0);
+    lv_obj_set_style_text_color(g_lbl_pp, theme_trait(THEME_TRAIT_NP_BIG_PLAY) ? TC(ON_ACCENT) : ui_current_accent(), 0);
     lv_obj_set_style_text_font(g_lbl_pp, TF(UI_24), 0);
 
     /* Next button */
     g_btn_next = lv_button_create(ctrl_row);
     lv_obj_remove_style_all(g_btn_next);
     lv_obj_set_size(g_btn_next, 46, 46);
+    lv_obj_set_ext_click_area(g_btn_next, 4);
     lv_obj_set_style_radius(g_btn_next, 23, 0);
     lv_obj_set_style_bg_color(g_btn_next, TC(SURFACE_RAISED), 0);
     lv_obj_set_style_bg_opa(g_btn_next, LV_OPA_COVER, 0);
@@ -837,14 +861,14 @@ void modelock_create(lv_obj_t *root){
     /* 3. Container for USB DAC (Mode 1) */
     g_cont_dac = lv_obj_create(root);
     lv_obj_remove_style_all(g_cont_dac);
-    lv_obj_set_pos(g_cont_dac, 0, 72);
+    lv_obj_set_pos(g_cont_dac, 0, 70);
     lv_obj_set_size(g_cont_dac, 360, 220);
     lv_obj_clear_flag(g_cont_dac, LV_OBJ_FLAG_SCROLLABLE);
 
     g_dac_circle = lv_obj_create(g_cont_dac);
     lv_obj_remove_style_all(g_dac_circle);
     lv_obj_set_size(g_dac_circle, 84, 84);
-    lv_obj_set_pos(g_dac_circle, 138, 14);
+    lv_obj_set_pos(g_dac_circle, 138, 0);
     lv_obj_set_style_radius(g_dac_circle, 42, 0);
     lv_obj_set_style_bg_color(g_dac_circle, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(g_dac_circle, LV_OPA_COVER, 0);
@@ -858,24 +882,24 @@ void modelock_create(lv_obj_t *root){
     lv_obj_set_style_text_color(g_dac_icon, ui_current_accent(), 0);
 
     g_dac_title = lv_label_create(g_cont_dac);
-    lv_obj_set_pos(g_dac_title, 20, 110);
-    lv_obj_set_size(g_dac_title, 320, 26);
+    lv_obj_set_pos(g_dac_title, 20, 96);
+    lv_obj_set_size(g_dac_title, 320, 24);
     lv_label_set_text(g_dac_title, "USB Audio Class Active");
     lv_obj_set_style_text_align(g_dac_title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_dac_title, TF(USER_16), 0);
+    lv_obj_set_style_text_font(g_dac_title, TF(USER_18), 0);
     lv_obj_set_style_text_color(g_dac_title, TC(TEXT_PRIMARY), 0);
 
     /* Sample Rate / Codec badge */
     g_dac_badge = lv_obj_create(g_cont_dac);
     lv_obj_remove_style_all(g_dac_badge);
     lv_obj_set_size(g_dac_badge, LV_SIZE_CONTENT, 22);
-    lv_obj_align(g_dac_badge, LV_ALIGN_TOP_MID, 0, 138);
+    lv_obj_align(g_dac_badge, LV_ALIGN_TOP_MID, 0, 126);
     lv_obj_set_style_radius(g_dac_badge, 11, 0);
     lv_obj_set_style_bg_color(g_dac_badge, TC(SURFACE_RAISED), 0);
     lv_obj_set_style_bg_opa(g_dac_badge, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(g_dac_badge, 1, 0);
     lv_obj_set_style_border_color(g_dac_badge, ui_current_accent(), 0);
-    lv_obj_set_style_pad_hor(g_dac_badge, 10, 0);
+    lv_obj_set_style_pad_hor(g_dac_badge, 12, 0);
     lv_obj_clear_flag(g_dac_badge, LV_OBJ_FLAG_SCROLLABLE);
 
     g_dac_badge_lbl = lv_label_create(g_dac_badge);
@@ -885,7 +909,7 @@ void modelock_create(lv_obj_t *root){
     lv_obj_set_style_text_color(g_dac_badge_lbl, ui_current_accent(), 0);
 
     g_dac_sub = lv_label_create(g_cont_dac);
-    lv_obj_set_pos(g_dac_sub, 20, 168);
+    lv_obj_set_pos(g_dac_sub, 20, 158);
     lv_obj_set_size(g_dac_sub, 320, 44);
     lv_label_set_text(g_dac_sub, "Playing audio from PC / Mac.\nHardware DAC volume active.");
     lv_obj_set_style_text_align(g_dac_sub, LV_TEXT_ALIGN_CENTER, 0);
@@ -895,41 +919,60 @@ void modelock_create(lv_obj_t *root){
     /* 4. Container for USB Storage (Mode 3) */
     g_cont_storage = lv_obj_create(root);
     lv_obj_remove_style_all(g_cont_storage);
-    lv_obj_set_pos(g_cont_storage, 0, 72);
+    lv_obj_set_pos(g_cont_storage, 0, 70);
     lv_obj_set_size(g_cont_storage, 360, 220);
     lv_obj_clear_flag(g_cont_storage, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *stor_circle = lv_obj_create(g_cont_storage);
-    lv_obj_remove_style_all(stor_circle);
-    lv_obj_set_size(stor_circle, 84, 84);
-    lv_obj_set_pos(stor_circle, 138, 14);
-    lv_obj_set_style_radius(stor_circle, 42, 0);
-    lv_obj_set_style_bg_color(stor_circle, TC(SURFACE), 0);
-    lv_obj_set_style_bg_opa(stor_circle, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(stor_circle, 2, 0);
-    lv_obj_set_style_border_color(stor_circle, ui_current_accent(), 0);
+    g_stor_circle = lv_obj_create(g_cont_storage);
+    lv_obj_remove_style_all(g_stor_circle);
+    lv_obj_set_size(g_stor_circle, 84, 84);
+    lv_obj_set_pos(g_stor_circle, 138, 0);
+    lv_obj_set_style_radius(g_stor_circle, 42, 0);
+    lv_obj_set_style_bg_color(g_stor_circle, TC(SURFACE), 0);
+    lv_obj_set_style_bg_opa(g_stor_circle, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_stor_circle, 2, 0);
+    lv_obj_set_style_border_color(g_stor_circle, ui_current_accent(), 0);
 
-    lv_obj_t *stor_icon = lv_label_create(stor_circle);
-    lv_label_set_text(stor_icon, LV_SYMBOL_DRIVE);
-    lv_obj_center(stor_icon);
-    lv_obj_set_style_text_font(stor_icon, TF(UI_28), 0);
-    lv_obj_set_style_text_color(stor_icon, ui_current_accent(), 0);
+    g_stor_icon = lv_label_create(g_stor_circle);
+    lv_label_set_text(g_stor_icon, LV_SYMBOL_DRIVE);
+    lv_obj_center(g_stor_icon);
+    lv_obj_set_style_text_font(g_stor_icon, TF(UI_28), 0);
+    lv_obj_set_style_text_color(g_stor_icon, ui_current_accent(), 0);
 
-    lv_obj_t *stor_msg1 = lv_label_create(g_cont_storage);
-    lv_obj_set_pos(stor_msg1, 20, 116);
-    lv_obj_set_size(stor_msg1, 320, 26);
-    lv_label_set_text(stor_msg1, "MicroSD Card Exported");
-    lv_obj_set_style_text_align(stor_msg1, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(stor_msg1, TF(USER_16), 0);
-    lv_obj_set_style_text_color(stor_msg1, TC(TEXT_PRIMARY), 0);
+    g_stor_title = lv_label_create(g_cont_storage);
+    lv_obj_set_pos(g_stor_title, 20, 96);
+    lv_obj_set_size(g_stor_title, 320, 24);
+    lv_label_set_text(g_stor_title, "MicroSD Card Exported");
+    lv_obj_set_style_text_align(g_stor_title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(g_stor_title, TF(USER_18), 0);
+    lv_obj_set_style_text_color(g_stor_title, TC(TEXT_PRIMARY), 0);
 
-    lv_obj_t *stor_msg2 = lv_label_create(g_cont_storage);
-    lv_obj_set_pos(stor_msg2, 20, 148);
-    lv_obj_set_size(stor_msg2, 320, 44);
-    lv_label_set_text(stor_msg2, "Card is mounted by computer.\nPlease safely eject on PC before exit.");
-    lv_obj_set_style_text_align(stor_msg2, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(stor_msg2, TF(USER_14), 0);
-    lv_obj_set_style_text_color(stor_msg2, TC(TEXT_MUTED), 0);
+    /* Storage badge */
+    g_stor_badge = lv_obj_create(g_cont_storage);
+    lv_obj_remove_style_all(g_stor_badge);
+    lv_obj_set_size(g_stor_badge, LV_SIZE_CONTENT, 22);
+    lv_obj_align(g_stor_badge, LV_ALIGN_TOP_MID, 0, 126);
+    lv_obj_set_style_radius(g_stor_badge, 11, 0);
+    lv_obj_set_style_bg_color(g_stor_badge, TC(SURFACE_RAISED), 0);
+    lv_obj_set_style_bg_opa(g_stor_badge, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_stor_badge, 1, 0);
+    lv_obj_set_style_border_color(g_stor_badge, ui_current_accent(), 0);
+    lv_obj_set_style_pad_hor(g_stor_badge, 12, 0);
+    lv_obj_clear_flag(g_stor_badge, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_stor_badge_lbl = lv_label_create(g_stor_badge);
+    lv_label_set_text(g_stor_badge_lbl, "USB Mass Storage");
+    lv_obj_center(g_stor_badge_lbl);
+    lv_obj_set_style_text_font(g_stor_badge_lbl, TF(USER_14), 0);
+    lv_obj_set_style_text_color(g_stor_badge_lbl, ui_current_accent(), 0);
+
+    g_stor_sub = lv_label_create(g_cont_storage);
+    lv_obj_set_pos(g_stor_sub, 20, 158);
+    lv_obj_set_size(g_stor_sub, 320, 44);
+    lv_label_set_text(g_stor_sub, "Card is mounted by computer.\nPlease safely eject on PC before exit.");
+    lv_obj_set_style_text_align(g_stor_sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(g_stor_sub, TF(USER_14), 0);
+    lv_obj_set_style_text_color(g_stor_sub, TC(TEXT_MUTED), 0);
 
     /* Subtle exit hint at bottom */
     lv_obj_t *hint = lv_label_create(root);
@@ -953,7 +996,7 @@ void modelock_open(int mode){
 
     if(mode == 1){
         /* USB DAC */
-        if(g_hdr_title)  lv_label_set_text(g_hdr_title, LV_SYMBOL_AUDIO " USB DAC Mode");
+        if(g_hdr_title)  theme_title_text(g_hdr_title, "USB DAC");
         if(g_hdr_status) lv_label_set_text(g_hdr_status, "Checking USB connection...");
         if(g_cont_dac)   lv_obj_remove_flag(g_cont_dac, LV_OBJ_FLAG_HIDDEN);
         bt_disc_spin(0);
@@ -962,7 +1005,7 @@ void modelock_open(int mode){
         }
     } else if(mode == 2){
         /* Bluetooth Receiving */
-        if(g_hdr_title)  lv_label_set_text(g_hdr_title, LV_SYMBOL_BLUETOOTH " Bluetooth Receiver");
+        if(g_hdr_title)  theme_title_text(g_hdr_title, "Bluetooth Receiver");
         if(g_hdr_status) lv_label_set_text(g_hdr_status, "Ready to connect");
         if(g_cont_bt)    lv_obj_remove_flag(g_cont_bt, LV_OBJ_FLAG_HIDDEN);
 
@@ -976,21 +1019,37 @@ void modelock_open(int mode){
         }
     } else if(mode == 3){
         /* USB Storage */
-        if(g_hdr_title)  lv_label_set_text(g_hdr_title, LV_SYMBOL_DRIVE " USB Storage Mode");
+        if(g_hdr_title)  theme_title_text(g_hdr_title, "USB Storage");
         if(g_hdr_status) lv_label_set_text(g_hdr_status, "Card exported to host");
         if(g_cont_storage) lv_obj_remove_flag(g_cont_storage, LV_OBJ_FLAG_HIDDEN);
         bt_disc_spin(0);
     }
 
     /* Update colors to current accent */
-    if(g_bt_spindle)     lv_obj_set_style_bg_color(g_bt_spindle, ui_current_accent(), 0);
-    if(g_btn_pp)         lv_obj_set_style_border_color(g_btn_pp, ui_current_accent(), 0);
-    if(g_bt_codec_badge) lv_obj_set_style_border_color(g_bt_codec_badge, ui_current_accent(), 0);
-    if(g_bt_codec_lbl)   lv_obj_set_style_text_color(g_bt_codec_lbl, ui_current_accent(), 0);
-    if(g_dac_circle)     lv_obj_set_style_border_color(g_dac_circle, ui_current_accent(), 0);
-    if(g_dac_icon)       lv_obj_set_style_text_color(g_dac_icon, ui_current_accent(), 0);
-    if(g_dac_badge)      lv_obj_set_style_border_color(g_dac_badge, ui_current_accent(), 0);
-    if(g_dac_badge_lbl)  lv_obj_set_style_text_color(g_dac_badge_lbl, ui_current_accent(), 0);
+    lv_color_t acc = ui_current_accent();
+    if(g_bt_spindle)     lv_obj_set_style_bg_color(g_bt_spindle, acc, 0);
+    if(g_bt_codec_badge) lv_obj_set_style_border_color(g_bt_codec_badge, acc, 0);
+    if(g_bt_codec_lbl)   lv_obj_set_style_text_color(g_bt_codec_lbl, acc, 0);
+    if(g_btn_pp){
+        if(theme_trait(THEME_TRAIT_NP_BIG_PLAY)){
+            lv_obj_set_style_bg_color(g_btn_pp, acc, 0);
+            lv_obj_set_style_border_width(g_btn_pp, 0, 0);
+            if(g_lbl_pp) lv_obj_set_style_text_color(g_lbl_pp, TC(ON_ACCENT), 0);
+        } else {
+            lv_obj_set_style_bg_color(g_btn_pp, TC(SURFACE_RAISED), 0);
+            lv_obj_set_style_border_width(g_btn_pp, 2, 0);
+            lv_obj_set_style_border_color(g_btn_pp, acc, 0);
+            if(g_lbl_pp) lv_obj_set_style_text_color(g_lbl_pp, acc, 0);
+        }
+    }
+    if(g_dac_circle)     lv_obj_set_style_border_color(g_dac_circle, acc, 0);
+    if(g_dac_icon)       lv_obj_set_style_text_color(g_dac_icon, acc, 0);
+    if(g_dac_badge)      lv_obj_set_style_border_color(g_dac_badge, acc, 0);
+    if(g_dac_badge_lbl)  lv_obj_set_style_text_color(g_dac_badge_lbl, acc, 0);
+    if(g_stor_circle)    lv_obj_set_style_border_color(g_stor_circle, acc, 0);
+    if(g_stor_icon)      lv_obj_set_style_text_color(g_stor_icon, acc, 0);
+    if(g_stor_badge)     lv_obj_set_style_border_color(g_stor_badge, acc, 0);
+    if(g_stor_badge_lbl) lv_obj_set_style_text_color(g_stor_badge_lbl, acc, 0);
 
     screen_show(SCR_MODELOCK);
 }
