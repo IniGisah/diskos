@@ -37,7 +37,7 @@ static lv_obj_t *g_check[N_MODES];   /* per-row checkmark label */
 static lv_obj_t *g_row[N_MODES];     /* per-row button (for the selected highlight) */
 
 /* OUTPUT-ROUTE-BEGIN */
-/* Output route: Internal DAC / SPDIF / USB Audio (SPDIF row + USB Audio picker row: -DDISKOS_TEST_OUTPUTS builds only).
+/* Output route: Internal DAC / SPDIF (Settings SPDIF toggle: -DDISKOS_TEST_OUTPUTS builds only).
  * Stock V2.57 (mq_ui_257.dis):
  *   Settings SPDIF toggle (0x480510 -> 0x464f0c):  0666 <6|4>, 0657 8                       (no 0642, no sleep)
  *   Working Mode callback 0x46bbac (200 ms one-shot): internal/SPDIF (0x46bd28): 0666 <6|4>, usleep 65 ms, 0642 0, 0657 8
@@ -54,18 +54,14 @@ static lv_obj_t *g_row[N_MODES];     /* per-row button (for the selected highlig
 #ifndef OUT_PCM_GLOB
 #define OUT_PCM_GLOB "/proc/asound/card*/pcm*p/sub*/status"
 #endif
-#ifndef OUT_USB_CARD
-#define OUT_USB_CARD "/proc/asound/card1"   /* the USB DAC card; its usbid node exists for USB audio cards only (UNVERIFIED on this kernel) */
-#endif
 #define OUT_QUIET_MS 500
 #define OUT_WAIT_MS  3000
 #define OUT_WORKMODE "0657000C0008"
 #define OUT_PAUSE    "0201000C0000"
 typedef struct { const char *route, *gadget; unsigned settle_us; } out_seq_t;
-static const out_seq_t OUT_SEQ[3] = {
+static const out_seq_t OUT_SEQ[2] = {
     { "0666000C0006", "0642000C0000", 65000 },   /* OUT_INTERNAL */
     { "0666000C0004", "0642000C0000", 65000 },   /* OUT_SPDIF */
-    { "0666000C0003", "0642000C0005", 0 },       /* OUT_USB */
 };
 static void modes_ui_refresh(void);
 static int g_out_route = OUT_INTERNAL;
@@ -83,14 +79,12 @@ int modes_output_route(void){
 }
 void modes_output_reset(void){ out_set_state(OUT_INTERNAL); }
 int modes_output_busy(void){ return g_osw.tm != NULL || g_rec; }
-/* Route-aware local init. with_gadget (the boot timer): internal/SPDIF send 0642 0 first; USB always pairs 0666 3 with 0642 5. */
+/* Route-aware local init. with_gadget (the boot timer): internal/SPDIF send 0642 0 first. */
 int modes_local_init(int with_gadget){
     int r = modes_output_route();
-    if(r != OUT_USB && with_gadget && ipc_send_cmd(OUT_SEQ[r].gadget) < 0) return -1;
+    if(with_gadget && ipc_send_cmd(OUT_SEQ[r].gadget) < 0) return -1;
     int rc = ipc_send_cmd(OUT_SEQ[r].route) < 0 ? -1 : 0;
     if(rc < 0 && with_gadget) return -1;   /* the boot timer retries the whole init next tick */
-    /* the play preamble (with_gadget 0) is best effort like the old inline pair: 0657 8 is attempted whatever 0666 returned */
-    if(r == OUT_USB && ipc_send_cmd(OUT_SEQ[r].gadget) < 0) rc = -1;
     if(ipc_send_cmd(OUT_WORKMODE) < 0) rc = -1;
     return rc;
 }
@@ -107,24 +101,6 @@ static int out_pcm_quiet(void){
     }
     globfree(&g);
     return quiet;
-}
-static int out_usb_card_ok(void){
-    char p[96]; snprintf(p, sizeof p, "%s/usbid", OUT_USB_CARD);
-    if(access(p, F_OK) == 0) return 1;
-    if(access(OUT_USB_CARD, F_OK) == 0) return 1;
-    FILE *f = fopen("/proc/asound/cards", "r");
-    if(!f) return 0;
-    char line[256]; int found = 0;
-    while(fgets(line, sizeof line, f)){
-        if(strstr(line, "USB-Audio") || strstr(line, "USB Audio")){
-            found = 1; break;
-        }
-    }
-    fclose(f);
-    return found;
-}
-int modes_usb_dac_connected(void){
-    return out_usb_card_ok();
 }
 /* 0 = whole sequence sent; -1 = the 0666 was refused (nothing changed); -2 = the route moved but the tail failed */
 static int out_seq_send(int t, int full){
@@ -198,22 +174,20 @@ static void osw_tick(lv_timer_t *t){
     }
     const char *why = ui_output_blocked();
     if(why){ osw_stop(why, g_osw.was_playing); return; }
-    if(g_osw.target == OUT_USB && !out_usb_card_ok()){ osw_stop("USB DAC not found", g_osw.was_playing); return; }   /* re-checked right before 0666 3 */
     lv_timer_del(g_osw.tm); g_osw.tm = NULL;
     out_run();
 }
-static int out_switch(int target, int via_mode){
-    if(target < OUT_INTERNAL || target > OUT_USB) return -1;
+int modes_output_switch(int target){
+    if(target < OUT_INTERNAL || target > OUT_SPDIF) return -1;
     if(modes_output_busy()){ ui_toast("Switching..."); return -1; }
     const char *why = ui_output_blocked();
     if(why){ out_set_state(modes_output_route()); ui_toast(why); return -1; }
-    if(target == OUT_USB && !out_usb_card_ok()){ out_set_state(modes_output_route()); ui_toast("Connect a USB DAC first"); return -1; }
     int was_playing = ui_is_playing();
     if(!was_playing && !out_pcm_quiet()){ out_set_state(modes_output_route()); ui_toast("Player is busy - try again"); return -1; }   /* PCM live but not "playing": a pause toggle would START it */
     track_state_t st; ipc_get_state(&st);
     memset(&g_osw, 0, sizeof g_osw);
     g_osw.target = target; g_osw.was_playing = was_playing;
-    g_osw.full = via_mode || target == OUT_USB || modes_output_route() == OUT_USB;   /* Settings toggle = stock's 2-frame form, except to/from USB */
+    g_osw.full = 0;   /* Settings toggle = stock's 2-frame form: 0666 then 0657 8 */
     g_osw.gen = ipc_generation(); g_osw.pos = st.have_track ? st.position_ms : 0;
     snprintf(g_osw.path, sizeof g_osw.path, "%s", st.have_track ? st.path : "");
     if(was_playing && ipc_send_cmd(OUT_PAUSE) < 0){ out_set_state(modes_output_route()); ui_toast("Player is busy - try again"); return -1; }
@@ -221,8 +195,6 @@ static int out_switch(int target, int via_mode){
     g_osw.tm = lv_timer_create(osw_tick, 100, NULL);
     return 0;
 }
-int modes_output_switch(int target){ return out_switch(target, 0); }
-int modes_output_mode_switch(int target){ return out_switch(target, 1); }
 /* OUTPUT-ROUTE-END */
 
 static void mark_selected_mode(int cur){

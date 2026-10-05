@@ -18,7 +18,6 @@ a = source.index("static int storage_player_guarded(void){")
 b = source.index("static int source_send(", a)
 source = source[:a] + "static int storage_player_guarded(void){ return test_guarded; }\n" + source[b:]
 source = source.replace("static int rmguard_dir_ok(const char *dir);", "")
-source = source.replace("static int usb_audio_out_detected(void);", "")
 
 def run_harness(exe, timeout):
     """Run a compiled harness; its LAST stdout line must be HARNESS COMPLETE, so an early return 0 fails."""
@@ -49,6 +48,8 @@ with tempfile.TemporaryDirectory(prefix="diskos-storage-tests-") as tmp:
 #include <stdatomic.h>
 #include <assert.h>
 #include "sdio.h"
+#include "fwcaps.h"
+int fw_has_usb_audio_out(void){ return 1; }
 typedef void lv_timer_t;
 static uint32_t test_clock;
 static int test_mounted=1, test_exported, test_host, test_guarded=1, test_scan;

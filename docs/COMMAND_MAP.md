@@ -72,7 +72,7 @@ Then play normally (`0100...`). Reverse (BT->local) = `ui_route_analog()`: `0666
 **No-stutter requires bluealsa `--sbc-quality=medium`** (bit-pool ~33): stock default-quality stutters; medium plays clean stereo (~86% CPU idle on device). Set in `bt.c` bt_enable/bt_ensure_services. `--a2dp-force-mono` also works but is NOT needed (stereo is fine at medium quality).
 
 ## USB DAC OUTPUT (transmit digital audio to an external USB DAC) - [verified] WORKING (2026-09-29)
-Reverse-engineered from stock V2.40/V2.57 firmware (`mq_ui` and `mq_player` host mode handler). In stock firmware this is named "USB AUDIO" under Working Mode. In diskOS this is exposed as "USB DAC Output" (mode 4 under Working Mode).
+Reverse-engineered from stock V2.40/V2.57 firmware (`mq_ui` and `mq_player` host mode handler). In stock firmware this is named "USB AUDIO" under Working Mode. In diskOS this is exposed as "USB Audio" (mode 4 under Working Mode).
 
 Working route-to-USB-DAC sequence:
 ```
@@ -81,7 +81,29 @@ Working route-to-USB-DAC sequence:
 0657000C0008   work-mode 8 (LOCALPLAYER playback engine)
 ```
 Reverse (USB-DAC->local analog) = `0666000C0006`, `0642000C0000`, `0657000C0008`.
-Local playback and playlists route directly to the external USB DAC over USB-C OTG. If the external DAC is unplugged, playback automatically pauses and transport/playback commands are safely guarded until reconnected.
+Local playback and playlists route directly to the external USB DAC over USB-C OTG.
+
+### Sudden Disconnect and Reconnect Mechanics (verified against mq_player V2.57)
+- **Sudden Disconnect**:
+  - `mq_player` listens on kernel netlink uevents (`uevent_handler.c:0x4f3780`).
+  - When card 1 (`USB-Audio`) is removed, `on_usb_audio_remove` (`0x4f38e0`) executes:
+    1. Stops audio streaming immediately via `audio_track_stop()` (`0x456200`).
+    2. Switches output device to `USB_HOST_NULL` (`out_device = 7`, `0x47bf24`).
+    3. Closes ALSA mixer (`snd_mixer_close` @ `0x47e2f0`).
+    4. Sends IPC notification `a60a000C0213` (TIP_INFO_EVENT 531 = USB DAC disconnected) to `/ui`.
+  - In `diskOS`:
+    - Caught via `a60a 0213` (or 200 ms procfs fallback).
+    - UI marks playback paused, clears active playstate, and toasts `"USB DAC disconnected"`.
+    - Play commands while disconnected are blocked with toast `"USB DAC not connected"`.
+- **Reconnect**:
+  - When a USB DAC is plugged back in, `on_usb_audio_add` (`0x4f39c4`) executes in `mq_player`:
+    1. Re-binds output device back to `USB_HOST` (`out_device = 3`).
+    2. Reopens ALSA mixer and sound device.
+    3. Sends IPC notification `a60a000C0212` (TIP_INFO_EVENT 530 = USB DAC connected) to `/ui`.
+  - In `diskOS`:
+    - Caught via `a60a 0212` (or 200 ms procfs fallback).
+    - UI toasts `"USB DAC connected"` and preserves the paused track position.
+    - A standard Play tap (`0201` toggle) unpauses and resumes playback smoothly from the exact position.
 
 ## Table A @0x7c9d30 - 131 entries (terminator 0x7ca148)
 | tag | thunk | meaning | conf |

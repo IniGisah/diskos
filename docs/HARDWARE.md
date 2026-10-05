@@ -211,9 +211,9 @@ userspace-stack question, not a chip blocker for A2DP.
 | Controller | **DWC2 OTG** (`13500000.otg_new`) - **dual-role** (host *or* device) |
 | Current mode | device; gadget `serial_demo` exposing **ACM** only (VID 0x0525 / PID 0xa4a7) -> this *is* our serial shell |
 | USB-DAC mode | stock "UAC" work-mode reconfigures the gadget to **USB Audio Class** (device-as-DAC for a host PC) |
-| USB DAC Output | stock V2.40/V2.57 "USB AUDIO" work-mode switches DWC2 to **USB host mode**, turns on SGM41513 5V VBUS OTG boost, and routes audio out to an external USB DAC via `snd-usb-audio` |
+| USB Audio | stock V2.40/V2.57 "USB AUDIO" work-mode switches DWC2 to **USB host mode**, turns on SGM41513 5V VBUS OTG boost, and routes audio out to an external USB DAC via `snd-usb-audio` |
 
-**USB Host Mode (V2.40 / V2.57):** DWC2 OTG host mode is supported in V2.40 and V2.57 firmware (`0642000C0005` gadget selector + `0666000C0003` output route). The device powers the external DAC with 5V via the SGM41513 battery charger/boost controller and outputs digital audio over USB-C. diskOS exposes this under Working Mode as "USB DAC Output".
+**USB Host Mode (V2.40 / V2.57):** DWC2 OTG host mode is supported in V2.40 and V2.57 firmware (`0642000C0005` gadget selector + `0666000C0003` output route). The device powers the external DAC with 5V via the SGM41513 battery charger/boost controller and outputs digital audio over USB-C. diskOS exposes this under Working Mode as "USB Audio".
 
 ---
 
@@ -241,7 +241,7 @@ userspace-stack question, not a chip blocker for A2DP.
 | I2S rate | 768k/64b/8ch | <=384k/DSD256 (DAC-limited) | none beyond DAC; already maxes the DAC |
 | DSD native + DoP | Yes | Yes | parity - reuse driver ioctls |
 | Quad balanced DACs | Yes | Yes | direct ioctl control for bit-perfect / HW volume |
-| USB host (OTG) | Yes | Yes in V2.40/V2.57 (USB AUDIO) | Implemented in diskOS as USB DAC Output (mode 4) |
+| USB host (OTG) | Yes | Yes in V2.40/V2.57 (USB AUDIO) | Implemented in diskOS as USB Audio (mode 4) |
 | UAC2 gadget | Yes | Yes (UAC mode) | expose/control USB-DAC from diskOS |
 | USB-C PD | Yes (AW35615) | basic charge | PD-aware fast charge / power-role UI |
 | Physical keys | Yes (x2000_key) | Yes | map HW buttons in diskOS |

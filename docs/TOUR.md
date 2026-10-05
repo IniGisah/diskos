@@ -413,7 +413,7 @@ view-only, although Gain is available; older firmware has no Bluetooth codec cho
 jump within the player queue but cannot edit it, and network services and Bluetooth codec behavior
 remain experimental.
 
-When using USB Audio mode, if the external DAC is unplugged, on-screen controls safely block playback and warn the user. Reconnect the DAC or switch back to Local Playback before pressing the physical hardware play button to avoid the stock audio engine searching for the missing sound card.
+When using USB Audio mode, if the external DAC is unplugged, playback automatically pauses, the player safely re-routes to a null sink, and diskOS blocks playback commands until reconnected. Once the USB DAC is plugged back in, a normal tap on Play cleanly resumes playback from the paused position.
 
 After a restart, Wi-Fi can take up to about a minute to connect; if it shows no IP, reconnect in
 Settings > Wi-Fi. A fix is planned for 1.2.1.
