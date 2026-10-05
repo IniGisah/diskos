@@ -157,18 +157,49 @@ static void *bt_rx_worker(void *arg){
             continue;
         }
 
-        /* 1. Check connected device via hcitool con */
-        int n = exec_cmd_capture("hcitool con 2>/dev/null", buf, sizeof buf, 250);
+        /* 1. Check connected A2DP source device via BlueALSA active PCMs or bt_state */
         char mac[20] = {0};
+        char dbus_mac[32] = {0};
         int found = 0;
+
+        /* Check bluealsa-cli list-pcms for an active A2DP sink PCM */
+        int n = exec_cmd_capture("bluealsa-cli list-pcms 2>/dev/null", buf, sizeof buf, 250);
         if(n > 0){
-            char *line = strstr(buf, "ACL ");
-            if(line && strlen(line) >= 21){
-                line += 4;
-                if(line[2] == ':' && line[5] == ':' && line[8] == ':' && line[11] == ':' && line[14] == ':'){
-                    memcpy(mac, line, 17);
+            char *p = strstr(buf, "/org/bluealsa/hci0/dev_");
+            if(p){
+                p += 23;
+                if(strlen(p) >= 17){
+                    memcpy(dbus_mac, p, 17);
+                    dbus_mac[17] = 0;
+                    for(int i = 0; i < 17; i++)
+                        mac[i] = (dbus_mac[i] == '_') ? ':' : dbus_mac[i];
                     mac[17] = 0;
                     found = 1;
+                }
+            }
+        }
+
+        /* Fallback: check /usr/data/fiio/bt_state + hcitool con */
+        if(!found){
+            FILE *f = fopen("/usr/data/fiio/bt_state", "r");
+            if(f){
+                char ch = (char)fgetc(f);
+                fclose(f);
+                if(ch == '1'){
+                    if(exec_cmd_capture("hcitool con 2>/dev/null", buf, sizeof buf, 200) > 0){
+                        char *line = strstr(buf, "ACL ");
+                        if(line && strlen(line) >= 21){
+                            line += 4;
+                            if(line[2] == ':' && line[5] == ':' && line[8] == ':' && line[11] == ':' && line[14] == ':'){
+                                memcpy(mac, line, 17);
+                                mac[17] = 0;
+                                for(int i = 0; i < 17; i++)
+                                    dbus_mac[i] = (mac[i] == ':') ? '_' : mac[i];
+                                dbus_mac[17] = 0;
+                                found = 1;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -184,15 +215,11 @@ static void *bt_rx_worker(void *arg){
             g_bt_state.album[0] = 0;
             g_bt_state.codec[0] = 0;
             pthread_mutex_unlock(&g_bt_mu);
-            usleep(1200000);
+            usleep(1000000);
             continue;
         }
 
         /* Found connected device */
-        char dbus_mac[32];
-        for(int i = 0; i < 17; i++) dbus_mac[i] = (mac[i] == ':') ? '_' : mac[i];
-        dbus_mac[17] = 0;
-
         char name[64] = "Connected Device";
         char cmd[256];
         snprintf(cmd, sizeof cmd, "bluetoothctl info %s 2>/dev/null | grep -E '^[ \t]*Name:' | cut -d: -f2-", mac);
@@ -216,13 +243,6 @@ static void *bt_rx_worker(void *arg){
             dbus_extract_tag(buf, "Title", title, sizeof title);
             dbus_extract_tag(buf, "Artist", artist, sizeof artist);
             dbus_extract_tag(buf, "Album", album, sizeof album);
-        }
-
-        if(found){
-            /* Maintain audio router daemon whenever connected */
-            if(exec_cmd_capture("pgrep bluealsa-aplay 2>/dev/null", buf, sizeof buf, 150) <= 0){
-                system("killall -9 bluealsa-aplay 2>/dev/null; ( sleep 0.4; bluealsa-aplay -D plughw:0,3 >/dev/null 2>&1 ) &");
-            }
         }
 
         /* Query BlueALSA for Codec, Sample Rate, and Bit depth */
@@ -294,8 +314,11 @@ static void *bt_rx_worker(void *arg){
     return NULL;
 }
 
-/* AVRCP commands for Bluetooth receiving mode */
+/* AVRCP commands for Bluetooth receiving mode:
+ * Stock mq_ui sends 0201 frames directly to /player. mq_player translates them
+ * to AVRCP commands (0201000C0000=play/pause, 0201000C0001=next, 0201000C0002=prev). */
 void bt_rx_play_pause(void){
+    ipc_send_cmd("0201000C0000");
     char dbus_mac[32] = {0};
     int is_playing = 0;
     pthread_mutex_lock(&g_bt_mu);
@@ -304,37 +327,42 @@ void bt_rx_play_pause(void){
         is_playing = g_bt_state.is_playing;
     }
     pthread_mutex_unlock(&g_bt_mu);
-    if(!dbus_mac[0]) return;
-    char cmd[256];
-    snprintf(cmd, sizeof cmd, "dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.MediaControl1.%s >/dev/null 2>&1 &",
-             dbus_mac, is_playing ? "Pause" : "Play");
-    system(cmd);
+    if(dbus_mac[0]){
+        char cmd[256];
+        snprintf(cmd, sizeof cmd, "dbus-send --system --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.MediaControl1.%s >/dev/null 2>&1 &",
+                 dbus_mac, is_playing ? "Pause" : "Play");
+        system(cmd);
+    }
 }
 
 void bt_rx_next(void){
+    ipc_send_cmd("0201000C0001");
     char dbus_mac[32] = {0};
     pthread_mutex_lock(&g_bt_mu);
     if(g_bt_state.connected && g_bt_state.dbus_mac[0]){
         snprintf(dbus_mac, sizeof dbus_mac, "%s", g_bt_state.dbus_mac);
     }
     pthread_mutex_unlock(&g_bt_mu);
-    if(!dbus_mac[0]) return;
-    char cmd[256];
-    snprintf(cmd, sizeof cmd, "dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.MediaControl1.Next >/dev/null 2>&1 &", dbus_mac);
-    system(cmd);
+    if(dbus_mac[0]){
+        char cmd[256];
+        snprintf(cmd, sizeof cmd, "dbus-send --system --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.MediaControl1.Next >/dev/null 2>&1 &", dbus_mac);
+        system(cmd);
+    }
 }
 
 void bt_rx_prev(void){
+    ipc_send_cmd("0201000C0002");
     char dbus_mac[32] = {0};
     pthread_mutex_lock(&g_bt_mu);
     if(g_bt_state.connected && g_bt_state.dbus_mac[0]){
         snprintf(dbus_mac, sizeof dbus_mac, "%s", g_bt_state.dbus_mac);
     }
     pthread_mutex_unlock(&g_bt_mu);
-    if(!dbus_mac[0]) return;
-    char cmd[256];
-    snprintf(cmd, sizeof cmd, "dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.MediaControl1.Previous >/dev/null 2>&1 &", dbus_mac);
-    system(cmd);
+    if(dbus_mac[0]){
+        char cmd[256];
+        snprintf(cmd, sizeof cmd, "dbus-send --system --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.MediaControl1.Previous >/dev/null 2>&1 &", dbus_mac);
+        system(cmd);
+    }
 }
 
 static int g_bt_cached_vol = 40;
@@ -819,37 +847,13 @@ void modelock_open(int mode){
         if(g_hdr_status) lv_label_set_text(g_hdr_status, "Ready to connect");
         if(g_cont_bt)    lv_obj_remove_flag(g_cont_bt, LV_OBJ_FLAG_HIDDEN);
 
-        /* Ensure Bluetooth hardware is attached, bluetoothd is in sink mode, and bluealsa is in a2dp-sink */
+        /* Ensure paired devices are trusted in BlueZ so incoming A2DP profile requests are accepted */
         system(
-            "if ! hciconfig hci0 2>/dev/null | grep -q RUNNING; then "
-            "  rfkill unblock bluetooth 2>/dev/null; "
-            "  brcm_patchram_plus --enable_lpm --enable_hci --no2bytes --tosleep 200000 --baudrate 3000000 "
-            "    --patchram /lib/firmware/bt_bcm/BCM4343A1_001.002.009.1026.1055.hcd /dev/ttyS0 >/tmp/patchram.log 2>&1 & "
-            "  i=0; while [ \"$i\" -lt 30 ]; do "
-            "    hciconfig hci0 up 2>/dev/null; "
-            "    hciconfig hci0 2>/dev/null | grep -q RUNNING && break; "
-            "    sleep 0.5; i=$((i+1)); "
-            "  done; "
-            "fi; "
-            "if ! ps aux | grep -v grep | grep -q 'bluetoothd.*--mode=sink'; then "
-            "  killall -9 bluealsa bluetoothd bt-agent 2>/dev/null; sleep 0.3; "
-            "  /usr/project/bluetoothd --noplugin=sap --plugin=a2dp,avrcp --mode=sink >/tmp/btd.log 2>&1 & "
-            "  sleep 0.4; "
-            "  bluealsa -S --device=hci0 -p a2dp-sink --codec=sbc --codec=aac --codec=ldac --ldac-abr --ldac-quality=standard --initial-volume=100 >/tmp/bluealsa.log 2>&1 & "
-            "  sleep 0.4; "
-            "fi; "
-            "hciconfig hci0 up 2>/dev/null; "
-            "hciconfig hci0 piscan 2>/dev/null; "
-            "hciconfig hci0 class 0x200414 2>/dev/null; "
-            "bluetoothctl power on 2>/dev/null; "
-            "bluetoothctl pairable on 2>/dev/null; "
-            "bluetoothctl discoverable on 2>/dev/null; "
-            "killall -9 bt-agent 2>/dev/null; "
-            "bt-agent -c NoInputNoOutput -d 2>/dev/null &"
+            "killall -9 bluealsa-aplay bt-agent 2>/dev/null; "
+            "for dev in $(bluetoothctl paired-devices 2>/dev/null | awk '{print $2}'); do "
+            "  bluetoothctl trust \"$dev\" 2>/dev/null; "
+            "done &"
         );
-
-        /* Start audio routing to internal 3.5mm DAC */
-        system("killall -9 bluealsa-aplay 2>/dev/null; ( sleep 0.4; bluealsa-aplay -D plughw:0,3 >/dev/null 2>&1 ) &");
 
         /* Start background worker thread if not running */
         if(!g_worker_run){
@@ -906,7 +910,6 @@ void modelock_close(void){
                 "  bluetoothctl discoverable off 2>/dev/null; "
                 "  bluetoothctl pairable off 2>/dev/null; "
                 "  killall -9 bluealsa-aplay bt-agent 2>/dev/null; "
-                "  killall -9 bluealsa bluetoothd 2>/dev/null; "
                 "  %s ) >/dev/null 2>&1 &",
                 dbus_mac, mac,
                 (cfg_get_int("bt_on", 0) == 1) ? "true" : "hciconfig hci0 down 2>/dev/null; rfkill block bluetooth 2>/dev/null");
@@ -916,7 +919,6 @@ void modelock_close(void){
                 "  bluetoothctl discoverable off 2>/dev/null; "
                 "  bluetoothctl pairable off 2>/dev/null; "
                 "  killall -9 bluealsa-aplay bt-agent 2>/dev/null; "
-                "  killall -9 bluealsa bluetoothd 2>/dev/null; "
                 "  %s ) >/dev/null 2>&1 &",
                 (cfg_get_int("bt_on", 0) == 1) ? "true" : "hciconfig hci0 down 2>/dev/null; rfkill block bluetooth 2>/dev/null");
         }
@@ -926,7 +928,7 @@ void modelock_close(void){
             bt_boot_restore();
         }
     } else {
-        system("killall -9 bluealsa-aplay 2>/dev/null &");
+        system("killall -9 bluealsa-aplay bt-agent 2>/dev/null &");
     }
 }
 
