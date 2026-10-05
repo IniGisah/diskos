@@ -24,7 +24,6 @@ static lv_obj_t *g_lock_root = NULL;
 
 /* Header widgets */
 static lv_obj_t *g_hdr_title;
-static lv_obj_t *g_hdr_status;
 
 /* Mode containers */
 static lv_obj_t *g_cont_bt;
@@ -459,24 +458,8 @@ static void modelock_poll_cb(lv_timer_t *t){
         char fmt[64] = {0};
         uac_query_status(&connected, fmt, sizeof fmt);
 
-        if(g_hdr_status){
-            if(connected){
-                lv_label_set_text(g_hdr_status, "Connected: PC / Mac");
-                lv_obj_set_style_text_color(g_hdr_status, ui_current_accent(), 0);
-            } else {
-                lv_label_set_text(g_hdr_status, "Waiting for USB connection...");
-                lv_obj_set_style_text_color(g_hdr_status, TC(TEXT_MUTED), 0);
-            }
-        }
-
-        if(g_dac_badge && g_dac_badge_lbl){
-            if(connected && fmt[0]){
-                lv_label_set_text(g_dac_badge_lbl, fmt);
-                lv_obj_remove_flag(g_dac_badge, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_align(g_dac_badge, LV_ALIGN_TOP_MID, 0, 126);
-            } else {
-                lv_obj_add_flag(g_dac_badge, LV_OBJ_FLAG_HIDDEN);
-            }
+        if(g_dac_title){
+            lv_label_set_text(g_dac_title, connected ? "PC / Mac Connected" : "USB DAC Idle");
         }
 
         if(g_dac_sub){
@@ -484,6 +467,16 @@ static void modelock_poll_cb(lv_timer_t *t){
                 lv_label_set_text(g_dac_sub, "Playing audio from PC / Mac.\nHardware DAC volume active.");
             } else {
                 lv_label_set_text(g_dac_sub, "Connect to computer with USB-C cable.\nSelect 'SNOWSKY DISC' as output.");
+            }
+        }
+
+        if(g_dac_badge && g_dac_badge_lbl){
+            if(connected && fmt[0]){
+                lv_label_set_text(g_dac_badge_lbl, fmt);
+                lv_obj_remove_flag(g_dac_badge, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_align(g_dac_badge, LV_ALIGN_TOP_MID, 0, 246);
+            } else {
+                lv_obj_add_flag(g_dac_badge, LV_OBJ_FLAG_HIDDEN);
             }
         }
         return;
@@ -495,24 +488,13 @@ static void modelock_poll_cb(lv_timer_t *t){
     st = g_bt_state;
     pthread_mutex_unlock(&g_bt_mu);
 
-    if(g_hdr_status){
-        if(st.connected && st.dev_name[0]){
-            char s[128]; snprintf(s, sizeof s, "Connected: %s", st.dev_name);
-            lv_label_set_text(g_hdr_status, s);
-            lv_obj_set_style_text_color(g_hdr_status, ui_current_accent(), 0);
-        } else {
-            lv_label_set_text(g_hdr_status, "Waiting for device connection...");
-            lv_obj_set_style_text_color(g_hdr_status, TC(TEXT_MUTED), 0);
-        }
-    }
-
     if(g_bt_track_title){
         if(st.connected && st.title[0]){
             lv_label_set_text(g_bt_track_title, st.title);
         } else if(st.connected && st.is_playing){
             lv_label_set_text(g_bt_track_title, "Bluetooth Audio Playing");
         } else if(st.connected){
-            lv_label_set_text(g_bt_track_title, "No Media Playing");
+            lv_label_set_text(g_bt_track_title, st.dev_name[0] ? st.dev_name : "Connected Device");
         } else {
             lv_label_set_text(g_bt_track_title, "Ready to Connect");
         }
@@ -538,13 +520,13 @@ static void modelock_poll_cb(lv_timer_t *t){
             lv_label_set_text(g_bt_codec_lbl, st.codec);
             if(g_bt_codec_badge){
                 lv_obj_remove_flag(g_bt_codec_badge, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 214);
+                lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 222);
             }
         } else if(st.connected){
             lv_label_set_text(g_bt_codec_lbl, "BT Audio");
             if(g_bt_codec_badge){
                 lv_obj_remove_flag(g_bt_codec_badge, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 214);
+                lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 222);
             }
         } else {
             if(g_bt_codec_badge) lv_obj_add_flag(g_bt_codec_badge, LV_OBJ_FLAG_HIDDEN);
@@ -671,31 +653,17 @@ void modelock_prompt_exit(void){
     lv_obj_set_style_text_color(lbl_exit, TC(ON_ACCENT), 0);
 }
 
+static void modelock_back_btn_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    modelock_prompt_exit();
+}
+
 void modelock_create(lv_obj_t *root){
     g_lock_root = root;
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 1. Header (Mode title + Status badge) */
-    g_hdr_title = lv_label_create(root);
-    lv_obj_set_pos(g_hdr_title, 20, 16);
-    lv_obj_set_width(g_hdr_title, 320);
-    lv_obj_set_height(g_hdr_title, LV_SIZE_CONTENT);
-    lv_obj_clear_flag(g_hdr_title, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_text_align(g_hdr_title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_hdr_title, TF(HEADER), 0);
-    lv_obj_set_style_text_color(g_hdr_title, TC(TEXT_PRIMARY), 0);
-    theme_title_text(g_hdr_title, "Mode Lockdown");
-
-    g_hdr_status = lv_label_create(root);
-    lv_obj_set_pos(g_hdr_status, 20, 46);
-    lv_obj_set_width(g_hdr_status, 320);
-    lv_obj_set_height(g_hdr_status, LV_SIZE_CONTENT);
-    lv_obj_clear_flag(g_hdr_status, LV_OBJ_FLAG_SCROLLABLE);
-    lv_label_set_text(g_hdr_status, "Active");
-    lv_label_set_long_mode(g_hdr_status, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(g_hdr_status, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_hdr_status, TF(USER_14), 0);
-    lv_obj_set_style_text_color(g_hdr_status, TC(TEXT_MUTED), 0);
+    /* 1. Header (Standard diskOS theme kit header + back navigation) */
+    g_hdr_title = ui_header_cb(root, "Bluetooth", modelock_back_btn_cb);
 
     /* 2. Container for Bluetooth Receiving (Mode 2) */
     g_cont_bt = lv_obj_create(root);
@@ -707,6 +675,7 @@ void modelock_create(lv_obj_t *root){
 
     /* Vinyl disc visual */
     g_bt_disc = lv_obj_create(g_cont_bt);
+    kit_keep(g_bt_disc);
     lv_obj_remove_style_all(g_bt_disc);
     lv_obj_set_size(g_bt_disc, 84, 84);
     lv_obj_set_pos(g_bt_disc, 138, 70);
@@ -719,6 +688,7 @@ void modelock_create(lv_obj_t *root){
 
     /* Grooves inside vinyl disc */
     lv_obj_t *ring1 = lv_obj_create(g_bt_disc);
+    kit_keep(ring1);
     lv_obj_remove_style_all(ring1);
     lv_obj_set_size(ring1, 64, 64);
     lv_obj_center(ring1);
@@ -727,6 +697,7 @@ void modelock_create(lv_obj_t *root){
     lv_obj_set_style_border_color(ring1, TC(BORDER_STRONG), 0);
 
     lv_obj_t *ring2 = lv_obj_create(g_bt_disc);
+    kit_keep(ring2);
     lv_obj_remove_style_all(ring2);
     lv_obj_set_size(ring2, 46, 46);
     lv_obj_center(ring2);
@@ -736,6 +707,7 @@ void modelock_create(lv_obj_t *root){
 
     /* Center spindle label */
     g_bt_spindle = lv_obj_create(g_bt_disc);
+    kit_keep(g_bt_spindle);
     lv_obj_remove_style_all(g_bt_spindle);
     lv_obj_set_size(g_bt_spindle, 28, 28);
     lv_obj_center(g_bt_spindle);
@@ -751,7 +723,7 @@ void modelock_create(lv_obj_t *root){
 
     /* Track Title */
     g_bt_track_title = lv_label_create(g_cont_bt);
-    lv_obj_set_pos(g_bt_track_title, 20, 160);
+    lv_obj_set_pos(g_bt_track_title, 20, 166);
     lv_obj_set_width(g_bt_track_title, 320);
     lv_obj_set_height(g_bt_track_title, LV_SIZE_CONTENT);
     lv_obj_clear_flag(g_bt_track_title, LV_OBJ_FLAG_SCROLLABLE);
@@ -763,7 +735,7 @@ void modelock_create(lv_obj_t *root){
 
     /* Track Sub (Artist / Album) */
     g_bt_track_sub = lv_label_create(g_cont_bt);
-    lv_obj_set_pos(g_bt_track_sub, 25, 188);
+    lv_obj_set_pos(g_bt_track_sub, 25, 194);
     lv_obj_set_width(g_bt_track_sub, 310);
     lv_obj_set_height(g_bt_track_sub, LV_SIZE_CONTENT);
     lv_obj_clear_flag(g_bt_track_sub, LV_OBJ_FLAG_SCROLLABLE);
@@ -780,7 +752,7 @@ void modelock_create(lv_obj_t *root){
     lv_obj_set_style_min_width(g_bt_codec_badge, 80, 0);
     lv_obj_set_style_pad_hor(g_bt_codec_badge, 12, 0);
     lv_obj_set_style_pad_ver(g_bt_codec_badge, 2, 0);
-    lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 214);
+    lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 222);
     lv_obj_set_style_radius(g_bt_codec_badge, 11, 0);
     lv_obj_set_style_bg_color(g_bt_codec_badge, TC(SURFACE_RAISED), 0);
     lv_obj_set_style_bg_opa(g_bt_codec_badge, LV_OPA_COVER, 0);
@@ -798,7 +770,7 @@ void modelock_create(lv_obj_t *root){
     lv_obj_t *ctrl_row = lv_obj_create(g_cont_bt);
     lv_obj_remove_style_all(ctrl_row);
     lv_obj_set_size(ctrl_row, 240, 60);
-    lv_obj_align(ctrl_row, LV_ALIGN_TOP_MID, 0, 246);
+    lv_obj_align(ctrl_row, LV_ALIGN_TOP_MID, 0, 256);
     lv_obj_set_flex_flow(ctrl_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(ctrl_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(ctrl_row, 22, 0);
@@ -861,14 +833,15 @@ void modelock_create(lv_obj_t *root){
     /* 3. Container for USB DAC (Mode 1) */
     g_cont_dac = lv_obj_create(root);
     lv_obj_remove_style_all(g_cont_dac);
-    lv_obj_set_pos(g_cont_dac, 0, 70);
-    lv_obj_set_size(g_cont_dac, 360, 220);
+    lv_obj_set_pos(g_cont_dac, 0, 0);
+    lv_obj_set_size(g_cont_dac, 360, 360);
     lv_obj_clear_flag(g_cont_dac, LV_OBJ_FLAG_SCROLLABLE);
 
     g_dac_circle = lv_obj_create(g_cont_dac);
+    kit_keep(g_dac_circle);
     lv_obj_remove_style_all(g_dac_circle);
     lv_obj_set_size(g_dac_circle, 84, 84);
-    lv_obj_set_pos(g_dac_circle, 138, 0);
+    lv_obj_set_pos(g_dac_circle, 138, 70);
     lv_obj_set_style_radius(g_dac_circle, 42, 0);
     lv_obj_set_style_bg_color(g_dac_circle, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(g_dac_circle, LV_OPA_COVER, 0);
@@ -882,18 +855,27 @@ void modelock_create(lv_obj_t *root){
     lv_obj_set_style_text_color(g_dac_icon, ui_current_accent(), 0);
 
     g_dac_title = lv_label_create(g_cont_dac);
-    lv_obj_set_pos(g_dac_title, 20, 96);
-    lv_obj_set_size(g_dac_title, 320, 24);
-    lv_label_set_text(g_dac_title, "USB Audio Class Active");
+    lv_obj_set_pos(g_dac_title, 20, 166);
+    lv_obj_set_width(g_dac_title, 320);
+    lv_obj_set_height(g_dac_title, LV_SIZE_CONTENT);
+    lv_label_set_text(g_dac_title, "Waiting for USB");
     lv_obj_set_style_text_align(g_dac_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(g_dac_title, TF(USER_18), 0);
     lv_obj_set_style_text_color(g_dac_title, TC(TEXT_PRIMARY), 0);
+
+    g_dac_sub = lv_label_create(g_cont_dac);
+    lv_obj_set_pos(g_dac_sub, 20, 196);
+    lv_obj_set_size(g_dac_sub, 320, 44);
+    lv_label_set_text(g_dac_sub, "Connect to computer with USB-C cable\nSelect 'SNOWSKY DISC' as output");
+    lv_obj_set_style_text_align(g_dac_sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(g_dac_sub, TF(USER_14), 0);
+    lv_obj_set_style_text_color(g_dac_sub, TC(TEXT_MUTED), 0);
 
     /* Sample Rate / Codec badge */
     g_dac_badge = lv_obj_create(g_cont_dac);
     lv_obj_remove_style_all(g_dac_badge);
     lv_obj_set_size(g_dac_badge, LV_SIZE_CONTENT, 22);
-    lv_obj_align(g_dac_badge, LV_ALIGN_TOP_MID, 0, 126);
+    lv_obj_align(g_dac_badge, LV_ALIGN_TOP_MID, 0, 246);
     lv_obj_set_style_radius(g_dac_badge, 11, 0);
     lv_obj_set_style_bg_color(g_dac_badge, TC(SURFACE_RAISED), 0);
     lv_obj_set_style_bg_opa(g_dac_badge, LV_OPA_COVER, 0);
@@ -908,25 +890,18 @@ void modelock_create(lv_obj_t *root){
     lv_obj_set_style_text_font(g_dac_badge_lbl, TF(USER_14), 0);
     lv_obj_set_style_text_color(g_dac_badge_lbl, ui_current_accent(), 0);
 
-    g_dac_sub = lv_label_create(g_cont_dac);
-    lv_obj_set_pos(g_dac_sub, 20, 158);
-    lv_obj_set_size(g_dac_sub, 320, 44);
-    lv_label_set_text(g_dac_sub, "Playing audio from PC / Mac.\nHardware DAC volume active.");
-    lv_obj_set_style_text_align(g_dac_sub, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_dac_sub, TF(USER_14), 0);
-    lv_obj_set_style_text_color(g_dac_sub, TC(TEXT_MUTED), 0);
-
     /* 4. Container for USB Storage (Mode 3) */
     g_cont_storage = lv_obj_create(root);
     lv_obj_remove_style_all(g_cont_storage);
-    lv_obj_set_pos(g_cont_storage, 0, 70);
-    lv_obj_set_size(g_cont_storage, 360, 220);
+    lv_obj_set_pos(g_cont_storage, 0, 0);
+    lv_obj_set_size(g_cont_storage, 360, 360);
     lv_obj_clear_flag(g_cont_storage, LV_OBJ_FLAG_SCROLLABLE);
 
     g_stor_circle = lv_obj_create(g_cont_storage);
+    kit_keep(g_stor_circle);
     lv_obj_remove_style_all(g_stor_circle);
     lv_obj_set_size(g_stor_circle, 84, 84);
-    lv_obj_set_pos(g_stor_circle, 138, 0);
+    lv_obj_set_pos(g_stor_circle, 138, 70);
     lv_obj_set_style_radius(g_stor_circle, 42, 0);
     lv_obj_set_style_bg_color(g_stor_circle, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(g_stor_circle, LV_OPA_COVER, 0);
@@ -940,18 +915,27 @@ void modelock_create(lv_obj_t *root){
     lv_obj_set_style_text_color(g_stor_icon, ui_current_accent(), 0);
 
     g_stor_title = lv_label_create(g_cont_storage);
-    lv_obj_set_pos(g_stor_title, 20, 96);
-    lv_obj_set_size(g_stor_title, 320, 24);
+    lv_obj_set_pos(g_stor_title, 20, 166);
+    lv_obj_set_width(g_stor_title, 320);
+    lv_obj_set_height(g_stor_title, LV_SIZE_CONTENT);
     lv_label_set_text(g_stor_title, "MicroSD Card Exported");
     lv_obj_set_style_text_align(g_stor_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(g_stor_title, TF(USER_18), 0);
     lv_obj_set_style_text_color(g_stor_title, TC(TEXT_PRIMARY), 0);
 
+    g_stor_sub = lv_label_create(g_cont_storage);
+    lv_obj_set_pos(g_stor_sub, 20, 196);
+    lv_obj_set_size(g_stor_sub, 320, 44);
+    lv_label_set_text(g_stor_sub, "Card is mounted by computer\nPlease safely eject on PC before exit");
+    lv_obj_set_style_text_align(g_stor_sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(g_stor_sub, TF(USER_14), 0);
+    lv_obj_set_style_text_color(g_stor_sub, TC(TEXT_MUTED), 0);
+
     /* Storage badge */
     g_stor_badge = lv_obj_create(g_cont_storage);
     lv_obj_remove_style_all(g_stor_badge);
     lv_obj_set_size(g_stor_badge, LV_SIZE_CONTENT, 22);
-    lv_obj_align(g_stor_badge, LV_ALIGN_TOP_MID, 0, 126);
+    lv_obj_align(g_stor_badge, LV_ALIGN_TOP_MID, 0, 246);
     lv_obj_set_style_radius(g_stor_badge, 11, 0);
     lv_obj_set_style_bg_color(g_stor_badge, TC(SURFACE_RAISED), 0);
     lv_obj_set_style_bg_opa(g_stor_badge, LV_OPA_COVER, 0);
@@ -965,14 +949,6 @@ void modelock_create(lv_obj_t *root){
     lv_obj_center(g_stor_badge_lbl);
     lv_obj_set_style_text_font(g_stor_badge_lbl, TF(USER_14), 0);
     lv_obj_set_style_text_color(g_stor_badge_lbl, ui_current_accent(), 0);
-
-    g_stor_sub = lv_label_create(g_cont_storage);
-    lv_obj_set_pos(g_stor_sub, 20, 158);
-    lv_obj_set_size(g_stor_sub, 320, 44);
-    lv_label_set_text(g_stor_sub, "Card is mounted by computer.\nPlease safely eject on PC before exit.");
-    lv_obj_set_style_text_align(g_stor_sub, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_stor_sub, TF(USER_14), 0);
-    lv_obj_set_style_text_color(g_stor_sub, TC(TEXT_MUTED), 0);
 
     /* Subtle exit hint at bottom */
     lv_obj_t *hint = lv_label_create(root);
@@ -997,7 +973,6 @@ void modelock_open(int mode){
     if(mode == 1){
         /* USB DAC */
         if(g_hdr_title)  theme_title_text(g_hdr_title, "USB DAC");
-        if(g_hdr_status) lv_label_set_text(g_hdr_status, "Checking USB connection...");
         if(g_cont_dac)   lv_obj_remove_flag(g_cont_dac, LV_OBJ_FLAG_HIDDEN);
         bt_disc_spin(0);
         if(!g_poll_timer){
@@ -1005,8 +980,7 @@ void modelock_open(int mode){
         }
     } else if(mode == 2){
         /* Bluetooth Receiving */
-        if(g_hdr_title)  theme_title_text(g_hdr_title, "Bluetooth Receiver");
-        if(g_hdr_status) lv_label_set_text(g_hdr_status, "Ready to connect");
+        if(g_hdr_title)  theme_title_text(g_hdr_title, "Bluetooth");
         if(g_cont_bt)    lv_obj_remove_flag(g_cont_bt, LV_OBJ_FLAG_HIDDEN);
 
         /* Start background worker thread if not running */
@@ -1020,7 +994,6 @@ void modelock_open(int mode){
     } else if(mode == 3){
         /* USB Storage */
         if(g_hdr_title)  theme_title_text(g_hdr_title, "USB Storage");
-        if(g_hdr_status) lv_label_set_text(g_hdr_status, "Card exported to host");
         if(g_cont_storage) lv_obj_remove_flag(g_cont_storage, LV_OBJ_FLAG_HIDDEN);
         bt_disc_spin(0);
     }

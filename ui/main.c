@@ -2617,7 +2617,14 @@ int main(int argc, char **argv){
     wifi_init_intent();         /* seed wifi_on intent from stock WIFI_STATUS (first run only) */
     fprintf(stderr,"step:screens_init\n");fflush(stderr); screens_init();
     int boot_sm = ui_detect_source_mode();
-    if(boot_sm == 1 || boot_sm == 3){
+    const char *ml_env = getenv("DISKOS_MODELOCK");
+    if(ml_env){
+        int m = atoi(ml_env);
+        if(m >= 1 && m <= 3){
+            g_source_mode = m;
+            modelock_open(m);
+        }
+    } else if(boot_sm == 1 || boot_sm == 3){
         g_source_mode = boot_sm;
         modelock_open(boot_sm);
     }
@@ -2693,7 +2700,7 @@ int main(int argc, char **argv){
     } else fprintf(stderr,"touch OFF (no /usr/data/touch_on)\n");
     fflush(stderr);
 
-    int start = SCR_HOME;   /* no-arg default = home (boot supervisor launches with no args) */
+    int start = (g_source_mode >= 1 && g_source_mode <= 3) ? SCR_MODELOCK : SCR_HOME;
     if(argc>1){
         if(!strcmp(argv[1],"home"))    start = SCR_HOME;
         else if(!strcmp(argv[1],"library")) start = SCR_LIBRARY;
@@ -2713,6 +2720,10 @@ int main(int argc, char **argv){
         else if(!strcmp(argv[1],"hub")) start = SCR_NPHUB;
         else if(!strcmp(argv[1],"upnext")) start = SCR_UPNEXT;
         else if(!strcmp(argv[1],"datetime")) start = SCR_DATETIME;
+        else if(!strcmp(argv[1],"modelock")) start = SCR_MODELOCK;
+        else if(!strcmp(argv[1],"btlock")){ start = SCR_MODELOCK; modelock_open(2); }
+        else if(!strcmp(argv[1],"daclock")){ start = SCR_MODELOCK; modelock_open(1); }
+        else if(!strcmp(argv[1],"storagelock")){ start = SCR_MODELOCK; modelock_open(3); }
     }
     screen_show(start);
     /* Force ONE full-screen repaint at startup. The framebuffer may still hold the stock
