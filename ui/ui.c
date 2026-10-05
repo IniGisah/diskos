@@ -17,6 +17,7 @@
 #include "sdio.h"
 #include "anim.h"
 #include "fonts_intl.h"   /* Cyrillic/Greek/Latin-ext fallback (issue #3) */
+#include "modelock.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -375,6 +376,12 @@ int ui_transport_command(const char *cmd)
     int is_prev = !strcmp(cmd, "0201000C0002");
     int is_toggle = !strcmp(cmd, "0201000C0000");
     if(!is_next && !is_prev && !is_toggle) return -1;
+    if(ui_get_source_mode() == 2){
+        if(is_toggle) bt_rx_play_pause();
+        else if(is_next) bt_rx_next();
+        else if(is_prev) bt_rx_prev();
+        return 0;
+    }
     if(modes_output_busy()){ ui_toast("Switching output - try again"); return -1; }
     if(!ui_local_playback_allowed()){
         ui_toast("Return to local playback first"); return -1;

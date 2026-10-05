@@ -57,6 +57,8 @@ static _Atomic int g_source_mode;
 static uint32_t lv_tick_get(void){ return test_clock; }
 static void ui_toast(const char *s){ (void)s; }
 static void art_cancel(void){}
+static void modelock_open(int mode){ (void)mode; }
+static void modelock_close(void){}
 static void modes_output_reset(void){}   /* output routing is not under test here */
 static int modes_output_busy(void){ return 0; }
 static int scanner_active(void){ return test_scan; }
