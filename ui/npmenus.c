@@ -347,7 +347,7 @@ static void nphub_populate(void){
         menu_row(g_hub_list, "Equalizer",       hub_eq_cb,       NULL);
         menu_row(g_hub_list, "Full-screen Art", hub_fsart_cb,    NULL);
     } else {
-        menu_row(g_hub_list, "Up Next",         hub_upnext_cb, NULL);
+        menu_row(g_hub_list, "Queue",           hub_upnext_cb, NULL);
         menu_row(g_hub_list, "Full-screen Art", hub_fsart_cb,  NULL);
         menu_row(g_hub_list, "Equalizer",       hub_eq_cb,     NULL);
         menu_row(g_hub_list, "Song Info",       ctx_info_cb,   NULL);

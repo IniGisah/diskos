@@ -27,6 +27,9 @@ Lyrics	歌词	歌詞	歌詞	가사	Letra	Letras	Testo	Songtext	Paroles	Текс�
 Weather	天气	天氣	天気	날씨	Tiempo	Meteorologia	Meteo	Wetter	Météo	Погода
 Song Info	歌曲信息	歌曲資訊	曲情報	곡 정보	Info de canción	Info da música	Info brano	Titelinfo	Infos titre	О треке
 Up Next	接下来	接下來	次に再生	다음 곡	A continuación	A seguir	Prossimi	Als Nächstes	À suivre	Далее
+Queue	队列	佇列	再生キュー	대기열	Cola	Fila	Coda	Warteschlange	File d'attente	Очередь
+End of queue	队列末尾	佇列末尾	キューの最後	대기열 끝	Fin de la cola	Fim da fila	Fine della coda	Ende der Warteschlange	Fin de la file	Конец очереди
+End of queue - repeats from start	队列末尾 - 从头重复	佇列末尾 - 從頭重複	キューの最後 - 最初からリピート	대기열 끝 - 처음부터 반복	Fin de la cola - repite desde el inicio	Fim da fila - repete desde o início	Fine della coda - ripete dall'inizio	Ende der Warteschlange - wiederholt von vorne	Fin de la file - reprend au début	Конец очереди - повтор с начала
 Options	选项	選項	オプション	옵션	Opciones	Opções	Opzioni	Optionen	Options	Параметры
 Add to Playlist	添加到播放列表	加入播放清單	プレイリストに追加	재생목록에 추가	Añadir a lista	Adicionar à lista	Aggiungi a playlist	Zur Wiedergabeliste	Ajouter à la playlist	В плейлист
 Chapters	章节	章節	チャプター	챕터	Capítulos	Capítulos	Capitoli	Kapitel	Chapitres	Главы

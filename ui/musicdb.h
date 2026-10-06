@@ -90,11 +90,13 @@ int  mdb_plan_pos(const mdb_plan_t *plan, int song_id);                         
 void mdb_plan_free(mdb_plan_t *plan);
 int  mdb_subtrack_count(const char *path, int iso_only);   /* CUE/ISO rows under one PATH (iso_only: IS_ISO rows only) */
 int  mdb_subtrack_plan(const char *const *paths, int npaths, mdb_plan_t *plan);   /* type-5 plan of their tracks, TRACK order; 1 = built (caller frees) */
+int  mdb_folder_plan(const char *dir, const char *const *files, int nfiles, mdb_plan_t *plan);   /* type-5 plan for all audio files in a folder */
 
-/* Up Next: the player's live queue from the current song on (read-only; the stock player owns it).
+/* Queue (was Up Next): the player's live queue (read-only; the stock player owns it).
  * Sequential/repeat modes play LIST_SONG_0 in ID order; shuffle plays LIST_SONG_3 in ID order, whose POS_ID is
  * the LIST_SONG_0.ID it plays. The current song is found by the a2 pos_id (a LIST_SONG_0.ID). Every row carries
- * its 1-based position in LIST_SONG_0 ID order - what a type-0 jump takes, in shuffle too (device-verified). */
+ * its 1-based position in LIST_SONG_0 ID order - what a type-0 jump takes, in shuffle too (device-verified).
+ * Shows both earlier played songs and upcoming songs. */
 typedef struct {
     int  base_id;            /* LIST_SONG_0.ID */
     int  ord;                /* 1-based position in LIST_SONG_0 ID order (the type-0 jump index + 1) */
@@ -103,14 +105,19 @@ typedef struct {
     char artist[MDB_STR];
     char path[256];
 } mdb_qrow_t;
-#define MDB_UPNEXT_EMPTY    0      /* the queue is empty */
-#define MDB_UPNEXT_ERROR    (-1)   /* the queue can't be read (DB error) */
-#define MDB_UPNEXT_NOTFOUND (-2)   /* the current song isn't in the queue, or the shuffle list isn't an exact permutation
+#define MDB_QUEUE_EMPTY     0      /* the queue is empty */
+#define MDB_QUEUE_ERROR     (-1)   /* the queue can't be read (DB error) */
+#define MDB_QUEUE_NOTFOUND  (-2)   /* the current song isn't in the queue, or the shuffle list isn't an exact permutation
                                     * of it: the player is rebuilding the queue (transient) */
-#define MDB_UPNEXT_BUSY     (-3)   /* the player holds the DB lock right now (transient) */
-/* Fill out[0] = the current song, out[1..] = what plays after it, at most cap rows; *more = rows not shown.
- * cur_pos_id 0 (unknown, e.g. after a UI restart) falls back to cur_path, only if exactly one queue row has it.
- * Returns the number of rows (>0) or one of the MDB_UPNEXT_* codes above. */
+#define MDB_QUEUE_BUSY      (-3)   /* the player holds the DB lock right now (transient) */
+#define MDB_UPNEXT_EMPTY    MDB_QUEUE_EMPTY
+#define MDB_UPNEXT_ERROR    MDB_QUEUE_ERROR
+#define MDB_UPNEXT_NOTFOUND MDB_QUEUE_NOTFOUND
+#define MDB_UPNEXT_BUSY     MDB_QUEUE_BUSY
+/* Fill out with up to cap rows representing the queue: earlier played songs, the current song (*cur_idx),
+ * and upcoming songs; *more = upcoming rows not shown.
+ * Returns the number of rows (>0) or one of the MDB_QUEUE_* codes above. */
+int mdb_queue(int shuffle, int cur_pos_id, const char *cur_path, mdb_qrow_t *out, int cap, int *cur_idx, int *more);
 int mdb_upnext(int shuffle, int cur_pos_id, const char *cur_path, mdb_qrow_t *out, int cap, int *more);
 int mdb_queue_row_valid(int base_id, int ord, const char *path);   /* re-check a jump target right before sending: 1/0/-1 */
 int mdb_sysconfig_play_mode(void);                                 /* the player's saved PLAY_MODE 0..4, -1 unreadable */
