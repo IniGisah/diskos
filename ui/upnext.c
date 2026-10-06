@@ -30,7 +30,7 @@ static unsigned    g_un_seq;           /* its path_seq then: a track change sinc
 static void un_rebuild(void);
 
 static void un_fmt_dur(int ms, char *out, size_t n){
-    if(ms <= 0){ out[0] = 0; return; }
+    if(ms <= 0 || ms >= 86400000){ out[0] = 0; return; }
     long long t = ((long long)ms + 500) / 1000; snprintf(out, n, "%lld:%02lld", t / 60, t % 60);   /* no int overflow near INT32_MAX */
 }
 
@@ -94,7 +94,12 @@ static void un_add_row(int i){
     lv_obj_set_style_text_font(s, cur ? TF(UI_14) : TF(USER_14), 0);
     lv_obj_set_style_text_color(s, (cur ? TC(STATUS_INFO) : TC(TEXT_MUTED)), 0);
 
-    char dur[12]; un_fmt_dur(q->dur_ms, dur, sizeof dur);
+    int dur_ms = q->dur_ms;
+    if(cur && (dur_ms <= 0 || dur_ms >= 86400000)){
+        track_state_t st; ipc_get_state(&st);
+        if(st.duration_ms > 0 && st.duration_ms < 86400000) dur_ms = (int)st.duration_ms;
+    }
+    char dur[12]; un_fmt_dur(dur_ms, dur, sizeof dur);
     if(dur[0]){
         lv_obj_t *d = lv_label_create(r);                       /* length, right-aligned */
         lv_label_set_text(d, dur);

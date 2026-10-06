@@ -3010,7 +3010,7 @@ static void qrow_fill(sqlite3_stmt *q, mdb_qrow_t *r, int id){
     snprintf(r->artist, sizeof r->artist, "%s", ar ? ar : "");
     snprintf(r->path, sizeof r->path, "%s", p ? p : "");
     sqlite3_int64 dm = sqlite3_column_int64(q, 11);
-    r->dur_ms = (dm > 0 && dm <= 2147483647) ? (int)dm : 0;
+    r->dur_ms = (dm > 0 && dm < 86400000) ? (int)dm : 0;
 }
 
 int mdb_queue(int shuffle, int cur_pos_id, const char *cur_path, mdb_qrow_t *out, int cap, int *cur_idx, int *more){
