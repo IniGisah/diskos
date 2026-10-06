@@ -59,7 +59,7 @@ Press a volume key to change the level when that key action is set to Adjust Vol
 
 ### Screensaver and screen off
 
-After the Screensaver delay, the screen dims to a clock view; a later Screen Off delay can turn the panel fully off. Choose Cover, Analog, Minimal, Digital, or Vinyl under Saver Style, and set either delay to Off if you do not want that stage. Touch wakes the screen. The saver shows the current song and optional weather where the selected style has room for them.
+After the Screensaver delay, the screen dims to a clock view; a later Screen Off delay can turn the panel fully off. Choose Cover, Analog, Minimal, Digital, or Vinyl under Saver Style, and set either delay to Off if you do not want that stage. Touch wakes the dimmed saver, and when Touch to Wake is enabled in Display settings, tapping a dark screen wakes the device (a single press of the power button always wakes it). The saver shows the current song and optional weather where the selected style has room for them.
 
 <table>
 <tr>
@@ -277,6 +277,7 @@ Display controls the look of the interface and its idle behavior. Tap choices to
 | Accent Colour | Choose cover-derived color or a fixed color. |
 | Album Art Cache | Covers only by default; optional background decoding When Idle or Idle & Charging. |
 | Screensaver; Saver Style; Screen Off | 1 min, Cover, and 2 min by default; choose Off, 30 sec, 1 min, 2 min, or 5 min for each delay. |
+| Touch to Wake | Off by default; when enabled, tapping a dark screen wakes the device. When disabled, the touch controller enters deep sleep for maximum standby battery life. |
 | 24-Hour Time; Animations | Both On by default; change clock format or screen transitions. |
 | Disc Colour | Black by default; choose Turquoise or Pink for the startup Disc drawing. |
 | Weather on Home | On by default; Off hides the glance and skips periodic background fetches, but the current build still starts one fetch at UI startup. |
@@ -395,7 +396,7 @@ After restarting into a trial, choose Keep or Go back; a broken update rolls bac
 Allow diskOS Updates can stop downloads on the Disc. Turning it off with a staged update offers
 Discard or Cancel. An install without a key reports that updates are unsupported.
 
-At startup, the Disc animation uses the body color selected under Display > Disc Colour. The stock player handles the physical power button: one press blanks the display and another restores it; the physical play/pause button controls playback through that player. The Volume Up and Volume Down keys adjust volume by default, or switch tracks according to the V2.57 Vol Keys settings. A tap wakes the idle saver, and the separate Screensaver, Screen Off, Sleep Timer, and Idle Power-off choices control later idle behavior. For USB Storage, eject the card safely on the computer before changing modes; diskOS can refuse the switch when card ownership is uncertain.
+At startup, the Disc animation uses the body color selected under Display > Disc Colour. The stock player handles the physical power button: a single press blanks the display and another single press wakes it; the physical play/pause button controls playback through that player. The Volume Up and Volume Down keys adjust volume by default, or switch tracks according to the V2.57 Vol Keys settings. A tap wakes the idle saver (or the dark screen when Touch to Wake is enabled), and the separate Screensaver, Screen Off, Sleep Timer, and Idle Power-off choices control later idle behavior. For USB Storage, eject the card safely on the computer before changing modes; diskOS can refuse the switch when card ownership is uncertain.
 
 <table>
 <tr>

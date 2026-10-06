@@ -17,6 +17,7 @@ diskOS remains beta software; version numbers do not imply broad hardware or fea
 - Screen sleep now executes the exact stock hardware power-sequencing: CST816T deep sleep (`0x2000ef03`), backlight rail cut (`bl_power = 4`), 120ms controller discharge delay, and ST77916 LCD panel sleep (`0x2000ef01`).
 - Screen wake executes stock resume sequence: ST77916 exit sleep (`0x2000ef02`), 50ms stabilization delay, backlight restoration, and CST816T resume (`0x2000ef04`).
 - Screen off timeout now operates independently when the screensaver is set to Off.
+- Reduced dark-screen main-loop polling interval to 200ms to cut CPU wakeups in half during standby.
 
 ### Fixed
 
