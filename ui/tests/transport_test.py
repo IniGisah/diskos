@@ -33,7 +33,6 @@ static track_state_t state;
 static uint32_t lv_tick_get(void){return now;}
 static int ui_is_playing(void){return g_playing;}
 static int ui_local_playback_allowed(void){return local;}
-static int ui_get_source_mode(void){return 0;}
 static void bt_rx_play_pause(void){}
 static void bt_rx_next(void){}
 static void bt_rx_prev(void){}
