@@ -1,4 +1,4 @@
-# A tour of diskOS 1.2.0
+# A tour of diskOS 1.2.1
 
 diskOS is a touch interface for the FiiO Snowsky Disc's 360x360 screen. It uses the player supplied by the installed stock firmware. The available player controls can differ on V2.09, V2.28, V2.40, and V2.57; a setting that cannot be applied says "Not on this firmware".
 
@@ -238,7 +238,15 @@ Playback controls what plays next and how the player treats a resumed track. Tap
 
 ### Settings: Audio and working mode
 
-Audio rows control the output path, DAC options, and volume limits. Tap Working Mode to choose Local Playback, USB DAC, USB Audio, Bluetooth Receiving, or USB Storage; the selected mode is marked in the list. USB Storage gives the computer the card: eject it safely there before returning to Local Playback.
+Audio rows control the output path, DAC options, and volume limits. Tap Working Mode to choose Local Playback, USB DAC, USB Audio, Bluetooth Receiving, or USB Storage; the selected mode is marked in the list.
+
+Selecting **Bluetooth Receiving**, **USB DAC**, or **USB Storage** enters a dedicated **Mode Lockdown** screen tailored to that connection:
+- **Bluetooth Receiving**: Displays connection status, playback transport controls (AVRCP play/pause, next, previous), and synchronized volume.
+- **USB DAC**: Serves as a USB DAC slave device for your PC or phone, displaying a live badge with stream format (PCM, sample rate, bit depth) and connection state.
+- **USB Storage**: Exports SD card storage to the computer safely; unmount or eject on your PC before exiting.
+- **Navigating in Lockdown**: Pull down from the top edge to open Quick Settings, or swipe right from the left edge to bring up an exit confirmation prompt returning to Local Playback.
+
+**USB Audio** (on supported firmware) routes the Disc's local music player through an external USB DAC or dongle over USB host mode.
 
 | Row | Action and default |
 |---|---|
@@ -417,7 +425,7 @@ remain experimental.
 When using USB Audio mode, if the external DAC is unplugged, playback automatically pauses, the player safely re-routes to a null sink, and diskOS blocks playback commands until reconnected. Once the USB DAC is plugged back in, a normal tap on Play cleanly resumes playback from the paused position.
 
 After a restart, Wi-Fi can take up to about a minute to connect; if it shows no IP, reconnect in
-Settings > Wi-Fi. A fix is planned for 1.2.1.
+Settings > Wi-Fi.
 
 ### Safety and stock UI
 

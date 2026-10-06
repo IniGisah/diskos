@@ -5,11 +5,15 @@ All notable changes to diskOS are documented here.
 Entries follow the Keep a Changelog format, with Added, Changed, and Fixed categories where applicable.
 diskOS remains beta software; version numbers do not imply broad hardware or feature validation.
 
-## [Unreleased]
+## [1.2.1] - 2026-10-06
+
+Adds Mode Lockdown screens, external USB DAC host mode audio output, and hardware sleep & backlight power-sequencing fixes.
 
 ### Added
 
-- A **"Touch to Wake"** toggle under **Settings -> Display** (default: **Off** for maximum battery life). When disabled, the touch controller is placed into full hardware deep sleep (0mA) matching stock standby; when enabled, tapping the dark screen wakes the device.
+- **Mode Lockdown screens**: Dedicated full-screen lockdown interfaces for Bluetooth Receiver, USB DAC, and USB Storage modes with theme kit styling, circular layout fitting, live connection badges (sample rate/bit depth), Bluetooth AVRCP controls, and swipe-to-exit prompts.
+- **External USB DAC host mode output** (`USB Audio`): Route local playback directly to an external USB DAC over USB host mode, with automatic disconnect detection (pausing and null-routing) and clean resumption on reconnect.
+- **Touch to Wake toggle** under **Settings -> Display** (default: **Off** for maximum standby battery life). When disabled, the touch controller enters hardware deep sleep (0mA) matching stock standby; when enabled, tapping a dark screen wakes the device.
 - Authentic procedural vinyl record placeholder on the screensaver when playing tracks without album art, preventing a pitch-black screen.
 
 ### Changed
@@ -18,6 +22,7 @@ diskOS remains beta software; version numbers do not imply broad hardware or fea
 - Screen wake executes stock resume sequence: ST77916 exit sleep (`0x2000ef02`), 50ms stabilization delay, backlight restoration, and CST816T resume (`0x2000ef04`).
 - Screen off timeout now operates independently when the screensaver is set to Off.
 - Reduced dark-screen main-loop polling interval to 200ms to cut CPU wakeups in half during standby.
+- Aligned `source_send` IPC sequence with stock firmware for USB DAC (`0666000C0006` -> 100ms delay -> `0642000C0002` -> `0657000C0001`) and Bluetooth Receiver modes.
 
 ### Fixed
 
