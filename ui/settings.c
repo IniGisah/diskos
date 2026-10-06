@@ -524,10 +524,18 @@ void ui_backlight(int v){
         FILE *f = fopen("/sys/class/backlight/backlight/brightness", "w");
         if(f){ fprintf(f, "%d", v); fclose(f); }
         else  fprintf(stderr, "backlight brightness open failed: %s\n", strerror(errno));
+        FILE *p = fopen("/sys/class/backlight/backlight/bl_power", "w");
+        if(p){ fprintf(p, "0"); fclose(p); }
+        else  fprintf(stderr, "backlight bl_power open failed: %s\n", strerror(errno));
+    } else {
+        /* power rail down first, then record brightness 0 */
+        FILE *p = fopen("/sys/class/backlight/backlight/bl_power", "w");
+        if(p){ fprintf(p, "4"); fclose(p); }
+        else  fprintf(stderr, "backlight bl_power open failed: %s\n", strerror(errno));
+        FILE *f = fopen("/sys/class/backlight/backlight/brightness", "w");
+        if(f){ fprintf(f, "0"); fclose(f); }
+        else  fprintf(stderr, "backlight brightness open failed: %s\n", strerror(errno));
     }
-    FILE *p = fopen("/sys/class/backlight/backlight/bl_power", "w");
-    if(p){ fprintf(p, "%d", v ? 0 : 4); fclose(p); }
-    else  fprintf(stderr, "backlight bl_power open failed: %s\n", strerror(errno));
 }
 static void apply_brightness(int v){ if(v < 1) v = 1; ui_backlight(v); }
 void settings_apply_startup(void){
@@ -683,6 +691,8 @@ static const setting_t TABLE[] = {
       "Screensaver look: Cover art, Analog clock, Minimal, Digital, or spinning Vinyl.", NULL },
     { "Display",  "Screen Off",  ST_CYCLER, "screenoff_idx", 0,0,0, OPT_POWER, 5, NULL, NULL, 3,
       "How long after the screensaver the screen turns fully off.", NULL },
+    { "Display",  "Touch to Wake", ST_TOGGLE, "touch_wake", 0,1,1, NULL, 0, NULL, NULL, 0,
+      "Allow tapping the screen to wake from screen off (Off gives maximum battery life).", NULL },
     { "Display",  "24-Hour Time", ST_TOGGLE, "time_24h",  0,1,1, NULL, 0, NULL, apply_time, 1,
       "Use a 24-hour clock instead of AM/PM.", NULL },
     { "Display",  "Animations",  ST_TOGGLE, "anim",      0,1,1, NULL, 0, NULL, apply_anim, 1,

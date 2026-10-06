@@ -155,6 +155,76 @@ static uint8_t *g_vres; static unsigned g_vres_gen; static int g_vres_ready;   /
 static unsigned g_vasked_gen = ~0u;      /* UI thread: generation last requested (no duplicate requests) */
 static lv_timer_t *g_vpoll;
 
+static void vinyl_generate_placeholder(void)
+{
+    if (!g_vinyl) return;
+    const size_t need = (size_t)VIN_W * VIN_W * 4;
+    uint8_t *buf = malloc(need);
+    if (!buf) return;
+    uint32_t *p = (uint32_t *)buf;
+    uint32_t acc = lv_color_to_u32(ui_current_accent());
+    uint8_t ar = (acc >> 16) & 0xFF, ag = (acc >> 8) & 0xFF, ab = acc & 0xFF;
+    for (int y = 0; y < VIN_W; y++) {
+        int dy = y - 180;
+        int dy2 = dy * dy;
+        for (int x = 0; x < VIN_W; x++) {
+            int dx = x - 180;
+            int r2 = dx * dx + dy2;
+            uint32_t col;
+            if (r2 <= 10 * 10) {
+                /* Spindle hole: black */
+                col = 0xFF050505;
+            } else if (r2 <= 55 * 55) {
+                /* Center accent label */
+                if (r2 >= 52 * 52) {
+                    col = 0xFF1A1A1A; /* label border ring */
+                } else {
+                    /* Rich label tinted with accent */
+                    col = 0xFF000000 | ((ar * 3 + 0x22 * 5) / 8 << 16) | ((ag * 3 + 0x22 * 5) / 8 << 8) | ((ab * 3 + 0x22 * 5) / 8);
+                }
+            } else if (r2 <= 178 * 178) {
+                /* Vinyl grooves: concentric variations on dark charcoal */
+                int r = (int)sqrt(r2);
+                int g = (r % 7 == 0 || r % 9 == 0) ? 0x2E : ((r % 3 == 0) ? 0x22 : 0x18);
+                col = 0xFF000000 | (g << 16) | (g << 8) | g;
+            } else {
+                col = 0xFF000000;
+            }
+            *p++ = col;
+        }
+    }
+    uint8_t *old = g_vbuf;
+    if (old) lv_image_cache_drop(&g_vdsc);
+    g_vbuf = buf;
+    g_vbuf_valid = 1;
+
+    memset(&g_vdsc, 0, sizeof g_vdsc);
+    g_vdsc.header.magic  = LV_IMAGE_HEADER_MAGIC;
+    g_vdsc.header.cf     = LV_COLOR_FORMAT_ARGB8888;
+    g_vdsc.header.w      = VIN_W;
+    g_vdsc.header.h      = VIN_W;
+    g_vdsc.header.stride = VIN_W * 4;
+    g_vdsc.data          = g_vbuf;
+    g_vdsc.data_size     = (uint32_t)need;
+
+    if (!g_vout) g_vout = calloc((size_t)VIN_W * VIN_W, 4);
+    if (g_vout) {
+        g_vodsc = g_vdsc;
+        g_vodsc.data = g_vout;
+        g_vodsc.header.cf = LV_COLOR_FORMAT_XRGB8888;
+        vinyl_rotate(g_vangle);
+        lv_image_set_src(g_vinyl, &g_vodsc);
+        lv_image_set_rotation(g_vinyl, 0);
+    } else {
+        lv_image_set_src(g_vinyl, &g_vdsc);
+        lv_image_set_pivot(g_vinyl, VIN_W / 2, VIN_W / 2);
+    }
+    lv_image_set_scale(g_vinyl, 256);
+    lv_obj_center(g_vinyl);
+    free(old);
+    vinyl_update_vis();
+}
+
 static void *vinyl_worker(void *arg)
 {
     (void)arg;
@@ -207,7 +277,9 @@ static void vinyl_poll(lv_timer_t *t)
     pthread_mutex_unlock(&g_vmu);
     if (gen != g_vgen || !buf || !g_vinyl) {            /* stale (track changed) or failed: show nothing */
         free(buf);
-        if (gen == g_vgen) {
+        if (gen == g_vgen && !buf && g_vinyl && g_have_track) {
+            vinyl_generate_placeholder();
+        } else if (gen == g_vgen) {
             g_vbuf_valid = 0; vinyl_update_vis();
             if (++g_vfails < VIN_RETRIES) g_vasked_gen = ~0u;   /* allow a retry the next time the saver shows */
         }
@@ -248,7 +320,11 @@ static void vinyl_poll(lv_timer_t *t)
 /* UI thread: ask for the current track's sharp cover (returns at once) */
 static void vinyl_load_sharp_cover(void)
 {
-    if (!g_vinyl || !g_have_track || !g_vpath[0]) { g_vbuf_valid = 0; vinyl_update_vis(); return; }
+    if (!g_vinyl || !g_have_track) { g_vbuf_valid = 0; vinyl_update_vis(); return; }
+    if (!g_vpath[0]) {
+        vinyl_generate_placeholder();
+        return;
+    }
     if (g_vbuf_valid || g_vasked_gen == g_vgen) return;  /* already showing it, or already asked */
     if (!g_vpoll) g_vpoll = lv_timer_create(vinyl_poll, 150, NULL);
     pthread_mutex_lock(&g_vmu);
