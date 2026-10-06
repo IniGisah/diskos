@@ -3177,7 +3177,7 @@ int main(int argc, char **argv){
          * brightness=0 while leaving bl_power=0 (FB_BLANK_UNBLANK).
          * Catch player-side blanks on a poll, power down the panel and sync bl_state=2.
          * When the player restores brightness (power button press), restore the hardware panel. */
-        if(lv_tick_elaps(last_blpoll) >= (bl_state == 2 ? 100 : 250)){
+        if(lv_tick_elaps(last_blpoll) >= (bl_state == 2 ? 200 : 250)){
             last_blpoll = lv_tick_get();
             int cbr = read_int_file("/sys/class/backlight/backlight/brightness");
             int cbp = read_int_file("/sys/class/backlight/backlight/bl_power");
@@ -3302,8 +3302,8 @@ int main(int argc, char **argv){
         g_bl_idle = (bl_state >= 1);   /* prewarm worker reads this: only work while dimmed/off */
         int busy = lv_anim_count_running() > 0 || prev_ts == LV_INDEV_STATE_PRESSED;
         if(bl_state == 2){
-            /* screen off: poll at 100ms for responsive wake while minimizing CPU wakeups */
-            wait = 100;
+            /* screen off: poll at 200ms for responsive wake while minimizing CPU wakeups */
+            wait = 200;
         } else {
             uint32_t cap = busy ? 5 : 30;
             if(wait > cap) wait = cap;
