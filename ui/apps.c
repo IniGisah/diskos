@@ -57,6 +57,7 @@ static void app_row_cb(lv_event_t *e){
     if(i>=0 && i<g_napps) app_launch(g_apps[i].exec);
 }
 static void lastfm_row_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) lastfm_open(); }
+static void battery_row_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) screen_show(SCR_USAGE); }
 static void settings_row_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) screen_show(SCR_SETTINGS); }
 
 /* one app tile in the 2-wide grid (g_list is ROW_WRAP): a big glyph over a small caption */
@@ -90,6 +91,8 @@ void apps_reload(void){
     /* Weather is not a tile here anymore - it opens by tapping the home weather glance (glance->detail). */
     /* built-in: Last.fm scrobbling (the FA lastfm brand glyph) */
     make_tile(LFM_ICON, TF(ICON_28), "Last.fm", lastfm_row_cb, NULL);
+    /* built-in: Battery usage history */
+    make_tile(LV_SYMBOL_BATTERY_FULL, TF(UI_28), "Battery", battery_row_cb, NULL);
     /* homebrew apps from /usr/data/apps */
     for(int i=0;i<g_napps;i++) make_tile(LV_SYMBOL_FILE, TF(ICON_28), g_apps[i].name, app_row_cb, (void*)(uintptr_t)i);
     /* built-in: Settings */
@@ -104,13 +107,14 @@ void apps_create(lv_obj_t *root){
 
     g_list = lv_obj_create(root);
     lv_obj_remove_style_all(g_list);
-    lv_obj_set_pos(g_list, 44, 74); lv_obj_set_size(g_list, 272, 252);
+    lv_obj_set_pos(g_list, 44, 70); lv_obj_set_size(g_list, 272, 256);
+    lv_obj_set_style_pad_top(g_list, 4, 0);
     lv_obj_set_style_pad_bottom(g_list, 44, 0);   /* bottom tile row scrolls clear of the round bezel */
     lv_obj_set_style_bg_opa(g_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_pad_row(g_list, 10, 0);
     lv_obj_set_style_pad_column(g_list, 10, 0);
     lv_obj_set_flex_flow(g_list, LV_FLEX_FLOW_ROW_WRAP);   /* 2-wide tile grid (128px tiles + 10 gap) */
-    lv_obj_set_flex_align(g_list, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(g_list, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_scroll_dir(g_list, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(g_list, LV_SCROLLBAR_MODE_OFF);
 
