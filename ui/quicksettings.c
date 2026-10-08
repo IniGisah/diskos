@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 /* Quick Settings: an iOS-Control-Center-style pull-down panel (top-edge swipe-down; gesture handled
  * in main.c). It is USER-CUSTOMISABLE: the brightness bar sits on top, an optional transport row below
@@ -70,11 +71,18 @@ static const qtile_t QTILES[QT_COUNT] = {
 };
 
 static lv_obj_t *g_qs_root;
+static lv_obj_t *g_qs_hdr;
+static lv_obj_t *g_qs_clock, *g_qs_date, *g_qs_batt;
 static lv_obj_t *g_bright;
 static lv_obj_t *g_prev_glyph, *g_next_glyph;
 static lv_obj_t *g_pp_glyph;                 /* transport play/pause glyph (NULL when transport is off) */
 static lv_obj_t *g_tile_dot[QT_COUNT];       /* the circle per shown tile, recoloured on refresh */
 static lv_obj_t *g_tile_lbl[QT_COUNT];       /* its caption (the ring style colours it too) */
+
+static int s_qs_batt = -1;
+static int s_qs_charging = 0;
+static char s_qs_time[16] = "";
+static char s_qs_date[32] = "";
 
 /* the drawer shows at most this many tiles - one fewer with the transport row, so the second row never
  * pushes its outer captions off the round bezel. */
@@ -339,7 +347,7 @@ static void build_brightness(lv_obj_t *root, int y){
     lv_obj_set_size(g_bright, 216, 34);
     lv_obj_set_ext_click_area(g_bright, 8);
     lv_obj_align(g_bright, LV_ALIGN_TOP_MID, 0, y);
-    lv_slider_set_range(g_bright, 4, 40);
+    lv_slider_set_range(g_bright, 1, 40);
     lv_slider_set_value(g_bright, ui_effective_brightness(), LV_ANIM_OFF);
     if(theme_outdoor()) lv_obj_add_state(g_bright, LV_STATE_DISABLED);   /* Outdoor holds full brightness */
     lv_obj_set_style_bg_color(g_bright, TC(CONTROL_TRACK), LV_PART_MAIN);
@@ -371,15 +379,113 @@ static void build_brightness(lv_obj_t *root, int y){
     }
 }
 
+/* ---- status header (clock, date & battery) ---------------------------------------------------- */
+static void qs_datetime_click_cb(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED) screen_show(SCR_DATETIME);
+}
+
+static void qs_batt_click_cb(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED) screen_show(SCR_USAGE);
+}
+
+void quicksettings_set_status(int batt, int charging){
+    s_qs_batt = batt;
+    s_qs_charging = charging;
+    if(!g_qs_batt) return;
+    char buf[32];
+    if(batt >= 0){
+        const char *bs = batt >= 90 ? LV_SYMBOL_BATTERY_FULL :
+                         batt >= 65 ? LV_SYMBOL_BATTERY_3 :
+                         batt >= 40 ? LV_SYMBOL_BATTERY_2 :
+                         batt >= 15 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
+        snprintf(buf, sizeof buf, "%s %d%%", charging ? LV_SYMBOL_CHARGE : bs, batt);
+    } else {
+        snprintf(buf, sizeof buf, "--%%");
+    }
+    lv_label_set_text(g_qs_batt, buf);
+    if(charging) lv_obj_set_style_text_color(g_qs_batt, ui_current_accent(), 0);
+    else lv_obj_set_style_text_color(g_qs_batt, TC(TEXT_SECONDARY), 0);
+}
+
+static void qs_update_time_now(void){
+    time_t now = time(NULL);
+    struct tm lt; localtime_r(&now, &lt);
+    int h24 = cfg_get_int("time_24h", 1);
+    if(h24){
+        strftime(s_qs_time, sizeof s_qs_time, "%H:%M", &lt);
+    } else {
+        strftime(s_qs_time, sizeof s_qs_time, "%I:%M %p", &lt);
+        if(s_qs_time[0] == '0') memmove(s_qs_time, s_qs_time + 1, strlen(s_qs_time));
+    }
+    strftime(s_qs_date, sizeof s_qs_date, "%a %d %b", &lt);
+}
+
+void quicksettings_set_clock(const char *time_text, const char *date_text){
+    if(time_text && time_text[0]) snprintf(s_qs_time, sizeof s_qs_time, "%s", time_text);
+    if(date_text && date_text[0]) snprintf(s_qs_date, sizeof s_qs_date, "%s", date_text);
+    if(!s_qs_time[0] || !s_qs_date[0]) qs_update_time_now();
+    if(g_qs_clock) lv_label_set_text(g_qs_clock, s_qs_time);
+    if(g_qs_date) lv_label_set_text(g_qs_date, s_qs_date);
+}
+
+static void build_status(lv_obj_t *root, int y){
+    if(!s_qs_time[0] || !s_qs_date[0]) qs_update_time_now();
+    g_qs_hdr = lv_obj_create(root);
+    lv_obj_remove_style_all(g_qs_hdr);
+    lv_obj_set_size(g_qs_hdr, 184, 30);
+    lv_obj_align(g_qs_hdr, LV_ALIGN_TOP_MID, 0, y);
+    lv_obj_clear_flag(g_qs_hdr, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Clock & Date on the left (clickable -> Set Date & Time) */
+    lv_obj_t *dt_box = lv_obj_create(g_qs_hdr);
+    lv_obj_remove_style_all(dt_box);
+    lv_obj_set_size(dt_box, 110, 30);
+    lv_obj_align(dt_box, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_add_flag(dt_box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(dt_box, 4);
+    ui_on(dt_box, qs_datetime_click_cb, LV_EVENT_CLICKED, NULL, "qs.datetime", UI_CORE);
+
+    g_qs_clock = lv_label_create(dt_box);
+    lv_obj_clear_flag(g_qs_clock, LV_OBJ_FLAG_CLICKABLE);
+    lv_label_set_text(g_qs_clock, s_qs_time);
+    lv_obj_set_style_text_font(g_qs_clock, TF(UI_16), 0);
+    lv_obj_set_style_text_color(g_qs_clock, TC(TEXT_PRIMARY), 0);
+    lv_obj_align(g_qs_clock, LV_ALIGN_TOP_LEFT, 0, -1);
+
+    g_qs_date = lv_label_create(dt_box);
+    lv_obj_clear_flag(g_qs_date, LV_OBJ_FLAG_CLICKABLE);
+    lv_label_set_text(g_qs_date, s_qs_date);
+    lv_obj_set_style_text_font(g_qs_date, TF(UI_12), 0);
+    lv_obj_set_style_text_color(g_qs_date, TC(TEXT_SECONDARY), 0);
+    lv_obj_align(g_qs_date, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+
+    /* Battery on the right (clickable -> battery toast) */
+    g_qs_batt = lv_label_create(g_qs_hdr);
+    lv_obj_add_flag(g_qs_batt, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(g_qs_batt, 6);
+    lv_obj_set_style_text_font(g_qs_batt, TF(UI_14), 0);
+    lv_obj_align(g_qs_batt, LV_ALIGN_RIGHT_MID, 0, 0);
+    ui_on(g_qs_batt, qs_batt_click_cb, LV_EVENT_CLICKED, NULL, "qs.batt", UI_CORE);
+
+    quicksettings_set_status(s_qs_batt, s_qs_charging);
+}
+
 /* ---- build / refresh --------------------------------------------------------------------------- */
-void quicksettings_create(lv_obj_t *root){ g_qs_root = root; }   /* defer to quicksettings_build on open */
+void quicksettings_create(lv_obj_t *root){
+    g_qs_root = root;
+    qs_update_time_now();
+}
 
 /* Rebuild the whole panel from config. Called on every entry so customisation changes show at once. */
 void quicksettings_build(void){
     if(!g_qs_root) return;
     lv_obj_clean(g_qs_root);
+    g_qs_hdr = NULL; g_qs_clock = NULL; g_qs_date = NULL; g_qs_batt = NULL;
     g_bright = NULL; g_pp_glyph = NULL; g_prev_glyph = NULL; g_next_glyph = NULL;
     for(int i=0;i<QT_COUNT;i++){ g_tile_dot[i] = NULL; g_tile_lbl[i] = NULL; }
+
+    /* ensure fresh clock & date */
+    qs_update_time_now();
 
     lv_obj_set_style_bg_color(g_qs_root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(g_qs_root, LV_OPA_COVER, 0);
@@ -388,24 +494,23 @@ void quicksettings_build(void){
     lv_obj_t *grab = lv_obj_create(g_qs_root);
     lv_obj_remove_style_all(grab);
     lv_obj_clear_flag(grab, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_size(grab, 36, 5);
-    lv_obj_align(grab, LV_ALIGN_TOP_MID, 0, 12);
-    lv_obj_set_style_radius(grab, 3, 0);
+    lv_obj_set_size(grab, 36, 4);
+    lv_obj_align(grab, LV_ALIGN_TOP_MID, 0, 8);
+    lv_obj_set_style_radius(grab, 2, 0);
     lv_obj_set_style_bg_color(grab, TC(GRABBER), 0);
     lv_obj_set_style_bg_opa(grab, LV_OPA_COVER, 0);
+
+    /* status row: clock & date (left) + battery status (right) */
+    build_status(g_qs_root, 16);
 
     int have_tr = cfg_get_int("qs_transport", 0) ? 1 : 0;
     int ids[QT_COUNT]; int nt = qs_enabled(ids, qs_cap());
     int rows = nt > 3 ? 2 : (nt > 0 ? 1 : 0);
 
-    const int H_BR = 34, H_TR = 56, H_ROW = 80, GAP = 14;
-    int nblocks = 1 + have_tr + rows;                 /* brightness is always present */
-    int total = H_BR + (have_tr ? H_TR : 0) + rows*H_ROW + (nblocks > 1 ? (nblocks-1)*GAP : 0);
-    int y = 185 - total/2;                            /* centre the stack a touch below the middle */
-    if(y < 44) y = 44;                                /* never overlap the grab handle */
-
-    build_brightness(g_qs_root, y);  y += H_BR + GAP;
-    if(have_tr){ build_transport(g_qs_root, y); y += H_TR + GAP; }
+    int y = 52;
+    int gap = have_tr ? 10 : 14;
+    build_brightness(g_qs_root, y);  y += 34 + gap;
+    if(have_tr){ build_transport(g_qs_root, y); y += 50 + gap; }
 
     int placed = 0;
     for(int r=0; r<rows; r++){
@@ -414,12 +519,12 @@ void quicksettings_build(void){
             int x = (int)((i - (k-1)/2.0) * 84);           /* centre the row, 84px column pitch */
             build_tile(g_qs_root, ids[placed++], x, y);
         }
-        y += H_ROW + GAP;
+        y += 74 + gap;
     }
     if(theme_kit()->quicksettings){                   /* the active theme lays the drawer out its own way */
         qs_parts_t q = { g_qs_root, grab, g_bright, g_prev_glyph ? lv_obj_get_parent(g_prev_glyph) : NULL,
                          g_pp_glyph ? lv_obj_get_parent(g_pp_glyph) : NULL,
-                         g_next_glyph ? lv_obj_get_parent(g_next_glyph) : NULL, nt, {0}, {0} };
+                         g_next_glyph ? lv_obj_get_parent(g_next_glyph) : NULL, g_qs_hdr, nt, {0}, {0} };
         for(int i = 0; i < nt; i++){ q.tile[i] = g_tile_dot[ids[i]]; q.cap[i] = g_tile_lbl[ids[i]]; }
         theme_kit()->quicksettings(&q);
     }
@@ -442,6 +547,10 @@ void quicksettings_refresh(int playing){
     }
     for(int i=0;i<QT_COUNT;i++)
         if(g_tile_dot[i]) tile_recolor(i, qtile_is_on(i));
+    quicksettings_set_status(s_qs_batt, s_qs_charging);
+    qs_update_time_now();
+    if(g_qs_clock) lv_label_set_text(g_qs_clock, s_qs_time);
+    if(g_qs_date) lv_label_set_text(g_qs_date, s_qs_date);
 }
 
 /* ---- customisation screen (SCR_QSCONFIG): pick which tiles appear -------------------------------- */

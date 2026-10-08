@@ -74,7 +74,7 @@ typedef struct {
  * brightness slider, the transport buttons when the user turned them on. tile[i]'s first child is its glyph. */
 #define QS_TILES_MAX 6
 typedef struct {
-    lv_obj_t *root, *grab, *bright, *prev, *pp, *next;
+    lv_obj_t *root, *grab, *bright, *prev, *pp, *next, *status;
     int n; lv_obj_t *tile[QS_TILES_MAX], *cap[QS_TILES_MAX];
 } qs_parts_t;
 
