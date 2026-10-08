@@ -26,24 +26,13 @@
  *     .flac / .wav, the set diskOS indexes - see scanner.c is_audio). Tap a
  *     folder to descend; the header back-chevron ascends one level and, at the
  *     SD root, leaves the screen.
- *   - Tap an audio file to PLAY that exact track. The file is matched to its
- *     library row by absolute path (the scanner stores PATH as the full
- *     /tmp/sdcard/... path), and playback runs in the all-songs scope via the
- *     same proven path a Songs-view / Search tap uses (ui_play_song_by_path).
+ *   - Tap an audio file to PLAY that exact track. The tracks in the current
+ *     folder are queued as a type-5 folder plan (mdb_folder_plan), so the queue
+ *     scope is restricted to that folder alone (matching stock parity and user
+ *     expectation). The tapped track starts immediately.
  *   - SACD .iso images the library has IS_ISO rows for, and .cue sheets, are listed too. Tapping one plays that
  *     file's tracks (SONG rows by PATH, TRACK order) as the exact type-5 queue the album drill uses (ui_play_plan).
  *     A sheet names its audio file(s) in FILE lines; the tracks live under that audio PATH.
- *
- * FOLDER QUEUE (stock parity, deliberately not done here)
- *   Stock V2.57 plays a tapped file as a queue of its folder: 0100 list type 4
- *   with the directory path (docs/COMMAND_MAP.md, live-verified 2026-09-29). The
- *   player scans that directory itself (not recursive) and orders the rows with
- *   its own ICU collation, then starts at a 0-based row index into that list.
- *   That order cannot be reproduced here (no ICU, and non-audio entries take a
- *   slot), so a computed start index could play the wrong track. Until the
- *   player's order can be read back exactly we play the tapped file alone, in
- *   the all-songs scope, via ui_play_song_by_path. A file that is not in the
- *   library DB reports "Not in library" instead of playing.
  */
 
 #define FB_ROOT        "/tmp/sdcard"
@@ -286,8 +275,29 @@ static void fb_play(const char *name){
     char full[FB_MAXPATH];
     int n = snprintf(full, sizeof full, "%s/%s", g_dir, name);
     if(n <= 0 || n >= (int)sizeof full){ ui_toast("Path too long"); return; }
-    if(ui_play_song_by_path(full))   /* toasts "Not in library" itself on a miss */
-        screen_show(SCR_NOWPLAYING);
+    int target_id = mdb_song_id_by_path(full);
+    if(target_id <= 0){ ui_toast("Not in library"); return; }
+
+    /* Build a folder queue: collect all audio files currently in this folder */
+    int n_audio = 0;
+    for(int i = 0; i < g_nent; i++){
+        if(!g_ent[i].is_dir && g_ent[i].kind == FB_K_AUDIO) n_audio++;
+    }
+    const char **files = malloc((size_t)n_audio * sizeof *files);
+    if(!files){ ui_toast("Out of memory"); return; }
+    int k = 0;
+    for(int i = 0; i < g_nent; i++){
+        if(!g_ent[i].is_dir && g_ent[i].kind == FB_K_AUDIO) files[k++] = g_ent[i].name;
+    }
+
+    mdb_plan_t plan;
+    int ok = mdb_folder_plan(g_dir, files, k, &plan);
+    free(files);
+    if(!ok){ ui_toast("Not in library"); return; }
+
+    int played = ui_play_plan(&plan, target_id);
+    mdb_plan_free(&plan);
+    if(played) screen_show(SCR_NOWPLAYING);
 }
 
 /* Play the CUE/ISO tracks of `paths` (their SONG rows, TRACK order) through the exact queue the album drill uses. */

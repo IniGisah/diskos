@@ -10,17 +10,18 @@
 #include <stdio.h>
 #include <string.h>
 
-/* ---- Up Next (SCR_UPNEXT): reached from the Now Playing right-hub. The stock player owns the queue (LIST_SONG_0,
- * shuffle order in LIST_SONG_3); this screen only reads it (mdb_upnext) and jumps within it (ui_queue_jump). It
- * shows the current song and what plays after it, follows track changes while open, and never shows a guessed
- * order: while the player is rebuilding the queue it says so and retries. */
-#define UN_SHOW   100                  /* upcoming rows shown; the rest is summarised in a footer */
-#define UN_FIRST  12                   /* rows built at once (a screenful), the rest a few per tick */
+/* ---- Queue (SCR_UPNEXT): reached from the Now Playing right-hub. The stock player owns the queue (LIST_SONG_0,
+ * shuffle order in LIST_SONG_3); this screen reads it (mdb_queue) and jumps within it (ui_queue_jump). It
+ * shows earlier played songs, the current song, and what plays after it, follows track changes while open,
+ * and never shows a guessed order: while the player is rebuilding the queue it says so and retries. */
+#define UN_SHOW   200                  /* rows shown (earlier + current + upcoming); rest summarised in footer */
+#define UN_FIRST  12                   /* min rows built at once */
 #define UN_RETRY  8                    /* 1 s retries while the queue is being rebuilt */
 static lv_obj_t   *g_un_list;
 static lv_timer_t *g_un_fill, *g_un_watch;
 static mdb_qrow_t  g_un_rows[UN_SHOW + 1];
 static int         g_un_n, g_un_fill_i, g_un_more, g_un_retries, g_un_retry;   /* g_un_retry: last read was transient */
+static int         g_un_cur_idx;       /* index of current song in g_un_rows */
 static int         g_un_mode = -1;     /* the play mode the list was read in */
 static char        g_un_path[256];     /* the song that was current when the list was read */
 static int         g_un_pos;           /* its pos_id then (0 = unknown) */
@@ -29,7 +30,7 @@ static unsigned    g_un_seq;           /* its path_seq then: a track change sinc
 static void un_rebuild(void);
 
 static void un_fmt_dur(int ms, char *out, size_t n){
-    if(ms <= 0){ out[0] = 0; return; }
+    if(ms <= 0 || ms >= 86400000){ out[0] = 0; return; }
     long long t = ((long long)ms + 500) / 1000; snprintf(out, n, "%lld:%02lld", t / 60, t % 60);   /* no int overflow near INT32_MAX */
 }
 
@@ -56,7 +57,7 @@ static void un_row_cb(lv_event_t *e){
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     int i = (int)(intptr_t)lv_event_get_user_data(e);
     if(i < 0 || i >= g_un_n) return;
-    if(i == 0){ screen_show(SCR_NOWPLAYING); return; }             /* the current song */
+    if(i == g_un_cur_idx){ screen_show(SCR_NOWPLAYING); return; }             /* the current song */
     if(!un_still_current()){ un_rebuild(); ui_toast("Queue changed"); return; }   /* never jump from a stale list */
     /* and the target row itself must still be that song at that position (a rebuild can keep the current song) */
     int v = mdb_queue_row_valid(g_un_rows[i].base_id, g_un_rows[i].ord, g_un_rows[i].path);
@@ -67,13 +68,14 @@ static void un_row_cb(lv_event_t *e){
 
 static void un_add_row(int i){
     const mdb_qrow_t *q = &g_un_rows[i];
-    int cur = (i == 0);
+    int cur = (i == g_un_cur_idx);
+    int played = (i < g_un_cur_idx);
     lv_obj_t *r = lv_button_create(g_un_list);
     lv_obj_remove_style_all(r);
     lv_obj_set_size(r, 268, 52);
     lv_obj_set_style_radius(r, 10, 0);
     lv_obj_set_style_bg_color(r, (cur ? TC(SURFACE_RAISED) : TC(SURFACE)), 0);
-    lv_obj_set_style_bg_opa(r, cur ? LV_OPA_COVER : LV_OPA_50, 0);
+    lv_obj_set_style_bg_opa(r, cur ? LV_OPA_COVER : (played ? LV_OPA_30 : LV_OPA_50), 0);
     lv_obj_set_style_bg_color(r, TC(RAISED_PRESSED), LV_STATE_PRESSED);
     lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
     ui_on(r, un_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i, "upnext.un_row", UI_CORE);
@@ -83,7 +85,7 @@ static void un_add_row(int i){
     lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(t, 14, 6); lv_obj_set_size(t, 186, 21);
     lv_obj_set_style_text_font(t, TF(USER_16), 0);
-    lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
+    lv_obj_set_style_text_color(t, cur ? TC(TEXT_PRIMARY) : (played ? TC(TEXT_MUTED) : TC(TEXT_PRIMARY)), 0);
 
     lv_obj_t *s = lv_label_create(r);                           /* artist; "Now Playing" on the current row */
     lv_label_set_text(s, cur ? "Now Playing" : q->artist);
@@ -92,21 +94,27 @@ static void un_add_row(int i){
     lv_obj_set_style_text_font(s, cur ? TF(UI_14) : TF(USER_14), 0);
     lv_obj_set_style_text_color(s, (cur ? TC(STATUS_INFO) : TC(TEXT_MUTED)), 0);
 
-    char dur[12]; un_fmt_dur(q->dur_ms, dur, sizeof dur);
+    int dur_ms = q->dur_ms;
+    if(cur && (dur_ms <= 0 || dur_ms >= 86400000)){
+        track_state_t st; ipc_get_state(&st);
+        if(st.duration_ms > 0 && st.duration_ms < 86400000) dur_ms = (int)st.duration_ms;
+    }
+    char dur[12]; un_fmt_dur(dur_ms, dur, sizeof dur);
     if(dur[0]){
         lv_obj_t *d = lv_label_create(r);                       /* length, right-aligned */
         lv_label_set_text(d, dur);
         lv_obj_set_pos(d, 202, 17); lv_obj_set_size(d, 54, 18);
         lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_RIGHT, 0);
         lv_obj_set_style_text_font(d, TF(UI_12), 0);
-        lv_obj_set_style_text_color(d, TC(TEXT_MUTED), 0);
+        lv_obj_set_style_text_color(d, played ? TC(TEXT_DISABLED) : TC(TEXT_MUTED), 0);
     }
 }
 
 static void un_footer(void){
     if(g_un_mode == 2) return;                                  /* Repeat One: the caption already says it */
-    if(g_un_n == 1 && !g_un_more){
-        un_note(g_un_mode == 3 ? "End of the queue - then it starts again" : "Nothing after this song");
+    int upcoming = g_un_n - 1 - g_un_cur_idx;
+    if(upcoming <= 0 && !g_un_more){
+        un_note(g_un_mode == 3 ? "End of queue - repeats from start" : "End of queue");
         return;
     }
     if(g_un_more > 0){
@@ -138,7 +146,7 @@ static void un_rebuild(void){
     un_fill_stop();
     lv_obj_clean(g_un_list);
     lv_obj_scroll_to_y(g_un_list, 0, LV_ANIM_OFF);
-    g_un_n = 0; g_un_more = 0; g_un_path[0] = 0; g_un_pos = 0; g_un_retry = 0; g_un_mode = -1;
+    g_un_n = 0; g_un_cur_idx = 0; g_un_more = 0; g_un_path[0] = 0; g_un_pos = 0; g_un_retry = 0; g_un_mode = -1;
     track_state_t st; ipc_get_state(&st);
     g_un_seq = st.path_seq;
     g_un_pos = st.pos_id;                                        /* what the list was read against, even when empty, */
@@ -147,20 +155,29 @@ static void un_rebuild(void){
     if(!st.have_track || !st.path[0]){ un_note("Nothing playing"); return; }
     if(mdb_is_book_path(st.path)){ un_note("Audiobooks play one book at a time - use Chapters"); return; }
     snprintf(g_un_path, sizeof g_un_path, "%s", st.path);
-    int n = mode < 0 ? MDB_UPNEXT_NOTFOUND : mdb_upnext(mode == 1, st.pos_id, st.path, g_un_rows, UN_SHOW + 1, &g_un_more);
-    if(n == MDB_UPNEXT_NOTFOUND || n == MDB_UPNEXT_BUSY){           /* transient: the watch timer retries */
+    int cur_idx = 0;
+    int n = mode < 0 ? MDB_QUEUE_NOTFOUND : mdb_queue(mode == 1, st.pos_id, st.path, g_un_rows, UN_SHOW + 1, &cur_idx, &g_un_more);
+    if(n == MDB_QUEUE_NOTFOUND || n == MDB_QUEUE_BUSY){           /* transient: the watch timer retries */
         g_un_retry = 1;
         un_note(g_un_retries < UN_RETRY ? "Queue updating..." : "The queue isn't available right now");
         return;
     }
-    if(n == MDB_UPNEXT_ERROR){ un_note("Couldn't read the queue"); return; }
-    if(n == MDB_UPNEXT_EMPTY){ un_note("The queue is empty"); return; }
+    if(n == MDB_QUEUE_ERROR){ un_note("Couldn't read the queue"); return; }
+    if(n == MDB_QUEUE_EMPTY){ un_note("The queue is empty"); return; }
     g_un_retries = 0;
     g_un_n = n;
+    g_un_cur_idx = cur_idx;
     un_mode_caption(mode);
     g_un_fill_i = 0;
-    int first = n < UN_FIRST ? n : UN_FIRST;
+    int first = cur_idx + 8;
+    if(first < UN_FIRST) first = UN_FIRST;
+    if(first > n) first = n;
     for(; g_un_fill_i < first; g_un_fill_i++) un_add_row(g_un_fill_i);
+    if(cur_idx > 0){
+        int target_y = cur_idx * 58 - (272 - 52) / 2;
+        if(target_y < 0) target_y = 0;
+        lv_obj_scroll_to_y(g_un_list, target_y, LV_ANIM_OFF);
+    }
     if(g_un_fill_i < g_un_n) g_un_fill = lv_timer_create(un_fill_cb, 16, NULL);
     else un_footer();
 }
@@ -178,7 +195,7 @@ static void un_watch_cb(lv_timer_t *t){
 void upnext_create(lv_obj_t *root){
     lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
-    ui_header(root, "Up Next");
+    ui_header(root, "Queue");
 
     g_un_list = lv_obj_create(root);
     lv_obj_remove_style_all(g_un_list);
@@ -201,3 +218,4 @@ void upnext_refresh(void){
 }
 
 void upnext_open(void){ screen_show(SCR_UPNEXT); }
+
