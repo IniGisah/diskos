@@ -1,4 +1,4 @@
-# A tour of diskOS 1.2.1
+# A tour of diskOS 1.2.2
 
 diskOS is a touch interface for the FiiO Snowsky Disc's 360x360 screen. It uses the player supplied by the installed stock firmware. The available player controls can differ on V2.09, V2.28, V2.40, and V2.57; a setting that cannot be applied says "Not on this firmware".
 
@@ -27,7 +27,7 @@ Home shows the time, date, battery, current song, and a weather glance when weat
 
 ### Quick Settings
 
-Pull down from the top edge to open the drawer and swipe up to close it. Drag Brightness at the top; an optional row adds previous, play or pause, and next. Choose up to six tiles under Display > Quick Settings, or five when playback controls are shown. A tap acts immediately; holding Wi-Fi, Bluetooth, EQ, Shuffle, Gapless, High Gain, DRE, Outdoor, or Theme opens its full setting.
+Pull down from the top edge to open the drawer and swipe up to close it. The status bar immediately displays the live time and date (with no `--:--` placeholder delay) and a battery indicator that opens Battery usage when tapped. Drag Brightness below the status bar; an optional row adds previous, play or pause, and next. Choose up to six tiles under Display > Quick Settings, or five when playback controls are shown. A tap acts immediately; holding Wi-Fi, Bluetooth, EQ, Shuffle, Gapless, High Gain, DRE, Outdoor, or Theme opens its full setting.
 
 | Tile | Tap action |
 |---|---|
@@ -104,7 +104,7 @@ The Options hub opens Up Next, full-screen art, Equalizer, Song Info, Lyrics, th
 
 ### Up Next
 
-Open Up Next from the music Options hub to see the current song and the player's upcoming order. Tap the current row to return to Now Playing, or tap an upcoming row to jump there. The list refreshes when the track or play mode changes and reports when the player's queue is being rebuilt. It shows at most 100 upcoming rows, with the rest summarized; it has no add, remove, or reorder action.
+Open Up Next from the music Options hub to see the current song, upcoming queue, and recent playback history. When playing within a folder, the queue is scoped directly to tracks in that folder. Tap the current row to return to Now Playing, or tap an upcoming row to jump there. The list refreshes when the track or play mode changes, and invalid dummy durations (such as 1440:00 placeholders) are automatically filtered out.
 
 <table>
 <tr>
@@ -139,9 +139,9 @@ The Equalizer row offers Off, Jazz, Rock, R&B, Hip-Hop, Pop, Dance, Classical, R
 
 ### Library
 
-Library opens Songs, Albums, Artists, Genres, Playlists, Favourites, Folders, Books, and History. History contains Most Played and Recently Played. Tap a category and then an item to open its next level; tap a song to play it, or use Play and Shuffle at the top of a song list. Hold an album, artist, or genre row to play its songs, and use the Add to Playlist row inside an album, artist, or genre song list to add that displayed group. Drag along the outer edge to scroll a long list, or tap the A-Z control and a letter to jump; the left-edge right swipe remains Back.
+Library opens Songs, Albums, Artists, Genres, Playlists, Favourites, Folders, Books, and History. History contains Most Played and Recently Played. Tap a category and then an item to open its next level; tap a song to play it, or use Play and Shuffle at the top of a song list. Hold an album, artist, or genre row to play its songs, and use the Add to Playlist row inside an album, artist, or genre song list to add that displayed group. Long lists use high-performance virtualized row recycling for immediate, stutter-free scrolling across thousands of tracks. Drag along the outer edge to scroll a long list, or tap the A-Z control and a letter to jump; the left-edge right swipe remains Back.
 
-Songs is the complete indexed music list. Artists and Genres open a list of their albums plus All Songs, while Albums opens an album's cover and tracks. Album View can switch the Albums list to Cover Flow: flick or drag the covers, use the rim to move through them, tap the centered album to open its tracks, or hold it to play the album. A cover wall can show placeholders until artwork has been cached; playing a track with art can fill that cache.
+Songs is the complete indexed music list. Artists and Genres open a list of their albums plus All Songs, while Albums opens an album's cover and tracks. Album View can switch the Albums list to Cover Flow: flick or drag the covers, use the rim to move through them, tap the centered album to open its tracks, or hold it to play the album. An A-Z letter popup displays while deliberately dragging the scrollbar thumb (suppressed during normal album swipes to avoid visual clutter). A cover wall can show placeholders until artwork has been cached; playing a track with art can fill that cache.
 
 <table>
 <tr>
@@ -202,7 +202,7 @@ Library > Books lists indexed .m4b audiobooks separately from music, with author
 
 ### Browse Files
 
-Library > Folders opens the microSD card as folders and files. Tap a folder to descend, the header Back control to ascend, or a supported file to request playback. A .cue sheet and an indexed SACD .iso can open their track rows through the library. A file must already be in the library database: an unindexed selection reports "Not in library", and ordinary file playback uses the all-songs queue rather than a folder-only queue.
+Library > Folders opens the microSD card as folders and files. Tap a folder to descend, the header Back control to ascend, or a supported file to request playback. Folders support both **Play All** and **Shuffle Play** directly scoped to the current folder, as well as an A-Z "Jump to" fast-scroll index. A .cue sheet and an indexed SACD .iso can open their track rows through the library. A file must already be in the library database: an unindexed selection reports "Not in library".
 
 ## Make it yours
 
@@ -345,7 +345,7 @@ On Wi-Fi, use the switch to enable the radio, tap Rescan to refresh the list, ta
 
 ### Apps, Last.fm, and weather
 
-Swipe left from Home to Apps, then tap Last.fm, Settings, or an installed external app. An external app takes over the screen and touch input while it runs; its behavior depends on that app. Last.fm setup shows a QR code for entering your own API key and secret on a phone, then a second authorization step; after connection, toggle Scrobbling or tap Disconnect. It is experimental and Off until you set it up; the setup page uses plain HTTP on your local Wi-Fi.
+Swipe left from Home to Apps, then tap Last.fm, Battery, Settings, or an installed external app. **Battery** displays a 24-hour circular usage dial (`SCR_USAGE`), tracking battery %, charging status, remaining run time from recent drain, and screen-on vs. playback active segments. An external app takes over the screen and touch input while it runs; its behavior depends on that app. Last.fm setup shows a QR code for entering your own API key and secret on a phone, then a second authorization step; after connection, toggle Scrobbling or tap Disconnect. It is experimental and Off until you set it up; the setup page uses plain HTTP on your local Wi-Fi.
 
 Tap the weather glance on Home to see the forecast when a result is available. In Weather, choose a location manually or request automatic location and refresh the display. Weather depends on Wi-Fi and the remote service; an unavailable result leaves the glance empty.
 
@@ -416,11 +416,10 @@ At startup, the Disc animation uses the body color selected under Display > Disc
 
 The scanner indexes common music formats and also recognizes AAC, OGG, APE, AIFF/AIF, WMA, DSF,
 DFF, DTS, external CUE sheets, and SACD ISO tracks; appearing in a list does not prove that every
-format plays on this device. Browse Files can play only indexed files, and it does not build a
-folder-only queue. V2.09 playlist and book playback may fail. V2.57's Custom EQ editor is
-view-only, although Gain is available; older firmware has no Bluetooth codec choice. Up Next can
-jump within the player queue but cannot edit it, and network services and Bluetooth codec behavior
-remain experimental.
+format plays on this device. Browse Files supports folder-scoped queues and folder shuffle play. V2.09
+playlist and book playback may fail. V2.57's Custom EQ editor is view-only, although Gain is
+available; older firmware has no Bluetooth codec choice. Up Next displays upcoming queue and history,
+and network services and Bluetooth codec behavior remain experimental.
 
 When using USB Audio mode, if the external DAC is unplugged, playback automatically pauses, the player safely re-routes to a null sink, and diskOS blocks playback commands until reconnected. Once the USB DAC is plugged back in, a normal tap on Play cleanly resumes playback from the paused position.
 

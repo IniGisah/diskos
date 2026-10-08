@@ -127,12 +127,21 @@ must not reach 100% before the home screen is ready. If real progress is unavail
 - Ghost: transparent, used only where hierarchy is already obvious.
 - Pressed: reduce brightness by 8% and scale to 98% for 80 ms.
 
-### Lists
+### Lists & Scrollbars
 
 - Prefer five or fewer visible rows at once.
 - Use 56 px compact rows and 68 px artwork rows.
+- High-volume lists use virtualized row recycling to avoid memory exhaustion on large collections.
+- Scrollbars (`ui_setup_scrollbar`): 3 px translucent indicator along the curvature, fading when at rest; active dragging displays scrub position.
 - Keep primary labels left-aligned inside the safe zone; reserve the outer edge for scrolling.
 - Truncate long text once. A marquee may begin only after a 700 ms pause.
+
+### Circular 24-hour Usage Dial
+
+- Standardized in `SCR_USAGE` for battery history:
+  - 24-hour clock face (midnight at the top, hours clockwise).
+  - Concentric tracks: outer band for battery percentage, amber ring for screen-on periods, accent ring for active playback.
+  - Centered text metrics: current charge %, estimated remaining runtime from recent drain, and cumulative day totals.
 
 ### Artwork
 

@@ -34,7 +34,7 @@
 ## At a glance
 
 - **Device:** FiiO Snowsky Disc.
-- **Release described here:** diskOS and installer 1.2.1; beta.
+- **Release described here:** diskOS and installer 1.2.2; beta.
 - **Stock firmware supported:** V2.09, V2.28, V2.40, and V2.57.
 - **Hosts:** Linux x86-64 (Debian, Ubuntu, Arch, CachyOS, Fedora); macOS Apple Silicon release package. Intel Macs can build the native tools.
 - **Flash time:** about 20 minutes, including the firmware check and verification.

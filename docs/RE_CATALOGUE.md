@@ -26,6 +26,8 @@ Handler-level RE of both binaries; corrections spot-checked against the binary a
 - **`0201`** = generic transport toggle (not Roon-specific). **`0657`/`0666`/`06b3` "close_player" = false positive** (shared teardown preamble). `0666`=route (2=BTSRC 4=SPDIF 6=DAC).
 - **out_dev** enum has no BTSINK (that's an input/work-mode). 48k->44.1k resample is `libfiio_decoder` over FFmpeg `libswresample` - a stock path, so codec-feasible (CPU headroom still needs an on-device xrun benchmark).
 - **IPC-hardening RISK:** stock parser trusts declared LEN and uses `strlen` over the real `mq_receive` byte count -> diskOS must emit strictly-correct total lengths and never forward untrusted frames.
+- **IPC playback race condition:** rapid track skipping causes `mq_player` to emit asynchronous replies for previous songs during list reloads. diskOS guards this with `ipc_set_quiet()` and `ipc_player_ready()` to avoid desyncing song metadata.
+- **Folder playback list_type (7):** folder-scoped playback sets `list_type = 7` with starting track index, allowing continuous playback within a specific directory instead of the whole library.
 - Still UNVERIFIED / deep-RE TODO (AirPlay/DLNA/Roon triggers now RESOLVED for V2.40 - the `0657` mode table, see COMMAND_MAP.md): `0715` runtime volume callback @0x822b14; full `SET_USB_MODE` wire encoding; `0722` OTA worker chain; CS43131 ioctl ABI; the remaining ~190 family-inferred tag meanings.
 
 ---

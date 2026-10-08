@@ -77,16 +77,28 @@ relaunched from `/usr/data/mq_ui` the watchdog is satisfied and leaves it alone.
 
 The snippet above is the quick manual form; it prunes stock right away and relies on the watchdog to
 recover if your build does not start. For scripted use prefer [`../tools/diskos-deploy.sh`](../tools/diskos-deploy.sh),
-which does the same thing but polls until your build is confirmed running before pruning stock, and
-fails safely (leaving the stock UI as a fallback) if your build never comes up.
+which includes stream upload progress (via `pv`), remote MD5 integrity verification before hot swap,
+and polls until your build is confirmed running before pruning stock.
+
+To capture the live screen or inject touch gestures during development, use [`../tools/diskos-shot.sh`](../tools/diskos-shot.sh)
+and [`../tools/diskos-touch.sh`](../tools/diskos-touch.sh).
 
 To go back to stock without a reboot, just `killall mq_ui` and let the watchdog respawn the stock UI.
 
 ## 5. Make it permanent (optional)
 
 Hand-deployed binaries revert to the flashed build on reboot (S97 verifies `/usr/data/mq_ui` against
-the read-only manifest). To bake a build in permanently, flash it with the installer:
+the read-only manifest). To bake a build in permanently:
 
+### Option A: Wi-Fi OTA Update (No USB reflash)
+Generate your custom ECDSA signing keypair and push the signed binary directly over Wi-Fi:
+```sh
+./tools/diskos-ota-keygen.sh
+DISKOS_IP=<ip> DISKOS_PW=<pw> ./tools/diskos-ota-push.sh ui/mq_ui --reboot
+```
+
+### Option B: Mask-ROM USB Installer
+Flash your custom UI with the installer:
 ```sh
 ./diskos-installer install --firmware SNOWSKY_DISC_update_*.zip --ui path/to/mq_ui --variant public
 ```

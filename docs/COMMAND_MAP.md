@@ -44,7 +44,7 @@ match values 0-3.
 ## LIVE-tested (ground truth)
 | tag | meaning |
 |---|---|
-| 0100 | Play by list (list_type + start index)  [verified] |
+| 0100 | Play by list (list_type + start index)  [verified]: 1=all songs, 2=artist, 3=album, 7=folder scope, 10=genre |
 | 0102 | **Play-mode** 0102000C000<0..4> (seq/shuffle/rep-one/rep-all/single)  [verified] stock-captured 2026-06-25 |
 | 0103 | Seek (ms)  [verified] live 2026-06-25 (pos jumped to target) |
 | 0104 | Favorite toggle (current song) |
@@ -53,6 +53,12 @@ match values 0-3.
 | 0657 | **SOURCE switch** (NOT play-mode) - see section above |
 | 0666 | Output route (->set_out_device 0x461e74): 2=BTSRC 3=USB_HOST 4=SPDIF 6=local-DAC. V2.09/V2.40/V2.57 confirmed. |
 | 0715 | Volume absolute 0-120  [verified] 2026-06-25 (set 20 via 0715000C0014, persisted+displayed) |
+
+## IPC Playback Synchronization (Rapid Track Skipping)
+When switching tracks rapidly (or jumping lists), `mq_player` emits intermediate asynchronous status replies
+on `/ui` with outdated song IDs and duration tags. diskOS uses `ipc_set_quiet()` and `ipc_player_ready()`
+to filter out stale intermediate frames until the player acknowledges the new playback command, preventing
+track title and duration mismatches (e.g. displaying song A while playing song B).
 
 ## BT AUDIO OUTPUT (transmit to a BT speaker, a2dp-source) - [verified] WORKING (2026-08-03)
 Captured from a live strace of stock mq_ui doing a working transmit, then replicated + fixed in diskOS `ui_route_bt()`. **Plays stereo, no stutter, no reboot.** The device IS designed to transmit (not only the "Bluetooth Receiving Mode"/a2dp-sink); stock transmit works but STUTTERS because its default-quality stereo SBC exceeds the X2000 CPU.

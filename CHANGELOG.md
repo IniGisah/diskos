@@ -5,6 +5,30 @@ All notable changes to diskOS are documented here.
 Entries follow the Keep a Changelog format, with Added, Changed, and Fixed categories where applicable.
 diskOS remains beta software; version numbers do not imply broad hardware or feature validation.
 
+## [1.2.2] - 2026-10-08
+
+Adds playback queue with history, 24-hour battery and usage history screen, instant quick settings clock, folder shuffle and A-Z jump controls, virtualized library list performance, extended Japanese CJK font coverage, and Bluetooth/IPC synchronization hardening.
+
+### Added
+
+- **Playback Queue with History and Folder Scope**: Dedicated Up Next queue viewer showing upcoming tracks, playback history, and folder-scoped queues, filtering dummy 24-hour durations.
+- **24-hour Battery & Usage History Screen** (`SCR_USAGE`): Interactive 24-hour circular dial showing battery charge level, charging status, screen-on time, and playback time; accessible via new Battery tile in Apps or Quick Settings status shortcut.
+- **Quick Settings Live Clock & Battery Shortcut**: Instant system clock and date display upon opening (eliminating the `--:--` placeholder delay) with a clickable battery shortcut directly to the usage dial.
+- **A-Z Jump Index and Folder Shuffle Play**: Fast-scroll alphabet jump index grid in Folder Browser and Album Wall, plus Folder Shuffle Play action.
+- **Supplementary CJK Japanese Kanji / Kana Font Coverage**: Expanded supplementary font tables with 3,724 Japanese glyphs for complete metadata rendering.
+- **Custom OTA Update Tooling**: ECDSA P-256 key generation (`diskos-ota-keygen.sh`) and Wi-Fi binary signing/push staging (`diskos-ota-push.sh`).
+
+### Changed
+
+- **Music Library Virtualization**: Recycled row slot pool (`virt_update`, `virt_populate_row`, `virt_init_pool`) eliminating scrolling stutter on collections with thousands of tracks.
+- **Deployment Tooling Improvements**: Added stream progress display (`pv`), remote MD5 pre-swap verification, structured 5-step UI swap, and SSH warning suppression in `diskos-deploy.sh`, `diskos-shot.sh`, and `diskos-touch.sh`.
+
+### Fixed
+
+- **Bluetooth & IPC Playback Title Mismatch**: Resolved rapid-skip metadata mismatch (e.g. "Shiawase Negau Kanata Kara") via `ipc_set_quiet` / `ipc_player_ready` synchronization; hardened Bluetooth subprocess lifecycle (`sync_system`, `bg_system`).
+- **Now Playing Navigation Back-Stack Cycle**: Fixed back gesture cycle loop between Now Playing and Queue, added `ui_np_seek_cancel()` to cancel seek gestures when navigating away.
+- **Album Wall Scrub Bubble**: Constrained A-Z scrub bubble popup to active scrollbar dragging, avoiding unwanted popup during normal album art swipe gestures.
+
 ## [1.2.1] - 2026-10-06
 
 Adds Mode Lockdown screens, external USB DAC host mode audio output, and hardware sleep & backlight power-sequencing fixes.
