@@ -136,12 +136,10 @@ before you need it.
 
 Local music playback is the best established path. Weather, Last.fm, and Bluetooth codec behavior
 remain experimental. After a restart, Wi-Fi can take up to about a minute to connect; if it
-shows no IP, reconnect in Settings > Wi-Fi. A fix is planned for 1.2.1. On the first boot after
-installing, a "Player didn't respond" message may appear once; it is harmless.
+shows no IP, reconnect in Settings > Wi-Fi. A fix is planned for 1.2.1.
 An indexed file format may still fail to play on the Disc.
 The stock player and connected headphones also affect some audio and Bluetooth choices.
-Browse Files plays indexed files through the all-songs queue, not a folder queue. On V2.09,
-playlist and book playback may fail; on V2.57, the Custom EQ editor is view-only.
+On V2.09, playlist and book playback may fail; on V2.57, the Custom EQ editor is view-only.
 Read the [tour's limits](docs/TOUR.md#limits) and [privacy disclosure](docs/PRIVACY.md).
 This project is not affiliated with or endorsed by FiiO, Snowsky, or Ingenic.
 
