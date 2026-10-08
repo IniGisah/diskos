@@ -16,4 +16,5 @@ void ui_vinyl_spin(int want);
 int  ui_np_seek_press(int x, int y);
 int  ui_np_seek_move(int x, int y);
 int  ui_np_seek_release(int x, int y);
+void ui_np_seek_cancel(void);
 #endif

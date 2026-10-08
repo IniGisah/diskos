@@ -42,6 +42,7 @@ static lv_obj_t *screen_make_root(lv_obj_t *parent)
 static void root_rest(lv_obj_t *o)
 {
     lv_obj_set_x(o, 0);
+    lv_obj_set_y(o, 0);
     lv_obj_set_style_opa(o, LV_OPA_COVER, 0);
     lv_obj_set_style_transform_scale_x(o, 256, 0);
     lv_obj_set_style_transform_scale_y(o, 256, 0);
@@ -98,20 +99,8 @@ static void anim_done_push(lv_anim_t *a)
     scrim_off();
 }
 
-/* Slide between screens. dir = +1 push (new from right), -1 pop (new from left). */
-static void transition(int from, int to, int dir)
+static void screen_refresh_entry(int to)
 {
-    lv_obj_t *nw = (to >= 0 && to < SCR_COUNT) ? s_roots[to] : NULL;
-    lv_obj_t *od = (from >= 0 && from < SCR_COUNT) ? s_roots[from] : NULL;
-
-    /* Any screen change dismisses transient lv_layer_top popups (e.g. the duplicate-add
-     * confirm dialog) so they can't survive onto another screen and act on stale state. */
-    npmenu_close_transients();
-    ui_np_close_overlays();   /* dismiss the sleep-timer popover so it can't float onto another screen */
-
-    /* Re-sync screens built once, on EVERY entry incl. back-navigation (screen_back also
-     * routes through here - screen_show alone missed the back case, leaving stale labels
-     * e.g. after editing Custom EQ / a setting detail page). */
     if (to == SCR_SETTINGS) settings_refresh_list();
     else if (to == SCR_SETLIST) setlist_refresh();          /* one category's rows, rebuilt per entry */
     else if (to == SCR_SETTING_DETAIL) setting_detail_refresh();  /* stay live if changed elsewhere (e.g. drawer EQ) */
@@ -127,6 +116,22 @@ static void transition(int from, int to, int dir)
     else if (to == SCR_PLVIEW) plview_refresh();   /* fresh song list every entry (no stale tap positions) */
     else if (to == SCR_LIBRARY) library_refresh(); /* pick up playlists created (NP New Playlist) or imported
                                                     * (Settings) elsewhere, without needing a restart */
+    else if (to == SCR_USAGE) usage_refresh();
+}
+
+/* Slide between screens. dir = +1 push (new from right), -1 pop (new from left). */
+static void transition(int from, int to, int dir)
+{
+    lv_obj_t *nw = (to >= 0 && to < SCR_COUNT) ? s_roots[to] : NULL;
+    lv_obj_t *od = (from >= 0 && from < SCR_COUNT) ? s_roots[from] : NULL;
+
+    /* Any screen change dismisses transient lv_layer_top popups (e.g. the duplicate-add
+     * confirm dialog) so they can't survive onto another screen and act on stale state. */
+    npmenu_close_transients();
+    ui_np_close_overlays();   /* dismiss the sleep-timer popover so it can't float onto another screen */
+
+    /* Re-sync screens built once, on EVERY entry incl. back-navigation */
+    screen_refresh_entry(to);
 
     kit_pass(nw);   /* the active theme styles anything new on the incoming screen (no-op for Default) */
 
@@ -148,10 +153,47 @@ static void transition(int from, int to, int dir)
     if (s_scrim) { lv_anim_delete(s_scrim, NULL); scrim_off(); }   /* scrim unused by zoom; keep clear */
 
     if (!nw || to == from || !s_anim) { show_raw(to); return; }
-    /* Full-screen overlays (screensaver, quick-settings pulldown) are takeovers, not hierarchical
-     * navigation - show/hide instantly. */
+    /* Screensaver is takeover - show/hide instantly. */
     if (to == SCR_SAVER || from == SCR_SAVER) { show_raw(to); return; }
-    if (to == SCR_QUICK || from == SCR_QUICK) { show_raw(to); return; }
+
+    /* Quick Settings drawer slides vertically (down from top on open, up on close) */
+    if (to == SCR_QUICK) {
+        if (od) { lv_obj_set_x(od, 0); lv_obj_set_y(od, 0); lv_obj_clear_flag(od, LV_OBJ_FLAG_HIDDEN); }
+        if (s_scrim && od) {
+            lv_obj_set_style_opa(s_scrim, LV_OPA_TRANSP, 0);
+            lv_obj_clear_flag(s_scrim, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(s_scrim);
+            anim_scrim_fade(s_scrim, 1, PUSH_MS);
+        }
+        lv_obj_set_x(nw, 0);
+        lv_obj_set_y(nw, -SCR_W);
+        lv_obj_clear_flag(nw, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(nw);
+        s_push_hide = (od && from != to) ? from : -1;
+        anim_page_slide_y(nw, -SCR_W, 0, PUSH_MS, anim_done_push);
+        return;
+    }
+    if (from == SCR_QUICK) {
+        lv_obj_set_x(nw, 0);
+        lv_obj_set_y(nw, 0);
+        lv_obj_clear_flag(nw, LV_OBJ_FLAG_HIDDEN);
+        if (s_scrim) {
+            lv_obj_set_style_opa(s_scrim, 36, 0);
+            lv_obj_clear_flag(s_scrim, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(s_scrim);
+            anim_scrim_fade(s_scrim, 0, POP_MS);
+        }
+        if (od) {
+            lv_obj_set_x(od, 0);
+            lv_obj_set_y(od, 0);
+            lv_obj_clear_flag(od, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(od);
+            anim_page_slide_y(od, 0, -SCR_W, POP_MS, anim_done_hide);
+        } else {
+            lv_obj_move_foreground(nw);
+        }
+        return;
+    }
 
     /* ---- UNIFIED push/pop - ONE motion language for the whole UI ----------------------------
      * The top screen SLIDES horizontally over a STATIC screen beneath (a blit - the only smooth
@@ -199,21 +241,38 @@ void screen_show(int which)
     if ((s_current == SCR_MODELOCK || modelock_is_active()) &&
         which != SCR_MODELOCK && which != SCR_HOME && which != SCR_SAVER && which != SCR_QUICK) return;
     int from = s_current;
+    int dir = +1;
     if (which != s_current) {
         if (which == SCR_HOME) {
             s_sp = 0;
-        } else if (s_current != SCR_MODELOCK || which == SCR_QUICK || which == SCR_SAVER) {
-            int cap = (int)(sizeof(s_stack)/sizeof(s_stack[0]));
-            if (s_sp >= cap) {            /* full: keep the root (s_stack[0]) so Back still
-                                           * reaches Home; drop the 2nd-oldest instead */
-                for (int i = 2; i < cap; i++) s_stack[i-1] = s_stack[i];
-                s_sp = cap - 1;
+            dir = -1;
+        } else {
+            /* Check if the target screen is already in the back stack.
+             * If so, unwind the stack back to that screen instead of pushing a duplicate,
+             * preventing navigation cycles (e.g. Now Playing -> Options -> Queue -> Now Playing). */
+            int found = -1;
+            for (int i = 0; i < s_sp; i++) {
+                if (s_stack[i] == which) {
+                    found = i;
+                    break;
+                }
             }
-            s_stack[s_sp++] = s_current;
+            if (found >= 0) {
+                s_sp = found;
+                dir = -1;
+            } else if (s_current != SCR_MODELOCK || which == SCR_QUICK || which == SCR_SAVER) {
+                int cap = (int)(sizeof(s_stack)/sizeof(s_stack[0]));
+                if (s_sp >= cap) {            /* full: keep the root (s_stack[0]) so Back still
+                                               * reaches Home; drop the 2nd-oldest instead */
+                    for (int i = 2; i < cap; i++) s_stack[i-1] = s_stack[i];
+                    s_sp = cap - 1;
+                }
+                s_stack[s_sp++] = s_current;
+            }
         }
     }
     s_current = which;
-    transition(from, which, +1);
+    transition(from, which, dir);
 }
 
 /* Pop the nav stack (swipe / back gesture). Home is the root: no-op. */
@@ -230,9 +289,9 @@ void screen_back(void)
             return;
         }
     }
-    if (s_current == SCR_SAVER || s_current == SCR_QUICK) {
-        /* Overlay dismissed with empty stack: return to active lockmode or Home */
-        int fallback = modelock_is_active() ? SCR_MODELOCK : SCR_HOME;
+    /* Overlay or screen dismissed with empty stack: return to active lockmode or Home */
+    int fallback = modelock_is_active() ? SCR_MODELOCK : SCR_HOME;
+    if (s_current != fallback) {
         int from = s_current;
         s_current = fallback;
         transition(from, fallback, -1);
@@ -246,6 +305,234 @@ lv_obj_t *screen_get_root(int which)
 }
 
 int screen_current(void){ return s_current; }
+
+/* ---- Quick Settings interactive drag (pull-down / push-up) -------------------- */
+static int s_qs_drag_from = -1;
+static int s_qs_dragging = 0; /* 0 = idle, 1 = pulling down, 2 = pulling up to close */
+
+int screenmgr_qs_is_dragging(void){ return s_qs_dragging; }
+
+static void qs_pull_commit_done(lv_anim_t *a)
+{
+    (void)a;
+    s_qs_dragging = 0;
+    if (s_qs_drag_from >= 0 && s_qs_drag_from < SCR_COUNT && s_qs_drag_from != SCR_QUICK) {
+        int cap = (int)(sizeof(s_stack)/sizeof(s_stack[0]));
+        if (s_sp >= cap) {
+            for (int i = 2; i < cap; i++) s_stack[i-1] = s_stack[i];
+            s_sp = cap - 1;
+        }
+        s_stack[s_sp++] = s_qs_drag_from;
+    }
+    s_current = SCR_QUICK;
+    if (s_qs_drag_from >= 0 && s_qs_drag_from < SCR_COUNT && s_roots[s_qs_drag_from]) {
+        lv_obj_add_flag(s_roots[s_qs_drag_from], LV_OBJ_FLAG_HIDDEN);
+        root_rest(s_roots[s_qs_drag_from]);
+    }
+    scrim_off();
+}
+
+static void qs_pull_cancel_done(lv_anim_t *a)
+{
+    (void)a;
+    s_qs_dragging = 0;
+    if (s_roots[SCR_QUICK]) {
+        lv_obj_add_flag(s_roots[SCR_QUICK], LV_OBJ_FLAG_HIDDEN);
+        root_rest(s_roots[SCR_QUICK]);
+    }
+    scrim_off();
+    s_qs_drag_from = -1;
+}
+
+void screenmgr_qs_pull_begin(int from_scr)
+{
+    if (!s_roots[SCR_QUICK]) return;
+    s_qs_drag_from = from_scr;
+    s_qs_dragging = 1;
+
+    ui_np_close_overlays();
+    quicksettings_build();
+    quicksettings_refresh(ui_is_playing());
+    kit_pass(s_roots[SCR_QUICK]);
+
+    lv_anim_delete(s_roots[SCR_QUICK], NULL);
+    if (s_scrim) lv_anim_delete(s_scrim, NULL);
+
+    lv_obj_t *under = (from_scr >= 0 && from_scr < SCR_COUNT) ? s_roots[from_scr] : NULL;
+    if (under) {
+        lv_obj_set_x(under, 0);
+        lv_obj_set_y(under, 0);
+        lv_obj_clear_flag(under, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_scrim && under) {
+        lv_obj_set_style_opa(s_scrim, LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(s_scrim, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_scrim);
+    }
+    lv_obj_set_x(s_roots[SCR_QUICK], 0);
+    lv_obj_set_y(s_roots[SCR_QUICK], -SCR_W);
+    lv_obj_clear_flag(s_roots[SCR_QUICK], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_roots[SCR_QUICK]);
+}
+
+void screenmgr_qs_pull_move(int dy)
+{
+    if (s_qs_dragging != 1 || !s_roots[SCR_QUICK]) return;
+    int y = dy - SCR_W;
+    if (y > 0) y = 0;
+    if (y < -SCR_W) y = -SCR_W;
+    lv_obj_set_y(s_roots[SCR_QUICK], y);
+    if (s_scrim) {
+        int opa = (int)((y + SCR_W) * 36 / SCR_W);
+        if (opa < 0) opa = 0; if (opa > 36) opa = 36;
+        lv_obj_set_style_opa(s_scrim, (lv_opa_t)opa, 0);
+    }
+}
+
+void screenmgr_qs_pull_end(int dy, uint32_t dt)
+{
+    if (s_qs_dragging != 1 || !s_roots[SCR_QUICK]) { s_qs_dragging = 0; return; }
+    int cur_y = lv_obj_get_y(s_roots[SCR_QUICK]);
+    int commit = (dy >= 80) || (dy >= 30 && dt < 400);
+    if (!s_anim) {
+        if (commit) {
+            lv_obj_set_y(s_roots[SCR_QUICK], 0);
+            qs_pull_commit_done(NULL);
+        } else {
+            lv_obj_set_y(s_roots[SCR_QUICK], -SCR_W);
+            qs_pull_cancel_done(NULL);
+        }
+        return;
+    }
+    if (commit) {
+        int dist = 0 - cur_y; if (dist < 0) dist = 0;
+        uint32_t ms = (uint32_t)(dist * PUSH_MS / SCR_W);
+        if (ms < 100) ms = 100; if (ms > PUSH_MS) ms = PUSH_MS;
+        if (s_scrim) anim_scrim_fade(s_scrim, 1, ms);
+        anim_page_slide_y(s_roots[SCR_QUICK], cur_y, 0, ms, qs_pull_commit_done);
+    } else {
+        int dist = cur_y - (-SCR_W); if (dist < 0) dist = 0;
+        uint32_t ms = (uint32_t)(dist * POP_MS / SCR_W);
+        if (ms < 80) ms = 80; if (ms > POP_MS) ms = POP_MS;
+        if (s_scrim) anim_scrim_fade(s_scrim, 0, ms);
+        anim_page_slide_y(s_roots[SCR_QUICK], cur_y, -SCR_W, ms, qs_pull_cancel_done);
+    }
+}
+
+static void qs_close_commit_done(lv_anim_t *a)
+{
+    (void)a;
+    s_qs_dragging = 0;
+    if (s_roots[SCR_QUICK]) {
+        lv_obj_add_flag(s_roots[SCR_QUICK], LV_OBJ_FLAG_HIDDEN);
+        root_rest(s_roots[SCR_QUICK]);
+    }
+    scrim_off();
+
+    int target = -1;
+    while (s_sp > 0) {
+        int prev = s_stack[--s_sp];
+        if (prev == SCR_MODELOCK && !modelock_is_active()) continue;
+        if (prev >= 0 && prev < SCR_COUNT && prev != SCR_QUICK) {
+            target = prev;
+            break;
+        }
+    }
+    if (target < 0) {
+        target = modelock_is_active() ? SCR_MODELOCK : SCR_HOME;
+    }
+    s_current = target;
+    screen_refresh_entry(target);
+    if (s_roots[target]) {
+        lv_obj_set_x(s_roots[target], 0);
+        lv_obj_set_y(s_roots[target], 0);
+        lv_obj_clear_flag(s_roots[target], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_roots[target]);
+    }
+}
+
+static void qs_close_cancel_done(lv_anim_t *a)
+{
+    (void)a;
+    s_qs_dragging = 0;
+    if (s_qs_drag_from >= 0 && s_qs_drag_from < SCR_COUNT && s_roots[s_qs_drag_from]) {
+        lv_obj_add_flag(s_roots[s_qs_drag_from], LV_OBJ_FLAG_HIDDEN);
+        root_rest(s_roots[s_qs_drag_from]);
+    }
+    scrim_off();
+}
+
+void screenmgr_qs_close_begin(void)
+{
+    if (!s_roots[SCR_QUICK]) return;
+    s_qs_dragging = 2;
+    int under = (s_sp > 0) ? s_stack[s_sp - 1] : (modelock_is_active() ? SCR_MODELOCK : SCR_HOME);
+    s_qs_drag_from = under;
+
+    lv_anim_delete(s_roots[SCR_QUICK], NULL);
+    if (s_scrim) lv_anim_delete(s_scrim, NULL);
+
+    lv_obj_t *un = (under >= 0 && under < SCR_COUNT) ? s_roots[under] : NULL;
+    if (un) {
+        lv_obj_set_x(un, 0);
+        lv_obj_set_y(un, 0);
+        lv_obj_clear_flag(un, LV_OBJ_FLAG_HIDDEN);
+        screen_refresh_entry(under);
+    }
+    if (s_scrim && un) {
+        lv_obj_set_style_opa(s_scrim, 36, 0);
+        lv_obj_clear_flag(s_scrim, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_scrim);
+    }
+    lv_obj_set_x(s_roots[SCR_QUICK], 0);
+    lv_obj_set_y(s_roots[SCR_QUICK], 0);
+    lv_obj_clear_flag(s_roots[SCR_QUICK], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_roots[SCR_QUICK]);
+}
+
+void screenmgr_qs_close_move(int dy)
+{
+    if (s_qs_dragging != 2 || !s_roots[SCR_QUICK]) return;
+    int y = dy;
+    if (y > 0) y = 0;
+    if (y < -SCR_W) y = -SCR_W;
+    lv_obj_set_y(s_roots[SCR_QUICK], y);
+    if (s_scrim) {
+        int opa = (int)((y + SCR_W) * 36 / SCR_W);
+        if (opa < 0) opa = 0; if (opa > 36) opa = 36;
+        lv_obj_set_style_opa(s_scrim, (lv_opa_t)opa, 0);
+    }
+}
+
+void screenmgr_qs_close_end(int dy, uint32_t dt)
+{
+    if (s_qs_dragging != 2 || !s_roots[SCR_QUICK]) { s_qs_dragging = 0; return; }
+    int cur_y = lv_obj_get_y(s_roots[SCR_QUICK]);
+    int commit = (dy <= -60) || (dy <= -25 && dt < 400);
+    if (!s_anim) {
+        if (commit) {
+            lv_obj_set_y(s_roots[SCR_QUICK], -SCR_W);
+            qs_close_commit_done(NULL);
+        } else {
+            lv_obj_set_y(s_roots[SCR_QUICK], 0);
+            qs_close_cancel_done(NULL);
+        }
+        return;
+    }
+    if (commit) {
+        int dist = cur_y - (-SCR_W); if (dist < 0) dist = 0;
+        uint32_t ms = (uint32_t)(dist * POP_MS / SCR_W);
+        if (ms < 80) ms = 80; if (ms > POP_MS) ms = POP_MS;
+        if (s_scrim) anim_scrim_fade(s_scrim, 0, ms);
+        anim_page_slide_y(s_roots[SCR_QUICK], cur_y, -SCR_W, ms, qs_close_commit_done);
+    } else {
+        int dist = 0 - cur_y; if (dist < 0) dist = 0;
+        uint32_t ms = (uint32_t)(dist * PUSH_MS / SCR_W);
+        if (ms < 80) ms = 80; if (ms > PUSH_MS) ms = PUSH_MS;
+        if (s_scrim) anim_scrim_fade(s_scrim, 1, ms);
+        anim_page_slide_y(s_roots[SCR_QUICK], cur_y, 0, ms, qs_close_cancel_done);
+    }
+}
 
 void screens_init(void)
 {
@@ -302,6 +589,7 @@ void screens_init(void)
     s_roots[SCR_UPNEXT] = screen_make_root(parent);
     s_roots[SCR_DATETIME] = screen_make_root(parent);
     s_roots[SCR_MODELOCK] = screen_make_root(parent);
+    s_roots[SCR_USAGE] = screen_make_root(parent);
 
     /* depth scrim: a full-screen translucent-black overlay, created LAST so it sits above the
      * roots in sibling order; re-parented in z during a transition to dim the screen beneath the
@@ -351,8 +639,25 @@ void screens_init(void)
     bt_info_create(s_roots[SCR_BT_INFO]);
     lastfm_create(s_roots[SCR_LASTFM]);
     modelock_create(s_roots[SCR_MODELOCK]);
+    usage_create(s_roots[SCR_USAGE]);
 
     screen_show(SCR_HOME);
 }
 
 void screen_set_anim(int on){ s_anim = on ? 1 : 0; }
+
+void ui_setup_scrollbar(lv_obj_t *list)
+{
+    if (!list) return;
+    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_width(list, 8, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(list, TC(TEXT_MUTED), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(list, LV_OPA_80, LV_PART_SCROLLBAR);
+    lv_obj_set_style_width(list, 14, LV_PART_SCROLLBAR | LV_STATE_SCROLLED);
+    lv_obj_set_style_bg_color(list, TC(TEXT_PRIMARY), LV_PART_SCROLLBAR | LV_STATE_SCROLLED);
+    lv_obj_set_style_bg_opa(list, LV_OPA_COVER, LV_PART_SCROLLBAR | LV_STATE_SCROLLED);
+    lv_obj_set_style_radius(list, LV_RADIUS_CIRCLE, LV_PART_SCROLLBAR);
+    lv_obj_set_style_pad_right(list, 3, LV_PART_SCROLLBAR);
+    lv_obj_set_style_pad_top(list, 16, LV_PART_SCROLLBAR);
+    lv_obj_set_style_pad_bottom(list, 56, LV_PART_SCROLLBAR);
+}
