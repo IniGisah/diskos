@@ -7,10 +7,13 @@ import os, subprocess, tempfile
 app = Path(__file__).resolve().parents[1]
 # vendored beside the sources (public ui/ tree) or one level up (dev tree)
 lvgl = next(c for c in (app/'lvgl', app.parent/'lvgl') if (c/'src/font/lv_font.c').exists())
+import re
 source = (app/'ui.c').read_text()
-a=source.index('static lv_font_t s_cjk;'); b=source.index('/* Shared CJK-capable',a)
-chain=source[a:b]
-points=sorted(set(map(ord,'世界贈予我的妖精帝國曼衍珠汝華Nada Upasana PundarikaLudwig GöranssonZeus’s Law‘’ЛенинградΑθήνα'))- {32})
+m = re.search(r'static\s+lv_font_t\s+s_cjk;', source)
+a = m.start()
+b = source.index('/* Shared CJK-capable', a)
+chain = source[a:b]
+points = sorted(set(map(ord, '世界贈予我的妖精帝國曼衍珠汝華Nada Upasana PundarikaLudwig GöranssonZeus’s Law‘’ЛенинградΑθήνα藤井かな礒部花凜扉敵素敵な')) - {32})
 header=r'''
 #include "lvgl/lvgl.h"
 #include "fonts_intl.h"
