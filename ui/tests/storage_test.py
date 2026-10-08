@@ -63,6 +63,9 @@ static void modelock_open(int mode){ (void)mode; }
 static void modelock_close(void){}
 static void modes_output_reset(void){}   /* output routing is not under test here */
 static int modes_output_busy(void){ return 0; }
+typedef enum { ROUTE_UNKNOWN = -1, ROUTE_ANALOG = 0, ROUTE_BT = 1 } route_state_t;
+static char g_route_mac[18];
+static route_state_t g_route_state;
 static int scanner_active(void){ return test_scan; }
 static int scanner_start(void){ return 0; }
 static int mdb_total_song_count(void){ return 1; }
