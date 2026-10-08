@@ -7,10 +7,13 @@
 #include "folderbrowser.h"
 #include "musicdb.h"
 #include "scanner.h"
+#include "config.h"
+#include "i18n.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <ctype.h>
 #include <errno.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -30,6 +33,9 @@
  *     folder are queued as a type-5 folder plan (mdb_folder_plan), so the queue
  *     scope is restricted to that folder alone (matching stock parity and user
  *     expectation). The tapped track starts immediately.
+ *   - Play All / Shuffle buttons at the top of any folder containing audio tracks.
+ *   - "A-Z" button and Jump to letter grid for fast navigation across folders/files.
+ *   - Alphabet position hint overlay when scrolling or using the rim wheel.
  *   - SACD .iso images the library has IS_ISO rows for, and .cue sheets, are listed too. Tapping one plays that
  *     file's tracks (SONG rows by PATH, TRACK order) as the exact type-5 queue the album drill uses (ui_play_plan).
  *     A sheet names its audio file(s) in FILE lines; the tracks live under that audio PATH.
@@ -54,11 +60,24 @@ typedef struct {
 
 static char        g_dir[FB_MAXPATH];
 static fb_entry_t *g_ent;                  /* grown on demand up to FB_MAX_ENTRIES */
-static int         g_nent, g_ent_cap;
+static char       *g_first;                /* first letter per entry for fast scrolling */
+static int         g_nent, g_ent_cap, g_first_cap;
 static lv_obj_t   *g_list;
 static lv_obj_t   *g_title;
+static lv_obj_t   *g_az_btn;
+static lv_obj_t   *g_grid;
+static lv_obj_t   *g_lhint = NULL, *g_lhint_lbl = NULL;
+static uint32_t    g_lhint_tick = 0;
+static char        g_lhint_ch = 0;
+static int         g_has_play_header = 0;
 static lv_timer_t *g_fb_fill;              /* incremental row builder (avoids a long open stall) */
 static int         g_fb_i;                 /* next entry index to render */
+
+static char first_letter(const char *s){
+    while(*s==' ') s++;
+    char c = toupper((unsigned char)*s);
+    return (c>='A'&&c<='Z') ? c : '#';
+}
 
 /* audio files diskOS can play - mirror scanner.c is_audio() exactly. */
 static int fb_has_ext(const char *name, const char *ext){
@@ -149,6 +168,13 @@ static void fb_scan_leased(void){
     }
     closedir(d);
     if(g_nent > 1) qsort(g_ent, g_nent, sizeof g_ent[0], fb_cmp);
+    if(g_nent > g_first_cap){
+        char *nf = realloc(g_first, (size_t)g_nent);
+        if(nf){ g_first = nf; g_first_cap = g_nent; }
+    }
+    if(g_first){
+        for(int i = 0; i < g_nent; i++) g_first[i] = first_letter(g_ent[i].name);
+    }
 }
 
 static void fb_scan(void){
@@ -214,8 +240,136 @@ static void fb_fill_cb(lv_timer_t *t){
     if(g_fb_i >= g_nent) fb_fill_stop();
 }
 
+static void fb_fill_flush(void){
+    for(; g_fb_i < g_nent; g_fb_i++) fb_add_row(g_fb_i);
+    fb_fill_stop();
+}
+
+/* Fast scrolling "Jump to" letter lookup:
+ * Dirs sort first, then files. Check exact match in dirs then files,
+ * then nearest >= L in dirs then files. */
+static void fb_jump_to_letter(char L){
+    if(g_nent <= 0 || !g_first) return;
+    fb_fill_flush();
+    int ndirs = 0;
+    for(int i = 0; i < g_nent; i++){
+        if(g_ent[i].is_dir) ndirs++; else break;
+    }
+    int idx = -1;
+    for(int i = 0; i < ndirs; i++){
+        if(g_first[i] == L){ idx = i; break; }
+    }
+    if(idx < 0){
+        for(int i = ndirs; i < g_nent; i++){
+            if(g_first[i] == L){ idx = i; break; }
+        }
+    }
+    if(idx < 0){
+        for(int i = 0; i < ndirs; i++){
+            if(g_first[i] >= L){ idx = i; break; }
+        }
+    }
+    if(idx < 0){
+        for(int i = ndirs; i < g_nent; i++){
+            if(g_first[i] >= L){ idx = i; break; }
+        }
+    }
+    if(idx < 0) idx = g_nent - 1;
+    int y = (idx + g_has_play_header) * 52;
+    lv_obj_scroll_to_y(g_list, y, LV_ANIM_OFF);
+}
+
+static void fb_letter_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    fb_jump_to_letter((char)(intptr_t)lv_event_get_user_data(e));
+    if(g_grid) lv_obj_add_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+}
+static void fb_grid_bg_cb(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED && g_grid)
+        lv_obj_add_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+}
+static void fb_az_btn_cb(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED && g_grid)
+        lv_obj_clear_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+}
+static void fb_az_show(int on){
+    if(!g_az_btn || !g_grid) return;
+    if(on) lv_obj_clear_flag(g_az_btn, LV_OBJ_FLAG_HIDDEN);
+    else {
+        lv_obj_add_flag(g_az_btn, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(g_list){
+        lv_obj_set_x(g_list, on ? 30 : 41);
+        lv_obj_set_flex_align(g_list, LV_FLEX_ALIGN_START, on ? LV_FLEX_ALIGN_START : LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    }
+}
+
+static void fb_lhint_timer_cb(lv_timer_t *t){
+    (void)t;
+    if(g_lhint && !lv_obj_has_flag(g_lhint, LV_OBJ_FLAG_HIDDEN) && lv_tick_elaps(g_lhint_tick) > 650)
+        lv_obj_add_flag(g_lhint, LV_OBJ_FLAG_HIDDEN);
+}
+
+void folderbrowser_scroll_letter_tick(void){
+    if(!g_list || !g_lhint || g_nent <= 0 || !g_first) return;
+    int y = lv_obj_get_scroll_y(g_list);
+    int idx = (y / 52) - g_has_play_header;
+    if(idx < 0) idx = 0; else if(idx >= g_nent) idx = g_nent - 1;
+    char ch = g_first[idx];
+    if(ch && ch != g_lhint_ch){
+        g_lhint_ch = ch;
+        char b[2] = {ch, 0};
+        lv_label_set_text(g_lhint_lbl, b);
+    }
+    g_lhint_tick = lv_tick_get();
+    lv_obj_clear_flag(g_lhint, LV_OBJ_FLAG_HIDDEN);
+}
+
+lv_obj_t *folderbrowser_scroller(void){ return g_list; }
+
+/* Play whole folder in Sequential (mode=0) or Shuffle (mode=1) */
+static void fb_play_folder_mode(int mode){
+    if(ui_get_source_mode() == 4 && !ui_usb_dac_connected()){
+        ui_toast("USB DAC not connected"); return;
+    }
+    int n_audio = 0;
+    for(int i = 0; i < g_nent; i++){
+        if(!g_ent[i].is_dir && g_ent[i].kind == FB_K_AUDIO) n_audio++;
+    }
+    if(n_audio <= 0){ ui_toast("No audio files"); return; }
+    const char **files = malloc((size_t)n_audio * sizeof *files);
+    if(!files){ ui_toast("Out of memory"); return; }
+    int k = 0;
+    for(int i = 0; i < g_nent; i++){
+        if(!g_ent[i].is_dir && g_ent[i].kind == FB_K_AUDIO) files[k++] = g_ent[i].name;
+    }
+    mdb_plan_t plan;
+    int ok = mdb_folder_plan(g_dir, files, k, &plan);
+    free(files);
+    if(!ok){ ui_toast("Not in library"); return; }
+
+    cfg_set_int("work_mode", mode);
+    ui_set_workmode(mode);
+
+    int start_id = (mode == 1 && plan.count > 1) ? plan.ids[rand() % plan.count] : plan.ids[0];
+    int played = ui_play_plan(&plan, start_id);
+    mdb_plan_free(&plan);
+    if(played) screen_show(SCR_NOWPLAYING);
+}
+static void fb_play_all_cb(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED) fb_play_folder_mode(0);
+}
+static void fb_shuffle_cb(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED) fb_play_folder_mode(1);
+}
+
 static void fb_rebuild(void){
     fb_fill_stop();
+    if(g_grid) lv_obj_add_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+    if(g_lhint) lv_obj_add_flag(g_lhint, LV_OBJ_FLAG_HIDDEN);
+    g_has_play_header = 0;
+
     if(g_title){
         int at_root = (strcmp(g_dir, FB_ROOT) == 0);
         theme_title_text(g_title, at_root ? "Files" : fb_basename(g_dir));
@@ -225,6 +379,7 @@ static void fb_rebuild(void){
 
     /* opendir failed at scan time -> either no SD or an unreadable dir. */
     if(g_nent == 0){
+        fb_az_show(0);
         int lease = sd_io_begin();
         DIR *probe = lease ? opendir(g_dir) : NULL;
         if(!probe){
@@ -238,6 +393,50 @@ static void fb_rebuild(void){
         return;
     }
 
+    /* If folder contains playable audio tracks, provide Play All and Shuffle header */
+    int n_audio = 0;
+    for(int i = 0; i < g_nent; i++){
+        if(!g_ent[i].is_dir && g_ent[i].kind == FB_K_AUDIO) n_audio++;
+    }
+    if(n_audio > 0){
+        lv_obj_t *hr = lv_obj_create(g_list);
+        lv_obj_remove_style_all(hr);
+        lv_obj_set_size(hr, 268, 46);
+        lv_obj_clear_flag(hr, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *b_play = lv_button_create(hr);
+        lv_obj_remove_style_all(b_play);
+        lv_obj_set_size(b_play, 128, 44);
+        lv_obj_set_pos(b_play, 2, 1);
+        lv_obj_set_style_radius(b_play, 12, 0);
+        lv_obj_set_style_bg_color(b_play, TC(SURFACE), 0);
+        lv_obj_set_style_bg_opa(b_play, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(b_play, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
+        ui_on(b_play, fb_play_all_cb, LV_EVENT_CLICKED, NULL, "folderbrowser.play_all", UI_CORE);
+        lv_obj_t *lp = lv_label_create(b_play);
+        lv_label_set_text(lp, tr_sym(LV_SYMBOL_PLAY, "Play All"));
+        lv_obj_set_style_text_font(lp, TF(UI_14), 0);
+        lv_obj_set_style_text_color(lp, TC(TEXT_PRIMARY), 0);
+        lv_obj_center(lp);
+
+        lv_obj_t *b_shuf = lv_button_create(hr);
+        lv_obj_remove_style_all(b_shuf);
+        lv_obj_set_size(b_shuf, 128, 44);
+        lv_obj_set_pos(b_shuf, 138, 1);
+        lv_obj_set_style_radius(b_shuf, 12, 0);
+        lv_obj_set_style_bg_color(b_shuf, TC(SURFACE), 0);
+        lv_obj_set_style_bg_opa(b_shuf, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(b_shuf, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
+        ui_on(b_shuf, fb_shuffle_cb, LV_EVENT_CLICKED, NULL, "folderbrowser.shuffle", UI_CORE);
+        lv_obj_t *ls = lv_label_create(b_shuf);
+        lv_label_set_text(ls, tr_sym(LV_SYMBOL_SHUFFLE, "Shuffle"));
+        lv_obj_set_style_text_font(ls, TF(UI_14), 0);
+        lv_obj_set_style_text_color(ls, TC(TEXT_PRIMARY), 0);
+        lv_obj_center(ls);
+
+        g_has_play_header = 1;
+    }
+
     /* Render the first screenful synchronously, then the rest on a timer so a folder with
      * thousands of files doesn't stall the UI on open (mirrors the Library song list). */
     g_fb_i = 0;
@@ -245,6 +444,8 @@ static void fb_rebuild(void){
     for(; g_fb_i < first; g_fb_i++) fb_add_row(g_fb_i);
     if(g_fb_i < g_nent) g_fb_fill = lv_timer_create(fb_fill_cb, 16, NULL);
     lv_obj_scroll_to_y(g_list, 0, LV_ANIM_OFF);
+
+    fb_az_show(g_nent > 12);
 }
 
 static void fb_descend(const char *name){
@@ -269,6 +470,18 @@ static void fb_ascend(void){
     }
     fb_scan();
     fb_rebuild();
+}
+
+int folderbrowser_back(void){
+    if(g_grid && !lv_obj_has_flag(g_grid, LV_OBJ_FLAG_HIDDEN)){
+        lv_obj_add_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+        return 1;
+    }
+    if(strcmp(g_dir, FB_ROOT) != 0){
+        fb_ascend();
+        return 1;
+    }
+    return 0;
 }
 
 static void fb_play(const char *name){
@@ -343,7 +556,9 @@ static void fb_row_cb(lv_event_t *e){
 }
 
 static void fb_header_back_cb(lv_event_t *e){
-    if(lv_event_get_code(e) == LV_EVENT_CLICKED) fb_ascend();
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED){
+        if(!folderbrowser_back()) screen_back();
+    }
 }
 
 void folderbrowser_create(lv_obj_t *root){
@@ -362,8 +577,85 @@ void folderbrowser_create(lv_obj_t *root){
     lv_obj_set_flex_align(g_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(g_list, 6, 0);
     lv_obj_set_scroll_dir(g_list, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(g_list, LV_SCROLLBAR_MODE_OFF);
+    ui_setup_scrollbar(g_list);
     lv_obj_add_flag(g_list, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+
+    /* "A-Z" button (bottom-right) opens the alphabet grid */
+    g_az_btn = lv_button_create(root);
+    lv_obj_remove_style_all(g_az_btn);
+    lv_obj_set_pos(g_az_btn, 302, 158); lv_obj_set_size(g_az_btn, 44, 44);
+    lv_obj_set_style_radius(g_az_btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(g_az_btn, TC(SURFACE_RAISED), 0);
+    lv_obj_set_style_bg_opa(g_az_btn, LV_OPA_90, 0);
+    ui_on(g_az_btn, fb_az_btn_cb, LV_EVENT_CLICKED, NULL, "folderbrowser.az_btn", UI_CORE);
+    lv_obj_t *azl = lv_label_create(g_az_btn);
+    lv_label_set_text(azl, "A-Z");
+    lv_obj_set_style_text_font(azl, TF(UI_14), 0);
+    lv_obj_set_style_text_color(azl, TC(TEXT_PRIMARY), 0);
+    lv_obj_center(azl);
+    lv_obj_add_flag(g_az_btn, LV_OBJ_FLAG_HIDDEN);
+
+    /* alphabet grid overlay */
+    g_grid = lv_obj_create(root);
+    lv_obj_remove_style_all(g_grid);
+    lv_obj_set_size(g_grid, 360, 360); lv_obj_set_pos(g_grid, 0, 0);
+    lv_obj_set_style_bg_color(g_grid, TC(CANVAS), 0);
+    lv_obj_set_style_bg_opa(g_grid, LV_OPA_80, 0);
+    lv_obj_add_flag(g_grid, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(g_grid, LV_OBJ_FLAG_SCROLLABLE);
+    ui_on(g_grid, fb_grid_bg_cb, LV_EVENT_CLICKED, NULL, "folderbrowser.grid_bg", UI_CORE);
+    lv_obj_add_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+    {
+        lv_obj_t *gt = lv_label_create(g_grid);
+        lv_label_set_text(gt, tr("Jump to"));
+        lv_obj_align(gt, LV_ALIGN_TOP_MID, 0, 20);
+        lv_obj_set_style_text_font(gt, TF(UI_14), 0);
+        lv_obj_set_style_text_color(gt, TC(TEXT_MUTED), 0);
+    }
+    {
+        static const char *AZ = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#";
+        int cols = 5, cw = 52, ch = 48, n = 27;
+        int gw = cols * cw, x0 = (360 - gw) / 2;
+        int rows = (n + cols - 1) / cols;
+        int y0 = 48;
+        for(int i = 0; i < n; i++){
+            int r = i / cols, c = i % cols;
+            int cells_in_row = (r == rows - 1) ? (n - r * cols) : cols;
+            int row_x0 = x0 + ((cols - cells_in_row) * cw) / 2;
+            lv_obj_t *cell = lv_button_create(g_grid);
+            lv_obj_remove_style_all(cell);
+            lv_obj_set_pos(cell, row_x0 + c * cw, y0 + r * ch);
+            lv_obj_set_size(cell, cw - 4, ch - 4);
+            lv_obj_set_style_radius(cell, 8, 0);
+            lv_obj_set_style_bg_color(cell, TC(ACCENT_PRIMARY), LV_STATE_PRESSED);
+            lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_PRESSED);
+            lv_obj_set_style_text_color(cell, TC(TEXT_PRIMARY), 0);
+            lv_obj_set_style_text_color(cell, TC(ON_ACCENT), LV_STATE_PRESSED);
+            ui_on(cell, fb_letter_cb, LV_EVENT_CLICKED, (void *)(intptr_t)AZ[i], "folderbrowser.letter", UI_CORE);
+            lv_obj_t *l = lv_label_create(cell);
+            char b[2] = {AZ[i], 0};
+            lv_label_set_text(l, b);
+            lv_obj_set_style_text_font(l, TF(UI_20), 0);
+            lv_obj_center(l);
+        }
+    }
+
+    /* alphabet hint overlay (rim-scroll / fast scroll position indicator) */
+    g_lhint = lv_obj_create(root);
+    lv_obj_remove_style_all(g_lhint);
+    lv_obj_set_size(g_lhint, 96, 96);
+    lv_obj_center(g_lhint);
+    lv_obj_set_style_radius(g_lhint, 22, 0);
+    lv_obj_set_style_bg_color(g_lhint, TC(SURFACE), 0);
+    lv_obj_set_style_bg_opa(g_lhint, LV_OPA_80, 0);
+    lv_obj_clear_flag(g_lhint, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_lhint, LV_OBJ_FLAG_HIDDEN);
+    g_lhint_lbl = lv_label_create(g_lhint);
+    lv_obj_set_style_text_font(g_lhint_lbl, TF(UI_40), 0);
+    lv_obj_set_style_text_color(g_lhint_lbl, TC(TEXT_PRIMARY), 0);
+    lv_label_set_text(g_lhint_lbl, "A");
+    lv_obj_center(g_lhint_lbl);
+    lv_timer_create(fb_lhint_timer_cb, 150, NULL);
 
     snprintf(g_dir, sizeof g_dir, "%s", FB_ROOT);   /* first content built on open() */
 }

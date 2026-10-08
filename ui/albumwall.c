@@ -2,14 +2,17 @@
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
 #include "theme.h"
+#include "theme_kit.h"
 #include "sdio.h"
 #include "musicdb.h"
 #include "artcache.h"
 #include "config.h"
+#include "i18n.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <ctype.h>
 #include <math.h>
 
 /* Album Wall: an Apple-style COVER FLOW that FLOWS. The centred album faces the viewer; the covers to
@@ -39,6 +42,12 @@ static lv_obj_t *g_front[AW_CARDS];   /* facing sprite widget per card */
 static lv_obj_t *g_side[AW_CARDS];    /* turned sprite widget per card */
 static lv_obj_t *g_initial;
 static lv_obj_t *g_name, *g_artist, *g_counter;
+static lv_obj_t *g_sb_track = NULL, *g_sb_thumb = NULL;
+static lv_obj_t *g_az_btn, *g_grid;
+static lv_obj_t *g_lhint = NULL, *g_lhint_lbl = NULL;
+static uint32_t  g_lhint_tick = 0;
+static char      g_lhint_ch = 0;
+static lv_timer_t *g_lhint_timer = NULL;
 
 static char  (*g_names)[MDB_STR];
 static char  (*g_artists)[MDB_STR];
@@ -49,6 +58,7 @@ static int     g_nalb;
 static int     g_cur;
 static float    g_off;                /* strip offset during a step animation (0 at rest) */
 static int      g_animating;
+static int      g_drag_on;
 static uint32_t g_tickctr;
 static uint8_t  g_src[AW_SRC*AW_SRC*4];   /* scratch decode buffer (UI thread only) */
 
@@ -227,6 +237,21 @@ static void aw_render_all(void){ for(int c=0;c<AW_CARDS;c++) aw_render_card(c); 
  * Everything - finger drag, inertial fling, discrete step, rim scroll - just moves g_posf; the render
  * derives g_cur (nearest album, drives the labels) and g_off (sub-album offset, drives the slide). */
 static float g_posf;                     /* continuous album position; g_cur=round(g_posf), g_off=g_cur-g_posf */
+
+static void aw_update_scrollbar(void){
+    if(!g_sb_track || !g_sb_thumb || g_nalb <= 1) return;
+    int track_w = 140;
+    int thumb_w = track_w / g_nalb;
+    if(thumb_w < 18) thumb_w = 18;
+    if(thumb_w > 50) thumb_w = 50;
+    lv_obj_set_size(g_sb_thumb, thumb_w, 8);
+    int max_x = track_w - thumb_w;
+    float norm = (g_nalb > 1) ? g_posf / (float)(g_nalb - 1) : 0.0f;
+    if(norm < 0.0f) norm = 0.0f;
+    if(norm > 1.0f) norm = 1.0f;
+    lv_obj_set_pos(g_sb_thumb, (int)(norm * max_x), 0);
+}
+
 static void aw_apply_pos(float P){
     if(g_nalb<=0) return;
     while(P < 0)          P += g_nalb;
@@ -235,8 +260,13 @@ static void aw_apply_pos(float P){
     int r = (int)lroundf(P);                             /* nearest album (0..g_nalb) */
     int newcur = aw_wrap(r);
     g_off = (float)r - P;                                /* in [-0.5,0.5]; see aw_render_card sign */
-    if(newcur != g_cur){ g_cur = newcur; aw_render_all(); aw_labels(); }  /* label only when the centre album flips */
+    if(newcur != g_cur){
+        g_cur = newcur;
+        aw_render_all();
+        aw_labels();
+    }
     else                 aw_render_all();
+    aw_update_scrollbar();
 }
 static int   g_anim_tag;
 static float g_anim_from, g_anim_to;
@@ -250,6 +280,33 @@ static void aw_anim_to(float to, uint32_t dur){          /* glide g_posf -> to (
     lv_anim_set_exec_cb(&a, aw_anim_exec); lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_set_completed_cb(&a, aw_anim_done); lv_anim_start(&a);
 }
+
+void albumwall_scrub_to(float norm){
+    if(g_nalb <= 1) return;
+    if(norm < 0.0f) norm = 0.0f;
+    if(norm > 1.0f) norm = 1.0f;
+    lv_anim_delete(&g_anim_tag, NULL);
+    g_animating = 0;
+    float target = norm * (float)(g_nalb - 1);
+    aw_apply_pos(target);
+    albumwall_scroll_letter_tick();
+}
+
+static void aw_sb_event_cb(lv_event_t *e){
+    (void)e;
+    if(g_nalb <= 1 || !g_sb_track) return;
+    lv_indev_t *indev = lv_indev_active();
+    if(!indev) return;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    lv_area_t a;
+    lv_obj_get_coords(g_sb_track, &a);
+    int rel_x = p.x - a.x1;
+    int w = lv_area_get_width(&a);
+    if(w <= 0) return;
+    float norm = (float)rel_x / (float)w;
+    albumwall_scrub_to(norm);
+}
 void albumwall_step(int dir){                            /* discrete: one album (keys / demo) */
     if(g_nalb<=0) return;
     aw_anim_to(roundf(g_posf) + (dir>=0?1.0f:-1.0f), 210);
@@ -260,13 +317,14 @@ void albumwall_settle(void){ if(g_nalb<=0) return; aw_anim_to(roundf(g_posf), 20
 
 /* ---- finger drag + inertial fling --------------------------------------------------------------- */
 #define AW_PX_PER_ALB 110.0f                             /* horizontal finger travel that advances one album */
-static int      g_drag_on;
 static float    g_drag_base;                             /* g_posf at press */
 static int      g_drag_sx;                               /* press x */
 static float    g_drag_vel;                              /* smoothed velocity, albums/ms (>0 = toward next) */
 static int      g_drag_lastx, g_drag_renderx; static uint32_t g_drag_lastt;
 void albumwall_drag_begin(int px){
     if(g_nalb<=0) return;
+    if(g_grid && !lv_obj_has_flag(g_grid, LV_OBJ_FLAG_HIDDEN)) return;
+    if(g_lhint) lv_obj_add_flag(g_lhint, LV_OBJ_FLAG_HIDDEN);
     lv_anim_delete(&g_anim_tag, NULL); g_animating = 0;  /* grab: stop any fling/step in flight */
     g_drag_on = 1; g_drag_base = g_posf; g_drag_sx = px;
     g_drag_vel = 0; g_drag_lastx = px; g_drag_renderx = px; g_drag_lastt = lv_tick_get();
@@ -393,13 +451,87 @@ static void aw_prefetch_cb(lv_timer_t *t){ (void)t;
 }
 
 
-/* ---- lifecycle ---------------------------------------------------------------------------------- */
-static void aw_back_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) screen_back(); }
+/* ---- lifecycle & fast scrolling -------------------------------------------------- */
+static char first_letter(const char *s){
+    while(*s==' ') s++;
+    char c = toupper((unsigned char)*s);
+    return (c>='A'&&c<='Z') ? c : '#';
+}
+
+static void aw_jump_to_letter(char L){
+    if(g_nalb <= 0 || !g_names) return;
+    int idx = -1;
+    for(int i = 0; i < g_nalb; i++){
+        if(first_letter(g_names[i]) == L){ idx = i; break; }
+    }
+    if(idx < 0){
+        for(int i = 0; i < g_nalb; i++){
+            if(first_letter(g_names[i]) >= L){ idx = i; break; }
+        }
+    }
+    if(idx < 0) idx = g_nalb - 1;
+
+    int d = abs(idx - g_cur);
+    if(d > g_nalb / 2) d = g_nalb - d;
+    if(d <= 4) aw_anim_to((float)idx, 200);
+    else       aw_apply_pos((float)idx);
+    albumwall_scroll_letter_tick();
+}
+
+static void aw_letter_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    aw_jump_to_letter((char)(intptr_t)lv_event_get_user_data(e));
+    if(g_grid) lv_obj_add_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+}
+static void aw_grid_bg_cb(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED && g_grid)
+        lv_obj_add_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+}
+static void aw_az_btn_cb(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED && g_grid)
+        lv_obj_clear_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+}
+static void aw_lhint_timer_cb(lv_timer_t *t){
+    (void)t;
+    if(g_lhint && !lv_obj_has_flag(g_lhint, LV_OBJ_FLAG_HIDDEN) && lv_tick_elaps(g_lhint_tick) > 650)
+        lv_obj_add_flag(g_lhint, LV_OBJ_FLAG_HIDDEN);
+}
+
+void albumwall_scroll_letter_tick(void){
+    if(!g_root || !g_lhint || g_nalb <= 0 || !g_names) return;
+    char ch = first_letter(g_names[g_cur]);
+    if(ch && ch != g_lhint_ch){
+        g_lhint_ch = ch;
+        char b[2] = {ch, 0};
+        lv_label_set_text(g_lhint_lbl, b);
+    }
+    g_lhint_tick = lv_tick_get();
+    lv_obj_clear_flag(g_lhint, LV_OBJ_FLAG_HIDDEN);
+}
+
+int albumwall_is_grid_open(void){
+    return g_grid && !lv_obj_has_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+}
+
+int albumwall_back(void){
+    if(albumwall_is_grid_open()){
+        lv_obj_add_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+        return 1;
+    }
+    return 0;
+}
+
+static void aw_back_cb(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED){
+        if(!albumwall_back()) screen_back();
+    }
+}
 static lv_obj_t *aw_img(void){ lv_obj_t *im = lv_image_create(g_root); lv_obj_add_flag(im, LV_OBJ_FLAG_HIDDEN); return im; }
 
 void albumwall_create(lv_obj_t *root){
     g_root = root;
     if(!g_prefetch) g_prefetch = lv_timer_create(aw_prefetch_cb, 40, NULL);
+    if(!g_lhint_timer) g_lhint_timer = lv_timer_create(aw_lhint_timer_cb, 150, NULL);
 }
 
 void albumwall_refresh(void){
@@ -476,9 +608,111 @@ void albumwall_refresh(void){
     lv_obj_set_style_text_align(g_artist, LV_TEXT_ALIGN_CENTER, 0); lv_obj_align(g_artist, LV_ALIGN_TOP_MID, 0, 292);
     lv_obj_set_style_text_font(g_artist, TF(USER_16), 0); lv_obj_set_style_text_color(g_artist, TC(TEXT_MUTED), 0);
 
+    /* album position scroll bar: track + sliding thumb */
+    g_sb_track = lv_obj_create(g_root);
+    lv_obj_remove_style_all(g_sb_track);
+    lv_obj_set_size(g_sb_track, 140, 8);
+    lv_obj_align(g_sb_track, LV_ALIGN_TOP_MID, 0, 312);
+    lv_obj_set_style_bg_color(g_sb_track, TC(SURFACE_RAISED), 0);
+    lv_obj_set_style_bg_opa(g_sb_track, LV_OPA_70, 0);
+    lv_obj_set_style_radius(g_sb_track, 4, 0);
+    lv_obj_clear_flag(g_sb_track, LV_OBJ_FLAG_SCROLLABLE);
+    ui_on(g_sb_track, aw_sb_event_cb, LV_EVENT_CLICKED, NULL, "albumwall.sb_click", UI_CORE);
+    ui_on(g_sb_track, aw_sb_event_cb, LV_EVENT_PRESSING, NULL, "albumwall.sb_drag", UI_CORE);
+
+    g_sb_thumb = lv_obj_create(g_sb_track);
+    lv_obj_remove_style_all(g_sb_thumb);
+    lv_obj_set_style_bg_color(g_sb_thumb, TC(TEXT_PRIMARY), 0);
+    lv_obj_set_style_bg_opa(g_sb_thumb, LV_OPA_90, 0);
+    lv_obj_set_style_radius(g_sb_thumb, 4, 0);
+    lv_obj_clear_flag(g_sb_thumb, LV_OBJ_FLAG_SCROLLABLE);
+
     g_counter = lv_label_create(g_root);
-    lv_obj_align(g_counter, LV_ALIGN_TOP_MID, 0, 318);
     lv_obj_set_style_text_font(g_counter, TF(UI_14), 0); lv_obj_set_style_text_color(g_counter, TC(TEXT_DISABLED), 0);
+    if(g_nalb <= 1){
+        lv_obj_add_flag(g_sb_track, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align(g_counter, LV_ALIGN_TOP_MID, 0, 318);
+    } else {
+        lv_obj_clear_flag(g_sb_track, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align(g_counter, LV_ALIGN_TOP_MID, 0, 324);
+        aw_update_scrollbar();
+    }
+
+    /* "A-Z" button (bottom-right) opens the alphabet grid */
+    g_az_btn = lv_button_create(g_root);
+    lv_obj_remove_style_all(g_az_btn);
+    lv_obj_set_pos(g_az_btn, 302, 158); lv_obj_set_size(g_az_btn, 44, 44);
+    lv_obj_set_style_radius(g_az_btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(g_az_btn, TC(SURFACE_RAISED), 0);
+    lv_obj_set_style_bg_opa(g_az_btn, LV_OPA_90, 0);
+    ui_on(g_az_btn, aw_az_btn_cb, LV_EVENT_CLICKED, NULL, "albumwall.az_btn", UI_CORE);
+    lv_obj_t *azl = lv_label_create(g_az_btn);
+    lv_label_set_text(azl, "A-Z");
+    lv_obj_set_style_text_font(azl, TF(UI_14), 0);
+    lv_obj_set_style_text_color(azl, TC(TEXT_PRIMARY), 0);
+    lv_obj_center(azl);
+    if(g_nalb <= 12) lv_obj_add_flag(g_az_btn, LV_OBJ_FLAG_HIDDEN);
+
+    /* alphabet hint overlay (rim-scroll / fast scroll position indicator) */
+    g_lhint = lv_obj_create(g_root);
+    lv_obj_remove_style_all(g_lhint);
+    lv_obj_set_size(g_lhint, 96, 96);
+    lv_obj_center(g_lhint);
+    lv_obj_set_style_radius(g_lhint, 22, 0);
+    lv_obj_set_style_bg_color(g_lhint, TC(SURFACE), 0);
+    lv_obj_set_style_bg_opa(g_lhint, LV_OPA_80, 0);
+    lv_obj_clear_flag(g_lhint, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_lhint, LV_OBJ_FLAG_HIDDEN);
+    g_lhint_lbl = lv_label_create(g_lhint);
+    lv_obj_set_style_text_font(g_lhint_lbl, TF(UI_40), 0);
+    lv_obj_set_style_text_color(g_lhint_lbl, TC(TEXT_PRIMARY), 0);
+    lv_label_set_text(g_lhint_lbl, "A");
+    lv_obj_center(g_lhint_lbl);
+
+    /* alphabet grid overlay */
+    g_grid = lv_obj_create(g_root);
+    lv_obj_remove_style_all(g_grid);
+    lv_obj_set_size(g_grid, 360, 360); lv_obj_set_pos(g_grid, 0, 0);
+    lv_obj_set_style_bg_color(g_grid, TC(CANVAS), 0);
+    lv_obj_set_style_bg_opa(g_grid, LV_OPA_80, 0);
+    lv_obj_add_flag(g_grid, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(g_grid, LV_OBJ_FLAG_SCROLLABLE);
+    ui_on(g_grid, aw_grid_bg_cb, LV_EVENT_CLICKED, NULL, "albumwall.grid_bg", UI_CORE);
+    lv_obj_add_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+    {
+        lv_obj_t *gt = lv_label_create(g_grid);
+        lv_label_set_text(gt, tr("Jump to"));
+        lv_obj_align(gt, LV_ALIGN_TOP_MID, 0, 20);
+        lv_obj_set_style_text_font(gt, TF(UI_14), 0);
+        lv_obj_set_style_text_color(gt, TC(TEXT_MUTED), 0);
+    }
+    {
+        static const char *AZ = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#";
+        int cols = 5, cw = 52, ch = 48, n = 27;
+        int gw = cols * cw, x0 = (360 - gw) / 2;
+        int rows = (n + cols - 1) / cols;
+        int y0 = 48;
+        for(int i = 0; i < n; i++){
+            int r = i / cols, c = i % cols;
+            int cells_in_row = (r == rows - 1) ? (n - r * cols) : cols;
+            int row_x0 = x0 + ((cols - cells_in_row) * cw) / 2;
+            lv_obj_t *cell = lv_button_create(g_grid);
+            lv_obj_remove_style_all(cell);
+            lv_obj_set_pos(cell, row_x0 + c * cw, y0 + r * ch);
+            lv_obj_set_size(cell, cw - 4, ch - 4);
+            lv_obj_set_style_radius(cell, 8, 0);
+            lv_obj_set_style_bg_color(cell, TC(ACCENT_PRIMARY), LV_STATE_PRESSED);
+            lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_PRESSED);
+            lv_obj_set_style_text_color(cell, TC(TEXT_PRIMARY), 0);
+            lv_obj_set_style_text_color(cell, TC(ON_ACCENT), LV_STATE_PRESSED);
+            ui_on(cell, aw_letter_cb, LV_EVENT_CLICKED, (void *)(intptr_t)AZ[i], "albumwall.letter", UI_CORE);
+            lv_obj_t *l = lv_label_create(cell);
+            char b[2] = {AZ[i], 0};
+            lv_label_set_text(l, b);
+            lv_obj_set_style_text_font(l, TF(UI_20), 0);
+            lv_obj_center(l);
+        }
+    }
 
     aw_render_all(); aw_labels();
 }

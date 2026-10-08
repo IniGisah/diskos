@@ -334,7 +334,7 @@ void plview_create(lv_obj_t *root){
     lv_obj_set_flex_align(g_song_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(g_song_list, 6, 0);
     lv_obj_set_scroll_dir(g_song_list, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(g_song_list, LV_SCROLLBAR_MODE_OFF);
+    ui_setup_scrollbar(g_song_list);
     lv_obj_add_flag(g_song_list, LV_OBJ_FLAG_SCROLL_MOMENTUM);
 }
 
