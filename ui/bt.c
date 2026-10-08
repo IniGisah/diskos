@@ -11,7 +11,6 @@
 #include <time.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <sys/wait.h>

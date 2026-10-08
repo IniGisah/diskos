@@ -1,21 +1,20 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
-#include "anim.h"
 #include "art.h"
 #include "config.h"
-#include "controls.h"
 #include "fb_pan.h"
 #include "fwcaps.h"
 #include "ipc.h"
 #include "lastfm.h"
-#include "lvgl/lvgl.h"
 #include "lvgl/src/drivers/evdev/lv_evdev.h"
 #include "modelock.h"
 #include "modes.h"
 #include "musicdb.h"
 #include "playstate.h"
 #include "power.h"
+#ifdef DISKOS_PROFILE
 #include "prof.h"
+#endif
 #include "scanner.h"
 #include "screens.h"
 #include "sdio.h"

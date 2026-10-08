@@ -189,7 +189,7 @@ static float aw_xmap(float p){
 }
 /* render one card at continuous position epos (0 = centre). Sets both its sprites' pos + opacity. */
 static void aw_render_card(int c){
-    float epos = c - (AW_CARDS/2) + g_off;      /* card c's base is (c - centre) */
+    float epos = (float)(c - AW_CARDS / 2) + g_off;      /* card c's base is (c - centre) */
     lv_obj_t *fi = g_front[c], *si = g_side[c];
     float a = fabsf(epos);
     if(a > 2.75f){ lv_obj_add_flag(fi, LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(si, LV_OBJ_FLAG_HIDDEN); return; }
@@ -207,10 +207,10 @@ static void aw_render_card(int c){
     fo = fo*fade/255; so = so*fade/255;
 
     float x = aw_xmap(epos);
-    lv_obj_set_pos(fi, (int)(x - AW_SRC/2), 72);
+    lv_obj_set_pos(fi, (int)(x - AW_SRC / 2.0f), 72);
     lv_obj_set_style_image_opa(fi, (lv_opa_t)fo, 0);
     if(fo>0) lv_obj_clear_flag(fi, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(fi, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(si, (int)(x - AW_SIDE_W/2), 78);
+    lv_obj_set_pos(si, (int)(x - AW_SIDE_W / 2.0f), 78);
     lv_obj_set_style_image_opa(si, (lv_opa_t)so, 0);
     if(so>0) lv_obj_clear_flag(si, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(si, LV_OBJ_FLAG_HIDDEN);
 }
