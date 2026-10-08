@@ -10,7 +10,7 @@
 #
 # Get the IP and password from Debug Mode (Settings > System).
 # Requires: sshpass, ssh, python3 with Pillow (pip install Pillow). Default output: diskos-shot.png
-set -eu
+set -euo pipefail
 
 IP="${DISKOS_IP:?set DISKOS_IP to the device IP (shown in Debug Mode)}"
 export SSHPASS="${DISKOS_PW:?set DISKOS_PW to the Debug Mode SSH password}"
@@ -18,19 +18,28 @@ OUT="${1:-diskos-shot.png}"
 RAW="$(mktemp)"
 trap 'rm -f "$RAW"' EXIT
 
+echo ">> Capturing screen (360x360 32bpp, 518.4 KB) from root@$IP..."
+
 # password via SSHPASS (sshpass -e), not the command line
-sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 "root@$IP" \
-  'dd if=/dev/fb0 bs=518400 count=1 2>/dev/null' > "$RAW"
+# -o LogLevel=ERROR suppresses non-fatal warnings (e.g. OpenSSH post-quantum key exchange warnings)
+if command -v pv >/dev/null 2>&1; then
+  sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 -o LogLevel=ERROR "root@$IP" \
+    'dd if=/dev/fb0 bs=518400 count=1 2>/dev/null' | pv -N "   Capture" -p -t -r -b -s 518400 > "$RAW"
+else
+  sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 -o LogLevel=ERROR "root@$IP" \
+    'dd if=/dev/fb0 bs=518400 count=1 2>/dev/null' > "$RAW"
+fi
 
 # portable byte count (stat -c is GNU-only); require a full frame
 BYTES="$(wc -c < "$RAW" | tr -d ' ')"
-[ "$BYTES" -ge 518400 ] || { echo "capture failed (short read: $BYTES bytes)" >&2; exit 1; }
+[ "$BYTES" -ge 518400 ] || { echo "ERROR: capture failed (short read: $BYTES bytes, expected 518400)" >&2; exit 1; }
 
+echo ">> Processing frame (BGRA -> RGB, 180° rotation)..."
 python3 - "$RAW" "$OUT" <<'PY'
 import sys
 from PIL import Image
 raw = open(sys.argv[1], "rb").read()[:518400]
 img = Image.frombuffer("RGBA", (360, 360), raw, "raw", "BGRA").convert("RGB").rotate(180)
 img.save(sys.argv[2])
-print(sys.argv[2])
 PY
+echo ">> Screenshot saved: $OUT"

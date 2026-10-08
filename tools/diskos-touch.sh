@@ -11,7 +11,7 @@
 #
 # Requires tinj on the device at /usr/data/tinj. Build it once from tinj.c and push it (see README).
 # Requires: sshpass, ssh.
-set -eu
+set -euo pipefail
 
 IP="${DISKOS_IP:?set DISKOS_IP to the device IP (shown in Debug Mode)}"
 export SSHPASS="${DISKOS_PW:?set DISKOS_PW to the Debug Mode SSH password}"
@@ -30,7 +30,8 @@ for a in "$@"; do
   case "$a" in ''|*[!0-9]*) echo "coordinates must be non-negative integers (0..359)" >&2; exit 2 ;; esac
 done
 
-SSH=(sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8)
+# -o LogLevel=ERROR suppresses non-fatal warnings (e.g. OpenSSH post-quantum key exchange warnings)
+SSH=(sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 -o LogLevel=ERROR)
 
 if ! "${SSH[@]}" "root@$IP" 'test -x /usr/data/tinj'; then
   echo "tinj not found on device (/usr/data/tinj). Build it once and push it:" >&2
@@ -40,5 +41,12 @@ if ! "${SSH[@]}" "root@$IP" 'test -x /usr/data/tinj'; then
   exit 1
 fi
 
+if [ "$CMD" = "tap" ]; then
+  echo ">> Tapping at ($1, $2) on root@$IP..."
+elif [ "$CMD" = "swipe" ]; then
+  echo ">> Swiping from ($1, $2) to ($3, $4) on root@$IP..."
+fi
+
 # CMD is one of tap/swipe and every remaining arg is digits-only, so this is safe to interpolate.
 "${SSH[@]}" "root@$IP" "/usr/data/tinj $CMD $*"
+echo ">> Touch event injected successfully"

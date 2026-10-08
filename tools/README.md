@@ -11,12 +11,15 @@ first. A couple of the device's behaviors are non-obvious and easy to get wrong.
 | Script | What it does |
 |---|---|
 | `diskos-deploy.sh` | Push a built `mq_ui` to the device, verify it, and hot-reload it safely |
+| `diskos-ota-keygen.sh` | Generate ECDSA P-256 root and leaf keypairs for custom permanent OTA updates |
+| `diskos-ota-push.sh` | Sign and stage a custom `mq_ui` update to the device over Wi-Fi (permanent across reboots) |
 | `diskos-shot.sh` | Capture the device screen to a PNG |
 | `diskos-touch.sh` | Drive the touchscreen over SSH (tap / swipe) via the on-device injector |
 | `tinj.c` | The on-device touch injector, built once and pushed (used by `diskos-touch.sh`) |
 
 ## Requirements
 - `sshpass`, `ssh`, `scp` (OpenSSH), and `md5sum`
+- Progress bars: `pv` (Pipe Viewer) recommended for live progress bars, with automatic `python3` fallback
 - For screenshots: `python3` with Pillow (`pip install Pillow`)
 
 ## Getting access
