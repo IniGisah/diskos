@@ -369,7 +369,7 @@ static int bt_probe_run(const char *cmd, char *out, int cap, int timeout_ms){
  * to a device, back to analog, or a lost link) bumps gen; a probe result carries the gen it was started under and is
  * dropped if it is no longer current, so a stale answer can never trigger a codec switch on a later connection. */
 static struct { char mac[18]; int state; /* 0 idle, 1 running, 2 done */ int pcm, known; unsigned avail;
-                int choice, misses, armed, applied; unsigned gen; } g_cq;
+                int choice, misses, armed, applied, applied_val; unsigned gen; } g_cq;
 static pthread_mutex_t g_cq_mu = PTHREAD_MUTEX_INITIALIZER;
 #define BT_PCM_TRIES 15        /* probe ticks (2 s apart, ~30 s) to wait for the PCM before giving up (stays on SBC) */
 struct bt_probe_arg { unsigned gen; char mac[18]; };
@@ -387,21 +387,39 @@ static void *bt_codec_probe_thread(void *arg){
     free(pa);
     return NULL;
 }
-/* The route frame: 06b3 + length + VALUE1 0 (SBC) + MAC - byte-for-byte what diskOS has always sent, so routing
- * itself never waits on codec state. Returns 0, or -1 for a bad MAC / short buffer. */
+/* The route frame: 06b3 + length + VALUE1 (highest supported codec or SBC fallback) + MAC.
+ * Checks BlueALSA for the sink's supported codecs so we connect directly in AAC/LDAC on the initial handshake.
+ * If the sink is not yet ready, falls back to SBC 0, and the asynchronous upgrade worker will upgrade it. */
 int ui_bt_codec_frame(const char *mac, char *out, int cap){
-    return bt_codec_frame_value(mac, 0, out, cap);
+    int choice = cfg_get_int("bt_codec", 0);
+    if(choice < 0 || choice >= BT_CODEC_N) choice = 0;
+    if(fw_os_ver() != 257) choice = 0;
+
+    int best = 0;
+    if(choice > 0){
+        char cmd[256], info[1536];
+        if(bt_codec_query_cmd(mac, cmd, sizeof cmd) == 0 &&
+           run_cap_bounded(cmd, info, sizeof info, 350) > 0){
+            int known = 0;
+            unsigned avail = bt_codec_parse_avail(info, &known);
+            if(known){
+                best = bt_codec_pick(choice, avail, 1);
+            }
+        }
+    }
+    pthread_mutex_lock(&g_cq_mu);
+    g_cq.applied_val = best;
+    pthread_mutex_unlock(&g_cq_mu);
+    return bt_codec_frame_value(mac, best, out, cap);
 }
 static int bt_codec_frame_value(const char *mac, int v, char *out, int cap){
     if(!bt_mac_valid(mac)) return -1;
     int r = snprintf(out, cap, "06b3%04X%04X%s", (unsigned)(12 + 17), (unsigned)v, mac);
     return (r > 0 && r < cap) ? 0 : -1;
 }
-/* AAC/LDAC. The route's 06c1 makes the player (re)start bluetoothd and BlueALSA (mq_player_257.dis: bt_source_control
- * killall + relaunch), so the device's A2DP PCM appears only AFTER the route, and the player's codec worker drops a
- * 06b3 sent while it is missing. So the route goes out with SBC as always (audio starts at once) and this then waits,
- * off the UI thread, for the PCM: when it shows and lists the chosen codec, the choice is sent as a second 06b3.
- * One step per call (UI timer tick); returns 1 when finished (sent, unavailable, gave up, or the route changed). */
+/* AAC/LDAC upgrade/sync worker. If the initial route frame already connected in the target codec,
+ * this verifies state and settles. If the initial frame had to fall back to SBC because the PCM
+ * endpoint was not yet created, this waits off-thread for the PCM and sends the upgrade frame. */
 int bt_codec_upgrade_step(void){
     char mac[18], f[48]; int send = -1, done = 0; struct bt_probe_arg *spawn = NULL;
     pthread_mutex_lock(&g_cq_mu);
@@ -410,8 +428,8 @@ int bt_codec_upgrade_step(void){
     else if(g_cq.state == 2){
         if(g_cq.pcm){
             int v = bt_codec_pick(g_cq.choice, g_cq.avail, g_cq.known);      /* unknown/unlisted -> SBC = nothing to do */
-            if(v != 0) send = v;
-            done = 1; g_cq.applied = 1;
+            if(v != 0 && v != g_cq.applied_val) send = v;
+            done = 1; g_cq.applied = 1; g_cq.applied_val = v;
         } else if(++g_cq.misses >= BT_PCM_TRIES){ done = 1; g_cq.applied = 1; }
         g_cq.state = 0;
     }
@@ -433,7 +451,7 @@ static void bt_codec_upgrade_cb(lv_timer_t *t){
 /* Any route change invalidates a pending upgrade and every probe still running for it. */
 void ui_bt_codec_upgrade_cancel(void){
     pthread_mutex_lock(&g_cq_mu);
-    g_cq.gen++; g_cq.armed = 0; g_cq.applied = 0; g_cq.state = 0;
+    g_cq.gen++; g_cq.armed = 0; g_cq.applied = 0; g_cq.applied_val = 0; g_cq.state = 0;
     pthread_mutex_unlock(&g_cq_mu);
 }
 /* Called after a route to `mac`. fresh = a full route sequence just re-sent the SBC frame: it cancels whatever was
