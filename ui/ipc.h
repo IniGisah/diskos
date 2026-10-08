@@ -43,4 +43,6 @@ unsigned ipc_rx_frames(void);          /* count of /ui frames received from the 
 int  ipc_player_mode(void);            /* last a607 player mode this gen: -1=none, 8=LOCALPLAYER (v2.40 oracle) */
 unsigned ipc_generation(void);         /* bumps on each /ui reattach (player restart) - v2.40 one-shot re-arm */
 int  ipc_tip_event(unsigned *seq);     /* last a60a TIP_INFO_EVENT (0x0212=connect, 0x0213=disconnect) */
+int  ipc_player_ready(void);          /* 1 once /player queue is open and accepting commands */
+void ipc_set_quiet(int q);             /* 1 to suppress user-facing error toast flag (background sync) */
 #endif

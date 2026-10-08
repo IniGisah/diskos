@@ -17,6 +17,7 @@
 #include <sys/wait.h>
 #include <poll.h>
 #include <signal.h>
+#include <fcntl.h>
 
 /* Bluetooth settings (SCR_BT) + a details screen (SCR_BT_INFO).
  * The BT chip (BCM43438 / AP6212, 2.4GHz-only) sits on UART /dev/ttyS0. RE of the
@@ -60,17 +61,6 @@ static void scan_stop(void){
 
 /* ---- header helpers (local copies) -------------------------------------- */
 
-static int run_cap(const char *cmd, char *out, int cap){
-    out[0] = 0;
-    FILE *p = popen(cmd, "r");
-    if(!p){ fprintf(stderr,"bt run_cap popen failed: %s (%s)\n", cmd, strerror(errno)); return 0; }
-    int n = fread(out, 1, cap-1, p);
-    if(n < 0) n = 0;
-    out[n] = 0;
-    pclose(p);
-    return n;
-}
-
 /* Children run_cap_bounded killed but could not reap within its bound (e.g. stuck in uninterruptible
  * sleep). They stay unreaped - so their pids stay ours - and are retried, never waited on, by later calls.
  * Main thread only (both callers run on LVGL timers), so no lock. */
@@ -103,7 +93,7 @@ static int run_cap_bounded(const char *cmd, char *out, int cap, int timeout_ms){
     if(pid == 0){                              /* child: stdout -> pipe; own group for kill(-pid) */
         close(fds[0]);
         dup2(fds[1], 1);
-        close(fds[1]);
+        for(int i = 3; i < 256; i++) close(i);
         if(setpgid(0, 0) != 0 && getpgrp() != getpid()) _exit(126);
         execl("/bin/sh", "sh", "-c", cmd, (char*)NULL);
         _exit(127);
@@ -185,7 +175,7 @@ static void list_msg_scanning(void){
 
 /* powered = bluetoothd up AND adapter Powered: yes */
 static int bt_on(void){
-    char b[64]; run_cap("pidof bluetoothd 2>/dev/null", b, sizeof b);   /* /proc read - can't hang */
+    char b[64]; run_cap_bounded("pidof bluetoothd 2>/dev/null", b, sizeof b, 200);   /* process read - can't hang */
     if(!b[0]) return 0;
     /* bluetoothctl talks to bluetoothd over D-Bus and can stall if the daemon is wedged - bound it so
      * this probe (called from UI poll timers) never freezes the main thread. */
@@ -218,12 +208,43 @@ int bt_radio_on(void){
 /* idempotent: ensure the pairing agent + a2dp-source audio endpoint are up.
  * Must run whenever the radio is on - without bt-agent pairing fails, and
  * without bluealsa there is no audio sink for the player to route to. */
+static void bg_system(const char *cmd){
+    pid_t pid = fork();
+    if(pid == 0){
+        if(fork() == 0){
+            for(int i = 3; i < 256; i++) close(i);
+            int fd = open("/dev/null", O_RDWR);
+            if(fd >= 0){ dup2(fd, 0); dup2(fd, 1); dup2(fd, 2); if(fd > 2) close(fd); }
+            setpgid(0, 0);
+            execl("/bin/sh", "sh", "-c", cmd, (char*)NULL);
+            _exit(127);
+        }
+        _exit(0);
+    }
+    if(pid > 0) waitpid(pid, NULL, 0);
+}
+
+static int sync_system(const char *cmd){
+    pid_t pid = fork();
+    if(pid == 0){
+        for(int i = 3; i < 256; i++) close(i);
+        execl("/bin/sh", "sh", "-c", cmd, (char*)NULL);
+        _exit(127);
+    }
+    if(pid > 0){
+        int status;
+        waitpid(pid, &status, 0);
+        return status;
+    }
+    return -1;
+}
+
 /* a2dp-source audio engine. --sbc-quality=medium (bit-pool ~33) keeps SBC encode load
  * under this X2000 CPU's ceiling: stock's default-quality stereo SBC stutters, but medium
  * quality plays clean STEREO with headroom (on-device: ~86% idle). bluetoothctl's own agent
  * (set up in bt_enable) handles just-works pairing, so no separate bt-agent. */
 static void bt_ensure_services(void){
-    system("pidof bluealsa >/dev/null 2>&1 || bluealsa -S --device=hci0 --profile=a2dp-source "
+    bg_system("pidof bluealsa >/dev/null 2>&1 || bluealsa -S --device=hci0 --profile=a2dp-source "
            "--sbc-quality=medium --ldac-abr --ldac-quality=standard "
            "--codec=sbc --initial-volume=48 >/tmp/bluealsa.log 2>&1 &");
 }
@@ -291,7 +312,9 @@ static int bt_probe_run(const char *cmd, char *out, int cap, int timeout_ms){
     pid_t pid = fork();
     if(pid < 0){ close(fds[0]); close(fds[1]); return 0; }
     if(pid == 0){
-        close(fds[0]); dup2(fds[1], 1); close(fds[1]); setpgid(0, 0);
+        close(fds[0]); dup2(fds[1], 1);
+        for(int i = 3; i < 256; i++) close(i);
+        setpgid(0, 0);
         execl("/bin/sh", "sh", "-c", cmd, (char*)NULL); _exit(127);
     }
     setpgid(pid, pid);
@@ -412,8 +435,8 @@ static void bt_enable(void){
     /* Create the cancel marker SYNCHRONOUSLY before the backgrounded subshell, so it exists by
      * the time we return. bt_enable()/bt_disable() are both main-thread + serialized, so a
      * later bt_disable() `rm` always beats the async subshell - no touch-vs-rm race. */
-    system("touch /tmp/bt_enabling 2>/dev/null");
-    system(
+    sync_system("touch /tmp/bt_enabling 2>/dev/null");
+    bg_system(
         "( killall -9 fiio_bluetoothctl brcm_patchram_plus bluetoothd bluealsa 2>/dev/null; "
         "  hciconfig hci0 down 2>/dev/null; "
         /* power-cycle the BT core (BT_REG_ON via rfkill) BEFORE patchram, so the chip
@@ -457,7 +480,7 @@ static void bt_disable(void){
      * binary, so instead of a graceful daemon power-off (which could hang the subshell before the kill)
      * we KILL the daemons FIRST - direct, fast, no D-Bus round-trip - then drop the interface and
      * rfkill-block. rm the enable marker first so any in-flight bt_enable() subshell aborts. */
-    system("( rm -f /tmp/bt_enabling; "
+    bg_system("( rm -f /tmp/bt_enabling; "
            "killall -9 bluealsa bluetoothd brcm_patchram_plus fiio_bluetoothctl bt-agent 2>/dev/null; "
            "hciconfig hci0 down >/dev/null 2>&1; "
            "rfkill block bluetooth >/dev/null 2>&1 ) >/dev/null 2>&1 &");
@@ -500,7 +523,15 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
             }
         }
     }
-    if(!found){ g_bt_autorouted[0] = 0; ui_bt_codec_upgrade_cancel(); return; }
+    if(!found){
+        if(g_bt_autorouted[0]){
+            g_bt_autorouted[0] = 0;
+            ui_route_analog();
+            ui_toast("Bluetooth disconnected");
+        }
+        ui_bt_codec_upgrade_cancel();
+        return;
+    }
     if(strcmp(mac, g_bt_autorouted)){
         if(ui_route_bt(mac) == 0)     /* latch only on a successful route, else retry on the next poll */
             snprintf(g_bt_autorouted, sizeof g_bt_autorouted, "%s", mac);
@@ -548,7 +579,7 @@ static int bt_dev_connected(const char *mac){
     if(!bt_mac_valid(mac)) return 0;
     char cmd[160], buf[2048];
     snprintf(cmd, sizeof cmd, "bluetoothctl info %s 2>/dev/null", mac);
-    run_cap(cmd, buf, sizeof buf);
+    run_cap_bounded(cmd, buf, sizeof buf, 350);
     /* match the "Connected:" PROPERTY line (after indentation), not a Name:/Alias:
      * that merely contains the text "Connected: yes". */
     for(char *l = buf; l && *l; ){
@@ -594,7 +625,7 @@ static void bt_connect(const char *mac){
     snprintf(cmd, sizeof cmd,
              "( bluetoothctl pair %s; bluetoothctl trust %s; bluetoothctl connect %s ) >/dev/null 2>&1 &",
              mac, mac, mac);
-    system(cmd);
+    bg_system(cmd);
     snprintf(g_bt_conn_mac, sizeof g_bt_conn_mac, "%s", mac);
     ui_toast("Connecting...");
     g_bt_conn_start = lv_tick_get();
@@ -607,7 +638,7 @@ static void bt_disconnect(const char *mac){
     ui_route_analog();          /* return audio to the DAC before dropping the A2DP link */
     char cmd[128];
     snprintf(cmd, sizeof cmd, "bluetoothctl disconnect %s >/dev/null 2>&1 &", mac);
-    system(cmd);
+    bg_system(cmd);
     ui_toast("Disconnecting...");
 }
 
@@ -639,8 +670,9 @@ static void info_forget_cb(lv_event_t *e){
     if(bt_mac_valid(g_sel_mac)){
         bt_disconnect(g_sel_mac);   /* route audio back to analog + clear g_route/autoroute BEFORE removing the sink */
         char cmd[128];
-        snprintf(cmd, sizeof cmd, "bluetoothctl remove %s >/dev/null 2>&1", g_sel_mac);
-        ui_toast(system(cmd) == 0 ? "Device forgotten" : "Couldn't forget device");
+        snprintf(cmd, sizeof cmd, "( bluetoothctl remove %s ) >/dev/null 2>&1 &", g_sel_mac);
+        bg_system(cmd);
+        ui_toast("Device forgotten");
     }
     screen_back();
     if(g_scan_timer) lv_timer_del(g_scan_timer);
@@ -708,7 +740,7 @@ void bt_info_open(void){
     lv_obj_clean(g_info_list);
     char cmd[128], buf[2048], val[96];
     snprintf(cmd, sizeof cmd, "bluetoothctl info %s 2>/dev/null", g_sel_mac);
-    run_cap(cmd, buf, sizeof buf);
+    run_cap_bounded(cmd, buf, sizeof buf, 400);
     char *p = strstr(buf, "Name: ");
     if(p){ sscanf(p+6, "%95[^\n]", val); info_row("Name", val); }
     info_row("Address", g_sel_mac);
@@ -802,7 +834,7 @@ static int             g_scan_pending = 0;   /* main-thread: a re-enumerate was 
 
 static void *scan_worker(void *arg){
     unsigned my_gen = (unsigned)(intptr_t)arg;
-    char buf[8192]; run_cap("bluetoothctl devices 2>/dev/null", buf, sizeof buf);
+    char buf[8192]; bt_probe_run("bluetoothctl devices 2>/dev/null", buf, sizeof buf, 800);
     bt_scan_dev_t res[40]; int n = 0;
     char *l = buf;
     while(l && *l && n < 40){
@@ -814,7 +846,7 @@ static void *scan_worker(void *arg){
             if(name[0] && bt_mac_valid(mac)){
                 char cmd[128], info[2048];
                 snprintf(cmd, sizeof cmd, "bluetoothctl info %s 2>/dev/null", mac);
-                run_cap(cmd, info, sizeof info);
+                bt_probe_run(cmd, info, sizeof info, 500);
                 char icon[64], cv[16];   /* line-anchored: a spoofed device name can't fake Icon/Connected */
                 if(bt_info_prop(info, "Icon:", icon, sizeof icon) && !strncmp(icon, "audio", 5)){  /* audio sinks only */
                     snprintf(res[n].mac,  sizeof res[n].mac,  "%s", mac);
@@ -928,7 +960,7 @@ static void start_scan(void){
     list_msg_scanning();
     /* Classic BR/EDR inquiry - what BT speakers/headphones use - needs ~10-12s to find and
      * resolve a device's name/class; the old 6s window quit before speakers ever appeared. */
-    system("bluetoothctl --timeout 13 scan on >/dev/null 2>&1 &");
+    bg_system("bluetoothctl --timeout 13 scan on >/dev/null 2>&1 &");
     if(g_scan_timer) lv_timer_del(g_scan_timer);
     g_scan_timer = lv_timer_create(scan_timer_cb, 13500, NULL);
     lv_timer_set_repeat_count(g_scan_timer, 1);

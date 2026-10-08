@@ -119,10 +119,14 @@ static void clear_track(void){
 }
 
 static void parse_a2(const char*payload,int len){
-    jsmn_parser p; jsmntok_t tk[64];
+    jsmn_parser p; jsmntok_t tk[256];
     jsmn_init(&p);
-    int nt=jsmn_parse(&p,payload,len,tk,64);
-    if(nt<1) return;
+    int nt=jsmn_parse(&p,payload,len,tk,256);
+    if(nt<1){
+        FILE *f = fopen("/usr/data/ipc_err.log", "a");
+        if(f){ fprintf(f, "parse_a2 outer jsmn_parse failed nt=%d len=%d\n%.*s\n", nt, len, len, payload); fclose(f); }
+        return;
+    }
     pthread_mutex_lock(&g_mu);
     char oldpath[256]; snprintf(oldpath, sizeof oldpath, "%s", g_state.path);   /* detect a track-identity change */
     int v;
@@ -136,8 +140,8 @@ static void parse_a2(const char*payload,int len){
                                     * JSON must not truncate here (truncation -> jsmn parse fail ->
                                     * track not updated -> the previous track stays on screen) */
         unescape(payload+tk[v].start, tk[v].end-tk[v].start, song, sizeof song);
-        jsmn_parser p2; jsmntok_t st[96]; jsmn_init(&p2);
-        int n2=jsmn_parse(&p2,song,strlen(song),st,96);
+        jsmn_parser p2; jsmntok_t st[512]; jsmn_init(&p2);
+        int n2=jsmn_parse(&p2,song,strlen(song),st,512);
         if(n2>0){
             /* Parse into TEMP state and publish only when the song carries a complete IDENTITY (a valid
              * path). song_name alone must NOT make it a "track": an omitted song_file_path would otherwise
@@ -171,7 +175,12 @@ static void parse_a2(const char*payload,int len){
                 /* a present song with NO usable path can't establish identity -> clear rather than bind new
                  * positions to the previous track (which would corrupt its bookmark). */
                 clear_track();
+                FILE *f = fopen("/usr/data/ipc_err.log", "a");
+                if(f){ fprintf(f, "parse_a2 song had no usable path. t_path='%s', sv=%d\n", t_path, sv); fclose(f); }
             }
+        } else {
+            FILE *f = fopen("/usr/data/ipc_err.log", "a");
+            if(f){ fprintf(f, "parse_a2 inner jsmn_parse failed n2=%d songlen=%zu\n%s\n", n2, strlen(song), song); fclose(f); }
         }
     } else if(v>=0 && tk[v].type==JSMN_STRING){
         /* "song" present as an empty/short STRING ("{}"/"" -> len<=2): the player is
@@ -215,6 +224,17 @@ static void parse_frame(const char*buf,int n){
         if(errno==ERANGE || ms<0) return;        /* overflow/negative -> reject, don't publish garbage */
         pthread_mutex_lock(&g_mu); g_state.position_ms=ms; g_state.seq++; g_state.pos_seq=g_state.seq; pthread_mutex_unlock(&g_mu);
     } else if(buf[0]==97 && buf[1]==50){ /* "a2" state/metadata JSON */
+        /* mq_player BUG WORKAROUND: The player sometimes emits unescaped quotes inside the stringified
+         * "song" value (e.g., if an album name contains quotes), which makes it invalid JSON and breaks
+         * JSMN. We scan the string value boundary and replace any unescaped `"` with `'`. */
+        char *mut = (char*)(buf + 8);
+        char *p_start = strstr(mut, "{\"song\":\"{");
+        char *p_end = strstr(mut, "}\",\"love\":");
+        if (p_start && p_end && p_end > p_start) {
+            for (char *p = p_start + 9; p <= p_end; p++) {
+                if (*p == '"' && *(p-1) != '\\') *p = '\'';
+            }
+        }
         parse_a2(buf+8, n-8);
     } else if(buf[0]=='a'&&buf[1]=='7'&&buf[2]=='1'&&buf[3]=='4' && n>=12){
         /* "a714000C00<VV><pos16>" - VV (hex chars 10-11) = volume level */
@@ -428,6 +448,21 @@ void ipc_seed_state(const track_state_t *s){
 /* Send a command frame straight to /player. g_tx is O_NONBLOCK so this can never
  * stall the caller or the player; mq_send is thread-safe. */
 static volatile int g_send_err = 0;   /* sticky until ipc_take_send_error() reads it */
+static volatile int g_quiet_all = 0;
+
+void ipc_set_quiet(int q){ g_quiet_all = q; }
+
+/* 1 once /player queue is open and accepting commands */
+int ipc_player_ready(void){
+    if(g_tx_stale && g_tx!=(mqd_t)-1){ mq_close(g_tx); g_tx=(mqd_t)-1; }
+    g_tx_stale = 0;
+    if(g_tx==(mqd_t)-1){
+        g_tx=mq_open("/player", O_WRONLY|O_NONBLOCK);
+        g_tx_dev = 0; g_tx_ino = 0;
+        if(g_tx!=(mqd_t)-1) mq_identity(g_tx, &g_tx_dev, &g_tx_ino);
+    }
+    return g_tx!=(mqd_t)-1;
+}
 
 /* quiet=1 -> never set the user-facing error flag (background state-sync / health
  * probes must not raise "Player didn't respond" during the startup connect race). */
@@ -439,7 +474,7 @@ static int ipc_send_internal(const char*frame, int quiet){
         g_tx_dev = 0; g_tx_ino = 0;   /* clear first: a failed capture must not leave a stale identity */
         if(g_tx!=(mqd_t)-1) mq_identity(g_tx, &g_tx_dev, &g_tx_ino);
     }
-    if(g_tx==(mqd_t)-1){ if(!quiet) g_send_err=1; return -1; }
+    if(g_tx==(mqd_t)-1){ if(!quiet && !g_quiet_all) g_send_err=1; return -1; }
     size_t len = strlen(frame);
     /* g_tx is O_NONBLOCK so a full /player queue returns EAGAIN immediately. A user
      * action (play/seek/volume) shouldn't be silently dropped, so retry briefly
@@ -456,7 +491,7 @@ static int ipc_send_internal(const char*frame, int quiet){
      * queue after a restart looks exactly like this; H1). Reopening a merely transiently-full
      * healthy queue is harmless: same queue object, no messages lost. */
     if(g_tx!=(mqd_t)-1){ mq_close(g_tx); g_tx=(mqd_t)-1; }
-    if(!quiet){ g_send_err = 1; fprintf(stderr,"ipc_send_cmd '%s' failed: %s\n", frame, strerror(err)); }
+    if(!quiet && !g_quiet_all){ g_send_err = 1; fprintf(stderr,"ipc_send_cmd '%s' failed: %s\n", frame, strerror(err)); }
     return -1;
 }
 /* user-action send: a real failure raises the toast flag. */
