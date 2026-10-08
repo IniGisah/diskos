@@ -274,13 +274,28 @@ static int bt_mac_valid(const char *mac);
 static int bt_codec_frame_value(const char *mac, int v, char *out, int cap);
 #define BTC_AAC  2u
 #define BTC_LDAC 4u
-static unsigned bt_codec_need(int v){ return v == 1 ? BTC_AAC : (v >= 2 && v <= 4) ? BTC_LDAC : 0u; }
-/* The stock VALUE1 to send: the saved choice, or SBC when the sink is known not to offer that codec. */
+/* The stock VALUE1 to send: the best codec supported by the sink that does not exceed the user's preference.
+ * Priority hierarchy matches stock firmware: LDAC (quality per choice) -> AAC -> SBC. */
 int bt_codec_pick(int choice, unsigned avail, int avail_known){
     if(choice < 0 || choice >= BT_CODEC_N) return 0;
-    unsigned need = bt_codec_need(choice);
-    if(need && !(avail_known && (avail & need))) return 0;   /* offered, or unknown: SBC */
-    return choice;
+    if(!avail_known) return 0;   /* sink capabilities not yet known: keep SBC */
+
+    /* If user chose LDAC (2=Mobile, 3=Standard, 4=High):
+     * Prefer LDAC if available; fall back to AAC if available; otherwise SBC. */
+    if(choice >= 2 && choice <= 4){
+        if(avail & BTC_LDAC) return choice;
+        if(avail & BTC_AAC)  return 1;
+        return 0;
+    }
+
+    /* If user chose AAC (1):
+     * Prefer AAC if available; otherwise SBC. */
+    if(choice == 1){
+        if(avail & BTC_AAC)  return 1;
+        return 0;
+    }
+
+    return 0;
 }
 /* Codecs a sink offers, from `bluealsa-cli info <pcm>`: the words on the "Available codecs:" line and on the lines
  * after it that carry no ':'. *known = 0 when that header is missing (unparseable/failed query). */

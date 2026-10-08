@@ -760,7 +760,7 @@ static const setting_t TABLE[] = {
     { "Network", "WIRELESS", "Bluetooth", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_bt, 0,
       "Pair Bluetooth devices. Audio routes to connected headphones or speakers (SBC, beta).", NULL, "Pair wireless audio devices" },
     { "Network", "WIRELESS", "Bluetooth Codec", ST_CYCLER, "bt_codec", 0,0,0, BT_CODEC_LABEL, BT_CODEC_N, NULL, NULL, 0,
-      "Codec for Bluetooth headphones, as in the stock player. Applies the next time the headphones connect. If they lack the codec, SBC is used. AAC and LDAC are heavier for this player and may stutter.", NULL, "Headphone wireless audio codec" },
+      "Highest preferred codec for Bluetooth headphones (LDAC -> AAC -> SBC). Automatically falls back to the best codec supported by your headphones.", NULL, "Headphone wireless audio codec" },
 
     /* ==== System ==== */
     /* Power & Battery */
