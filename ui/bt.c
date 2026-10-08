@@ -67,8 +67,16 @@ static void scan_stop(void){
 static pid_t g_bt_stuck[BT_STUCK_MAX];
 
 static void bt_reap_stuck(void){
-    for(int i = 0; i < BT_STUCK_MAX; i++)
-        if(g_bt_stuck[i] > 0 && waitpid(g_bt_stuck[i], NULL, WNOHANG) != 0) g_bt_stuck[i] = 0;
+    for(int i = 0; i < BT_STUCK_MAX; i++){
+        if(g_bt_stuck[i] > 0){
+            if(waitpid(g_bt_stuck[i], NULL, WNOHANG) != 0){
+                g_bt_stuck[i] = 0;
+            } else {
+                kill(-g_bt_stuck[i], SIGKILL);
+                kill(g_bt_stuck[i], SIGKILL);
+            }
+        }
+    }
 }
 
 /* Like run_cap, but the child runs in its OWN process group and is HARD-KILLED after `timeout_ms`, so a
@@ -84,7 +92,14 @@ static int run_cap_bounded(const char *cmd, char *out, int cap, int timeout_ms){
     bt_reap_stuck();
     int slot = -1;
     for(int i = 0; i < BT_STUCK_MAX; i++) if(g_bt_stuck[i] <= 0){ slot = i; break; }
-    if(slot < 0) return 0;                     /* too many unkillable probes already: do not add another */
+    if(slot < 0){
+        /* Force reuse of the oldest slot rather than permanently locking out all probes */
+        slot = 0;
+        kill(-g_bt_stuck[0], SIGKILL);
+        kill(g_bt_stuck[0], SIGKILL);
+        waitpid(g_bt_stuck[0], NULL, WNOHANG);
+        g_bt_stuck[0] = 0;
+    }
     int fds[2];
     if(pipe(fds) != 0) return 0;
     pid_t pid = fork();
@@ -299,7 +314,7 @@ static int bt_codec_query_cmd(const char *mac, char *out, int cap){
     char d[24]; int n = 0;
     for(int i = 0; i < 17; i++) d[n++] = mac[i] == ':' ? '_' : mac[i];
     d[n] = 0;
-    int r = snprintf(out, cap, "p=$(bluealsa-cli list-pcms 2>/dev/null | grep -i 'dev_%s/a2dpsrc' | head -n 1); "
+    int r = snprintf(out, cap, "p=$(bluealsa-cli list-pcms 2>/dev/null | grep -i 'dev_%s/a2dp' | head -n 1); "
                                "[ -n \"$p\" ] && { echo \"PCM=$p\"; bluealsa-cli info \"$p\" 2>/dev/null; }", d);
     return (r > 0 && r < cap) ? 0 : -1;
 }
@@ -499,6 +514,9 @@ static int bt_mac_valid(const char *mac){
     return mac[17] == 0;
 }
 
+static int bt_dev_connected(const char *mac);
+static int g_bt_autoroute_misses = 0;
+
 /* Route once per connected bluealsa A2DP sink. Keeping the MAC latched while the
  * PCM exists preserves a manual switch back to analog until the sink reconnects. */
 static void bt_autoroute_poll_cb(lv_timer_t *t){
@@ -506,31 +524,52 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
     /* The post-restart settle guard lives in ui_route_bt (covers every routing path); this poll keeps
      * firing during the window and routes on the first tick past it (ui_route_bt returns "not routed"
      * meanwhile, so g_bt_autorouted is not latched and the retry stands). */
-    char path[256], mac[20];
+    char path[512], mac[20];
     int found = 0;
-    /* bounded: bluealsa-cli talks to bluealsa and can stall if it is wedged; this runs on a 3s poll
-     * timer (main thread), so a hang here would freeze the UI. No `timeout` binary on the device. */
-    if(run_cap_bounded("bluealsa-cli list-pcms 2>/dev/null | grep -m1 a2dpsrc", path, sizeof path, 250) > 0){
-        char *dev = strstr(path, "dev_");
-        if(dev){
-            dev += 4;
-            char *slash = strchr(dev, '/');
-            if(slash && slash - dev == 17){
-                memcpy(mac, dev, 17); mac[17] = 0;
-                for(int i = 0; i < 17; i++) if(mac[i] == '_') mac[i] = ':';
-                found = bt_mac_valid(mac);
+    /* bounded: bluealsa-cli talks to bluealsa; run directly without shell pipe to avoid extra forks. */
+    if(run_cap_bounded("bluealsa-cli list-pcms 2>/dev/null", path, sizeof path, 500) > 0){
+        char *line = path;
+        while(line && *line && !found){
+            char *next = strchr(line, '\n');
+            if(next) *next = '\0';
+            /* Match an A2DP sink endpoint (a2dpsrc / a2dp-source) */
+            if(strstr(line, "a2dp") && (strstr(line, "a2dpsrc") || strstr(line, "a2dp-source"))){
+                char *dev = strstr(line, "dev_");
+                if(dev){
+                    dev += 4;
+                    char *slash = strchr(dev, '/');
+                    if(slash && slash - dev == 17){
+                        memcpy(mac, dev, 17); mac[17] = 0;
+                        for(int i = 0; i < 17; i++) if(mac[i] == '_') mac[i] = ':';
+                        found = bt_mac_valid(mac);
+                    }
+                }
             }
+            if(!next) break;
+            line = next + 1;
         }
     }
     if(!found){
         if(g_bt_autorouted[0]){
-            g_bt_autorouted[0] = 0;
-            ui_route_analog();
-            ui_toast("Bluetooth disconnected");
+            if(++g_bt_autoroute_misses >= 3){
+                /* Only tear down the route and toast if the device is genuinely disconnected */
+                if(!bt_radio_on() || !bt_dev_connected(g_bt_autorouted)){
+                    g_bt_autorouted[0] = 0;
+                    g_bt_autoroute_misses = 0;
+                    ui_route_analog();
+                    ui_toast("Bluetooth disconnected");
+                    ui_bt_codec_upgrade_cancel();
+                } else {
+                    /* Device is still connected at BT layer (e.g. codec renegotiation or BlueALSA settling) */
+                    bt_ensure_services();
+                }
+            }
+        } else {
+            ui_bt_codec_upgrade_cancel();
         }
-        ui_bt_codec_upgrade_cancel();
         return;
     }
+    g_bt_autoroute_misses = 0;
     if(strcmp(mac, g_bt_autorouted)){
         if(ui_route_bt(mac) == 0)     /* latch only on a successful route, else retry on the next poll */
             snprintf(g_bt_autorouted, sizeof g_bt_autorouted, "%s", mac);
@@ -539,17 +578,20 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
 
 static void bt_autoroute_start(void){
     if(g_bt_autoroute_timer) return;
+    g_bt_autoroute_misses = 0;
     g_bt_autoroute_timer = lv_timer_create(bt_autoroute_poll_cb, 3000, NULL);
 }
 static void bt_autoroute_stop(void){
     if(g_bt_autoroute_timer){ lv_timer_del(g_bt_autoroute_timer); g_bt_autoroute_timer = NULL; }
     g_bt_autorouted[0] = 0;
+    g_bt_autoroute_misses = 0;
 }
 /* The player restarted: a fresh mq_player defaults to local/analog output, so any "already routed to X"
  * memory is stale. Forget it so the auto-route poll re-routes the still-connected speaker (and so the
  * local re-init isn't wrongly suppressed). If BT is on but the poll timer died, re-arm it. */
 void bt_notify_player_restart(void){
     g_bt_autorouted[0] = 0;
+    g_bt_autoroute_misses = 0;
     if(bt_on() && !g_bt_autoroute_timer) bt_autoroute_start();
 }
 
@@ -573,19 +615,32 @@ static int bt_info_prop(const char *buf, const char *key, char *out, int cap){
     out[0]=0;
     return 0;
 }
-/* a device is connected when `bluetoothctl info <mac>` reports "Connected: yes" */
+/* a device is connected when `bluetoothctl info <mac>` reports "Connected: yes" or kernel has an active ACL */
 static int bt_dev_connected(const char *mac){
     if(!bt_mac_valid(mac)) return 0;
     char cmd[160], buf[2048];
     snprintf(cmd, sizeof cmd, "bluetoothctl info %s 2>/dev/null", mac);
-    run_cap_bounded(cmd, buf, sizeof buf, 350);
-    /* match the "Connected:" PROPERTY line (after indentation), not a Name:/Alias:
-     * that merely contains the text "Connected: yes". */
-    for(char *l = buf; l && *l; ){
-        char *nl = strchr(l, '\n'); if(nl) *nl = 0;
-        char *p = l; while(*p == ' ' || *p == '\t') p++;
-        if(!strncmp(p, "Connected:", 10)) return strstr(p, "yes") != NULL;
-        if(!nl) break; l = nl + 1;
+    if(run_cap_bounded(cmd, buf, sizeof buf, 350) > 0){
+        /* match the "Connected:" PROPERTY line (after indentation), not a Name:/Alias:
+         * that merely contains the text "Connected: yes". */
+        for(char *l = buf; l && *l; ){
+            char *nl = strchr(l, '\n'); if(nl) *nl = 0;
+            char *p = l; while(*p == ' ' || *p == '\t') p++;
+            if(!strncmp(p, "Connected:", 10)) return strstr(p, "yes") != NULL;
+            if(!nl) break;
+            l = nl + 1;
+        }
+    }
+    /* Fallback: kernel HCI level connection check (direct, no D-Bus dependency) */
+    if(run_cap_bounded("hcitool con 2>/dev/null", buf, sizeof buf, 200) > 0){
+        char upper_mac[20];
+        for(int i = 0; i < 17; i++){
+            char c = mac[i];
+            if(c >= 'a' && c <= 'z') c -= 32;
+            upper_mac[i] = c;
+        }
+        upper_mac[17] = 0;
+        if(strstr(buf, upper_mac)) return 1;
     }
     return 0;
 }
@@ -604,6 +659,7 @@ static void bt_conn_poll_cb(lv_timer_t *t){
          * autoroute poll keeps retrying the route. */
         if(ui_route_bt(g_bt_conn_mac) == 0){
             snprintf(g_bt_autorouted, sizeof g_bt_autorouted, "%s", g_bt_conn_mac);
+            g_bt_autoroute_misses = 0;
             ui_toast("Connected");
         } else {
             ui_toast("Paired - audio stays on player");
@@ -634,6 +690,7 @@ static void bt_connect(const char *mac){
 static void bt_disconnect(const char *mac){
     if(!bt_mac_valid(mac)) return;
     if(!strcmp(mac, g_bt_autorouted)) g_bt_autorouted[0] = 0;
+    g_bt_autoroute_misses = 0;
     ui_route_analog();          /* return audio to the DAC before dropping the A2DP link */
     char cmd[128];
     snprintf(cmd, sizeof cmd, "bluetoothctl disconnect %s >/dev/null 2>&1 &", mac);
@@ -743,10 +800,40 @@ void bt_info_open(void){
     char *p = strstr(buf, "Name: ");
     if(p){ sscanf(p+6, "%95[^\n]", val); info_row("Name", val); }
     info_row("Address", g_sel_mac);
+    int is_conn = 0;
     { char v[96];   /* line-anchored property reads: a device NAME can't spoof Connected/Icon */
-      info_row("Connected", (bt_info_prop(buf,"Connected:",v,sizeof v) && !strcmp(v,"yes")) ? "Yes" : "No");
+      is_conn = (bt_info_prop(buf,"Connected:",v,sizeof v) && !strcmp(v,"yes"));
+      info_row("Connected", is_conn ? "Yes" : "No");
       info_row("Paired",    (bt_info_prop(buf,"Paired:",   v,sizeof v) && !strcmp(v,"yes")) ? "Yes" : "No");
       if(bt_info_prop(buf,"Icon:",v,sizeof v)) info_row("Type", v); }
+
+    /* Active Codec query from BlueALSA */
+    char codec_val[64] = "-";
+    if(is_conn || !strcmp(g_sel_mac, ui_route_mac())){
+        char bcmd[256], binfo[1536];
+        if(bt_codec_query_cmd(g_sel_mac, bcmd, sizeof bcmd) == 0 &&
+           run_cap_bounded(bcmd, binfo, sizeof binfo, 400) > 0){
+            char *sc = strstr(binfo, "Selected codec:");
+            if(sc){
+                sc += 15;
+                while(*sc == ' ' || *sc == '\t') sc++;
+                char *eol = strpbrk(sc, "\r\n");
+                int clen = eol ? (int)(eol - sc) : (int)strlen(sc);
+                if(clen > 0 && clen < 24){
+                    char cname[32];
+                    memcpy(cname, sc, clen); cname[clen] = '\0';
+                    char *smp = strstr(binfo, "Sampling:");
+                    int khz = 0;
+                    if(smp && sscanf(smp + 9, "%d", &khz) == 1 && khz > 0){
+                        snprintf(codec_val, sizeof codec_val, "%s (%d kHz)", cname, khz / 1000);
+                    } else {
+                        snprintf(codec_val, sizeof codec_val, "%s", cname);
+                    }
+                }
+            }
+        }
+    }
+    info_row("Codec", codec_val);
     info_row("Audio", "On (beta)");   /* routing works; SBC over this CPU can be rough. short: value label is 142px */
     info_action_row("Forget This Device", info_forget_cb);   /* C13: unpair + untrust */
     screen_show(SCR_BT_INFO);
