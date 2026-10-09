@@ -17,6 +17,7 @@ SIGN_DIR="$REPO_ROOT/signing"
 BIN=""
 EPOCH=""
 REBOOT=0
+PERMANENT=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -28,9 +29,17 @@ while [ $# -gt 0 ]; do
             REBOOT=1
             shift
             ;;
+        --permanent)
+            PERMANENT=1
+            shift
+            ;;
+        --trial)
+            PERMANENT=0
+            shift
+            ;;
         -*)
             echo "Unknown option: $1" >&2
-            echo "Usage: DISKOS_IP=<ip> DISKOS_PW=<pw> $0 [path/to/mq_ui] [--epoch N] [--reboot]" >&2
+            echo "Usage: DISKOS_IP=<ip> DISKOS_PW=<pw> $0 [path/to/mq_ui] [--epoch N] [--reboot] [--permanent]" >&2
             exit 1
             ;;
         *)
@@ -183,14 +192,22 @@ sys.stderr.write("\n")
     cat "$file"
 }
 
-echo ">> Uploading signed bundle (${TAR_SIZE_MB} MB) to root@$IP:/usr/data/updates/pending..."
-stream_with_progress "$TAR_FILE" "$TAR_SIZE" | "${SSH_CMD[@]}" "root@$IP" \
-    'mkdir -p /usr/data/updates/pending && rm -f /usr/data/updates/pending/ready && cd /usr/data/updates/pending && tar -xf -'
+if [ "$PERMANENT" -eq 1 ]; then
+    TARGET_DIR="/usr/data/updates/good.incoming"
+    echo ">> Uploading signed bundle (${TAR_SIZE_MB} MB) to root@$IP (direct permanent mode)..."
+    stream_with_progress "$TAR_FILE" "$TAR_SIZE" | "${SSH_CMD[@]}" "root@$IP" \
+        "mkdir -p $TARGET_DIR && rm -rf $TARGET_DIR/* && cd $TARGET_DIR && tar -xf -"
+else
+    TARGET_DIR="/usr/data/updates/pending"
+    echo ">> Uploading signed bundle (${TAR_SIZE_MB} MB) to root@$IP (trial safety net mode)..."
+    stream_with_progress "$TAR_FILE" "$TAR_SIZE" | "${SSH_CMD[@]}" "root@$IP" \
+        "mkdir -p $TARGET_DIR && rm -f $TARGET_DIR/ready && cd $TARGET_DIR && tar -xf -"
+fi
 echo "   Bundle uploaded and extracted on device."
 
 # Verify SHA256 of uploaded binary on device
 echo ">> Verifying remote integrity (SHA-256)..."
-REMOTE_SHA="$("${SSH_CMD[@]}" "root@$IP" "sha256sum /usr/data/updates/pending/mq_ui 2>/dev/null | cut -d' ' -f1")"
+REMOTE_SHA="$("${SSH_CMD[@]}" "root@$IP" "sha256sum $TARGET_DIR/mq_ui 2>/dev/null | cut -d' ' -f1")"
 REMOTE_SHA="$(echo "$REMOTE_SHA" | tr -d '\r\n ')"
 if [ "$REMOTE_SHA" != "$UI_HASH" ]; then
     echo "ERROR: Uploaded binary SHA-256 mismatch (local=$UI_HASH, remote=$REMOTE_SHA)!" >&2
@@ -200,12 +217,39 @@ echo "   Remote integrity check: OK ($REMOTE_SHA)"
 
 # Arm update
 echo ">> Arming update on device..."
-"${SSH_CMD[@]}" "root@$IP" "touch /usr/data/updates/pending/ready && sync"
-echo "   Update armed (/usr/data/updates/pending/ready written)."
-
-echo ""
-echo "=== Permanent update staged successfully! ==="
-echo "The update will be verified and installed automatically on the next boot."
+if [ "$PERMANENT" -eq 1 ]; then
+    "${SSH_CMD[@]}" "root@$IP" "
+        # Unblacklist this hash if it was previously rolled back
+        [ -f /usr/data/updates/rejected ] && sed -i '/$UI_HASH/d' /usr/data/updates/rejected 2>/dev/null || true
+        # Rotate good to good.prev and move incoming to good
+        rm -rf /usr/data/updates/good.prev 2>/dev/null || true
+        [ -d /usr/data/updates/good ] && mv /usr/data/updates/good /usr/data/updates/good.prev 2>/dev/null || true
+        mv /usr/data/updates/good.incoming /usr/data/updates/good
+        # Clean up any stale trial or pending state
+        rm -rf /usr/data/updates/pending /usr/data/updates/active 2>/dev/null || true
+        rm -f /usr/data/updates/trial* /usr/data/updates/healthy /usr/data/updates/rollback 2>/dev/null || true
+        # Update accepted anti-rollback floor
+        printf 'version=%s\nepoch=%s\n' '$VERSION' '$EPOCH' > /usr/data/updates/accepted.tmp \
+            && mv -f /usr/data/updates/accepted.tmp /usr/data/updates/accepted
+        touch /usr/data/updates/good/ready 2>/dev/null || true
+        sync
+    "
+    echo "   Permanent update armed in /usr/data/updates/good."
+    echo ""
+    echo "=== Permanent update staged successfully! ==="
+    echo "The update will be verified and installed automatically on the next boot."
+else
+    "${SSH_CMD[@]}" "root@$IP" "
+        # Unblacklist this hash if it was previously rolled back
+        [ -f /usr/data/updates/rejected ] && sed -i '/$UI_HASH/d' /usr/data/updates/rejected 2>/dev/null || true
+        touch /usr/data/updates/pending/ready
+        sync
+    "
+    echo "   Trial update armed (/usr/data/updates/pending/ready written)."
+    echo ""
+    echo "=== Trial update staged successfully! ==="
+    echo "The update will boot with trial safety net on the next boot."
+fi
 
 if [ "$REBOOT" -eq 1 ]; then
     echo ">> Rebooting device now..."

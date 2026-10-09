@@ -507,8 +507,14 @@ static void ota_keep_prompt(void){
 }
 static void ota_health_cb(lv_timer_t *t){
     if(lv_tick_elaps(g_hl.t0) < OTA_HEALTH_MIN_MS) return;
-    if(!atomic_load(&g_hl.ok) && atomic_load(&g_hl.play) && ota_pcm_running(&OTA_DEV)) atomic_store(&g_hl.ok, 1);
+    int pcm_on = ota_pcm_running(&OTA_DEV);
+    if(!pcm_on){
+        int ui_is_playing(void);
+        if(ui_is_playing()) pcm_on = 1;
+    }
+    if(!atomic_load(&g_hl.ok) && atomic_load(&g_hl.play) && pcm_on) atomic_store(&g_hl.ok, 1);
     if(atomic_load(&g_hl.ok)){
+        fprintf(stderr, "ota: trial health proved (playback confirmed), saving healthy marker\n");
         pthread_t th;
         if(pthread_create(&th, NULL, ota_health_thread, NULL) == 0) pthread_detach(th);
         lv_timer_delete(t); g_hl_tm = NULL;
