@@ -132,13 +132,72 @@ int sys_about_collect(const sys_paths_t *pp, const char *diskos_id, sys_about_ro
         add_row(rows, &n, max, "Internal", "%s free", c);
     }
     int pct = sys_read_battery(p);
-    char hl[24] = "", cy[16] = "";
-    snprintf(path, sizeof path, "%s/health", p->batt_dir);   if(read_small(path, hl, sizeof hl) != 0) hl[0] = 0;
-    snprintf(path, sizeof path, "%s/cycle_count", p->batt_dir); if(read_small(path, cy, sizeof cy) != 0) cy[0] = 0;
-    if(pct >= 0) snprintf(b, sizeof b, "%d%%", pct); else snprintf(b, sizeof b, "--");
-    if(hl[0]){ size_t l = strlen(b); snprintf(b + l, sizeof b - l, ", %s", hl); }
-    if(cy[0]){ size_t l = strlen(b); snprintf(b + l, sizeof b - l, ", %s cycles", cy); }
+    char cur_s[16] = "", tech[24] = "";
+    int chg = -1;
+    snprintf(path, sizeof path, "%s/current_now", p->batt_dir);
+    if(read_small(path, cur_s, sizeof cur_s) == 0 && cur_s[0]){
+        chg = (strtol(cur_s, NULL, 10) > 0);
+    }
+    snprintf(path, sizeof path, "%s/technology", p->batt_dir);
+    if(read_small(path, tech, sizeof tech) != 0) tech[0] = 0;
+
+    if(pct >= 0){
+        if(chg == 1){
+            if(pct == 100) snprintf(b, sizeof b, "100%% (Charging / Full)");
+            else           snprintf(b, sizeof b, "%d%% (Charging)", pct);
+        } else if(chg == 0){
+            snprintf(b, sizeof b, "%d%% (Discharging)", pct);
+        } else {
+            snprintf(b, sizeof b, "%d%%", pct);
+        }
+    } else {
+        snprintf(b, sizeof b, "--");
+    }
+    if(tech[0]){
+        size_t l = strlen(b);
+        snprintf(b + l, sizeof b - l, ", %s", tech);
+    }
     add_row(rows, &n, max, "Battery", "%s", b);
+
+    /* Battery Voltage */
+    char v_s[32] = "";
+    snprintf(path, sizeof path, "%s/voltage_now", p->batt_dir);
+    if(read_small(path, v_s, sizeof v_s) == 0 && v_s[0]){
+        long uv = strtol(v_s, NULL, 10);
+        if(uv >= 100000){
+            long mv = uv / 1000;
+            char vb[48];
+            snprintf(vb, sizeof vb, "%ld.%03ld V (%ld mV)", mv / 1000, mv % 1000, mv);
+            add_row(rows, &n, max, "Battery Voltage", "%s", vb);
+        } else if(uv > 0){
+            char vb[48];
+            snprintf(vb, sizeof vb, "%ld mV", uv);
+            add_row(rows, &n, max, "Battery Voltage", "%s", vb);
+        }
+    }
+
+    /* Battery Health & Cycles */
+    char hl[24] = "", cy[16] = "";
+    snprintf(path, sizeof path, "%s/health", p->batt_dir);       if(read_small(path, hl, sizeof hl) != 0) hl[0] = 0;
+    snprintf(path, sizeof path, "%s/cycle_count", p->batt_dir);  if(read_small(path, cy, sizeof cy) != 0) cy[0] = 0;
+    if(hl[0] && cy[0]){
+        add_row(rows, &n, max, "Battery Health", "%s (%s cycles)", hl, cy);
+    } else if(hl[0]){
+        add_row(rows, &n, max, "Battery Health", "%s", hl);
+    } else if(cy[0]){
+        add_row(rows, &n, max, "Battery Health", "%s cycles", cy);
+    }
+
+    /* Battery Temperature */
+    char tb[24] = "";
+    snprintf(path, sizeof path, "%s/temp", p->batt_dir);
+    if(read_small(path, tb, sizeof tb) == 0 && tb[0]){
+        int t = (int)strtol(tb, NULL, 10);
+        unsigned at = t < 0 ? 0u - (unsigned)t : (unsigned)t;
+        char tb_fmt[32];
+        snprintf(tb_fmt, sizeof tb_fmt, "%s%u.%u\xC2\xB0""C", t < 0 ? "-" : "", at / 10, at % 10);
+        add_row(rows, &n, max, "Battery Temp", "%s", tb_fmt);
+    }
     return n;
 }
 
@@ -357,11 +416,11 @@ static void modal_simple(const char *title, const char *body){          /* one "
 /* ---- About ---- */
 void system_about_open(int v){
     (void)v;
-    sys_about_row_t rows[12];
+    sys_about_row_t rows[16];
     char id[40]; settings_diskos_id(id, sizeof id);
-    int n = sys_about_collect(NULL, id, rows, 12);
+    int n = sys_about_collect(NULL, id, rows, 16);
     int rb = ota_rollback_take(&OTA_DEV);                    /* boot rolled a failed update back: tell the user once */
-    lv_obj_t *card = modal_card("About", 300);
+    lv_obj_t *card = modal_card("Device Info", 300);
     if(rb){
         char note[80]; snprintf(note, sizeof note, "Update failed to start - back on %s", DISKOS_VERSION);
         modal_text(card, note, 40, THEME_CLR_STATUS_WARNING);

@@ -437,6 +437,60 @@ static int read_temp_tenths(int *out) {
   *out = t;
   return 0;
 }
+static int is_charging(void) {
+  FILE *f = fopen("/sys/class/power_supply/cw221X-bat/current_now", "r");
+  if (!f)
+    return 0;
+  long cur = 0;
+  int ok = fscanf(f, "%ld", &cur) == 1;
+  fclose(f);
+  return ok && (cur > 0);
+}
+
+static long read_voltage_uv(void) {
+  FILE *f = fopen("/sys/class/power_supply/cw221X-bat/voltage_now", "r");
+  if (!f)
+    return -1;
+  long uv = 0;
+  int ok = fscanf(f, "%ld", &uv) == 1;
+  fclose(f);
+  return ok ? uv : -1;
+}
+
+static int read_capacity(void) {
+  FILE *f = fopen("/sys/class/power_supply/cw221X-bat/capacity", "r");
+  if (!f)
+    return -1;
+  int cap = 0;
+  int ok = fscanf(f, "%d", &cap) == 1;
+  fclose(f);
+  return ok ? cap : -1;
+}
+
+static void check_low_battery(void) {
+  static int low_count;
+  if (power_shutdown_phase() != PW_OFF)
+    return;
+  if (is_charging()) {
+    low_count = 0;
+    return;
+  }
+  long uv = read_voltage_uv();
+  int cap = read_capacity();
+  /* Critical battery when discharging: cell voltage <= 3.35V or (0% and cell voltage <= 3.40V) */
+  int critical = (uv > 0 && uv <= 3350000) || (cap == 0 && uv > 0 && uv <= 3400000) ||
+                 (uv <= 0 && cap == 0);
+  if (critical) {
+    if (++low_count >= 2) {
+      low_count = 0;
+      ui_toast("Battery low - shutting down");
+      power_shutdown_request();
+    }
+  } else {
+    low_count = 0;
+  }
+}
+
 void power_tick(uint32_t last_input_ms, int playing) {
   static uint32_t last;
   static int have_last, temp_state;
@@ -468,6 +522,7 @@ void power_tick(uint32_t last_input_ms, int playing) {
   have_last = 1;
   if (power_supported())
     idle_takeover();
+  check_low_battery();
   int t;
   if (read_temp_tenths(&t) != 0)
     return;

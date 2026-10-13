@@ -816,6 +816,8 @@ static const setting_t TABLE[] = {
       "Interface language. Song, artist and album names are always shown as they are tagged.", NULL, "Interface display language" },
     { "System", "DEVICE INFORMATION", "Device Info", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, system_about_open, 0,
       "Model, stock firmware, diskOS build, MAC addresses, storage and battery.", NULL, "Hardware, battery and storage info" },
+    { "System", "DEVICE INFORMATION", "Battery Voltage", ST_READONLY, NULL, 0,0,0, NULL,0, "@voltage", NULL, 0,
+      "Current battery cell voltage from the fuel gauge (nominal 3.7V, 3.3V-4.2V range).", NULL, "Battery cell voltage" },
     { "System", "DEVICE INFORMATION", "Temperature", ST_READONLY, NULL, 0,0,0, NULL,0, "@temp", NULL, 0,
       "Battery/board temperature from the fuel gauge (this SoC exposes no core sensor).", NULL, "Battery and board temperature" },
     { "System", "DEVICE INFORMATION", "Debug Mode", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_debug_mode, 0,
@@ -868,6 +870,18 @@ static void read_batt_temp(char *buf, int n){
         snprintf(buf, n, "%s%u.%u\xC2\xB0""C", t<0?"-":"", at/10, at%10);   /* 305->"30.5°C", -5->"-0.5°C" */
     } else { if(f) fclose(f); snprintf(buf, n, "--"); }
 }
+static void read_batt_voltage(char *buf, int n){
+    FILE *f = fopen("/sys/class/power_supply/cw221X-bat/voltage_now", "r");
+    long uv;
+    if(f && fscanf(f, "%ld", &uv) == 1){ fclose(f);
+        if(uv >= 100000){
+            long mv = uv / 1000;
+            snprintf(buf, n, "%ld.%03ld V", mv / 1000, mv % 1000);
+        } else if(uv > 0){
+            snprintf(buf, n, "%ld mV", uv);
+        } else snprintf(buf, n, "--");
+    } else { if(f) fclose(f); snprintf(buf, n, "--"); }
+}
 /* Format a slider value WITH its unit - shared by val_text (committed value) and the live drag
  * callback (uncommitted value) so brightness shows "%" and swipe-thresh "px" while dragging too. */
 static void fmt_slider(const setting_t *s, int v, char *buf, int n){
@@ -902,6 +916,7 @@ static const char *val_text(const setting_t *s, char *buf, int n){
         case ST_CYCLER: case ST_CHOICE: return (v>=0&&v<s->nopts)?tr(s->opts[v]):"?";
         case ST_READONLY:
             if(s->ro_val && !strcmp(s->ro_val, "@temp")) read_batt_temp(buf, n);
+            else if(s->ro_val && !strcmp(s->ro_val, "@voltage")) read_batt_voltage(buf, n);
             else if(s->ro_val && !strcmp(s->ro_val, "@about")) read_about(buf, n);
             else return tr(s->ro_val?s->ro_val:"");
             break;
