@@ -5,9 +5,141 @@
 #include "theme_kit.h"
 #include "screens.h"
 #include <string.h>
+#include <stdlib.h>
+#include <math.h>
 #include "theme_fonts.h"
 
 lv_obj_t *kit_edge_header(lv_obj_t *root, const char *title, lv_event_cb_t back_cb);   /* ui.c */
+int ui_screen_backlight_on(void);
+int screen_figure_number(int which);
+
+void kit_default_empty_state(kit_empty_kind_t kind, lv_obj_t *message){
+    if(strcmp(theme_kit()->id, "default") || !message) return;
+    (void)kind;
+    lv_obj_set_style_text_font(message, TF(UI_14), 0);
+    lv_obj_set_style_text_color(message, TC(TEXT_MUTED), 0);
+    lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_update_layout(message);
+    lv_area_t a; lv_obj_get_coords(message, &a);
+    lv_obj_set_style_translate_y(message, 180 - (a.y1 + a.y2) / 2, 0);
+}
+
+void kit_default_np_cover_state(lv_obj_t *cover, lv_obj_t *note, int show, int loading){
+    if(strcmp(theme_kit()->id, "default") || !cover || !note) return;
+    /* The cover itself is the rounded placeholder and remains the art tap target. */
+    lv_obj_set_style_bg_color(cover, TC(ART_PLACEHOLDER), 0);
+    lv_obj_set_style_radius(cover, 16, 0);
+    lv_label_set_text(note, loading ? LV_SYMBOL_REFRESH : LV_SYMBOL_AUDIO);
+    lv_obj_set_style_text_font(note, TF(UI_32), 0);   /* the built-in symbol font contains the music note */
+    lv_obj_set_style_text_color(note, loading ? TC(TEXT_PRIMARY) : TC(ACCENT_PRIMARY), 0);
+    if(show) lv_obj_center(note);
+}
+
+/* The capsule is a display-only perimeter: parent MAIN_END precedes every child.
+ * Five native draw primitives, no extra object or rounded clipping layer.
+ * Arc radius is the OUTER radius in LVGL; lengths use its stroke centreline. */
+typedef struct {
+    int progress;
+    lv_color_t accent, color;
+    int variant;
+} island_progress_t;
+
+static float island_luminance(lv_color_t c){
+    float v[3] = {c.red / 255.f, c.green / 255.f, c.blue / 255.f};
+    for(int i = 0; i < 3; i++) v[i] = v[i] <= .04045f ? v[i]/12.92f : powf((v[i]+.055f)/1.055f, 2.4f);
+    return .2126f*v[0] + .7152f*v[1] + .0722f*v[2];
+}
+static lv_color_t island_color(lv_color_t accent){
+    /* Default dark historically passes arbitrary album colours through. Fit this
+     * new indicator to 3:1 on both sides of its border, retaining the hue. */
+    float bg[3] = {island_luminance(TC(CANVAS)), island_luminance(TC(SURFACE)),
+                   island_luminance(TC(SURFACE_PRESSED))};
+    lv_color_t c = accent;
+    for(int n = 0; n < 256; n++){
+        float l = island_luminance(c);
+        int pass = 1;
+        for(int i = 0; i < 3; i++) if((fmaxf(l,bg[i])+.05f)/(fminf(l,bg[i])+.05f) < 3.f) pass = 0;
+        if(pass) break;
+        int r = c.red, g = c.green, b = c.blue;
+        if(theme_variant()){ if(r) r--; if(g) g--; if(b) b--; }
+        else { if(r < 255) r++; if(g < 255) g++; if(b < 255) b++; }
+        c = theme_color_from_rgb((uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b);
+    }
+    return c;
+}
+
+/* Visit only the requested interval, in clockwise order from the left end's
+ * 127-degree point, matching Now Playing's rotation. Used for drawing AND damage. */
+static void island_visit(lv_obj_t *pill, float from, float to, lv_layer_t *layer, lv_color_t color){
+    if(to <= from) return;
+    lv_area_t a; lv_obj_get_coords(pill, &a);
+    int radius = lv_obj_get_height(pill)/2;
+    int straight = lv_obj_get_width(pill) - 2*radius;
+    if(radius < 3 || straight < 0) return;
+    float unit = (radius - 1.5f) * (float)M_PI / 180.f;
+    float lengths[5] = {143*unit, straight, 180*unit, straight, 37*unit};
+    float total = 2*straight + 360*unit, cursor = 0;
+    from *= total; to *= total;
+    for(int i = 0; i < 5; i++){
+        float lo = fmaxf(from-cursor, 0), hi = fminf(to-cursor, lengths[i]);
+        cursor += lengths[i];
+        if(hi <= lo) continue;
+        lv_area_t damage;
+        if(i == 1 || i == 3){
+            int x = i == 1 ? a.x1+radius : a.x2+1-radius;
+            int y = i == 1 ? a.y1+1 : a.y2-1;
+            int sign = i == 1 ? 1 : -1;
+            lv_draw_line_dsc_t d; lv_draw_line_dsc_init(&d);
+            d.p1 = (lv_point_precise_t){x+sign*(int)lroundf(lo), y};
+            d.p2 = (lv_point_precise_t){x+sign*(int)lroundf(hi), y};
+            if(d.p1.x == d.p2.x) continue;
+            d.width = 3; d.color = color; d.opa = LV_OPA_COVER;
+            d.round_start = d.round_end = 1;
+            damage = (lv_area_t){LV_MIN(d.p1.x,d.p2.x)-3, y-3, LV_MAX(d.p1.x,d.p2.x)+3, y+3};
+            if(layer) lv_draw_line(layer, &d);
+        } else {
+            int start = i == 0 ? 127 : i == 2 ? 270 : 90;
+            lv_draw_arc_dsc_t d; lv_draw_arc_dsc_init(&d);
+            d.center = (lv_point_t){i == 2 ? a.x2+1-radius : a.x1+radius, a.y1+radius};
+            d.radius = radius; d.width = 3; d.color = color;
+            d.opa = LV_OPA_COVER; d.rounded = 1;
+            d.start_angle = start + (int)lroundf(lo/unit);
+            d.end_angle = start + (int)lroundf(hi/unit);
+            if(d.start_angle == d.end_angle) continue;
+            lv_draw_arc_get_area(d.center.x, d.center.y, d.radius,
+                                 d.start_angle, d.end_angle, d.width, true, &damage);
+            if(layer) lv_draw_arc(layer, &d);
+        }
+        if(!layer) lv_obj_invalidate_area(pill, &damage);
+    }
+}
+static void island_event(lv_event_t *e){
+    island_progress_t *s = lv_event_get_user_data(e);
+    if(lv_event_get_code(e) == LV_EVENT_DELETE){ free(s); return; }
+    if(lv_event_get_code(e) == LV_EVENT_DRAW_MAIN_END)
+        island_visit(lv_event_get_target(e), 0, s->progress/1000.f, lv_event_get_layer(e), s->color);
+}
+void kit_default_home_progress(lv_obj_t *pill, int progress, int have_track, lv_color_t accent){
+    if(strcmp(theme_kit()->id, "default") || !pill) return;
+    island_progress_t *s = NULL;
+    for(uint32_t i = 0; i < lv_obj_get_event_count(pill); i++){
+        lv_event_dsc_t *d = lv_obj_get_event_dsc(pill, i);
+        if(lv_event_dsc_get_cb(d) == island_event){ s = lv_event_dsc_get_user_data(d); break; }
+    }
+    if(!s){
+        s = calloc(1, sizeof(*s));
+        if(!s) return;
+        s->variant = -1;
+        lv_obj_add_event_cb(pill, island_event, LV_EVENT_ALL, s);
+    }
+    progress = have_track ? LV_CLAMP(0, progress, 1000) : 0;
+    int recolor = s->variant != theme_variant() || !lv_color_eq(s->accent, accent);
+    if(recolor){ s->accent = accent; s->color = island_color(accent); s->variant = theme_variant(); }
+    int old = s->progress;
+    s->progress = progress;
+    if(recolor) island_visit(pill, 0, LV_MAX(old,progress)/1000.f, NULL, s->color);
+    else if(old != progress) island_visit(pill, LV_MIN(old,progress)/1000.f, LV_MAX(old,progress)/1000.f, NULL, s->color);
+}
 
 
 /* big words and numbers set in Default's large faces (the volume readout, the album-wall letter): the theme's own
@@ -53,6 +185,26 @@ static void np_text_rows(const np_parts_t *p, int title_y, int artist_y, int alb
     lv_obj_set_y(p->artist, artist_y);
     lv_obj_set_y(p->album, album_y);
 }
+/* Keep saver song blocks below the rendered date, including a larger user font. */
+static int saver_song_y(lv_obj_t *date, int base){
+    if(date && !lv_obj_has_flag(date, LV_OBJ_FLAG_HIDDEN)){
+        lv_obj_update_layout(date);
+        int below = lv_obj_get_y(date) + lv_obj_get_height(date) + 8;
+        if(below > base) base = below;
+    }
+    return base;
+}
+/* A rectangular song block needs room at its lower corners on the round glass. */
+static int saver_song_width(lv_obj_t *bottom_row, int width){
+    lv_obj_update_layout(bottom_row);
+    int bottom = lv_obj_get_y(bottom_row) + lv_obj_get_height(bottom_row);
+    int dy = bottom - 180;
+    if((width / 2) * (width / 2) + dy * dy > 176 * 176){
+        int fit = ui_round_width(bottom, 10);
+        if(fit < width) width = fit;
+    }
+    return width;
+}
 /* the unique themes keep their own backgrounds: no blurred cover behind Home and Now Playing */
 static void own_backgrounds(void){ home_set_backdrop_enabled(0); ui_np_backdrop_enabled(0); }
 
@@ -80,6 +232,37 @@ static void home_library_fit(lv_obj_t *btn){
 /* ================================================================ hi-fi
  * A 1980s hi-fi deck: flat faceplate rows with hairlines, machined plates (6 px corners, a hairline edge) for buttons
  * and popups, spaced small-caps titles, an LCD clock whose unlit segments glow faintly behind the time. */
+static void hifi_led_scroll_event(lv_event_t *e);
+static void hifi_led_scroll_hooks(lv_obj_t *row, lv_obj_t *led, int on){
+    for(lv_obj_t *p = row; p; p = lv_obj_get_parent(p)){
+        if(!lv_obj_has_flag(p, LV_OBJ_FLAG_SCROLLABLE)) continue;
+        lv_obj_remove_event_cb_with_user_data(p, hifi_led_scroll_event, led);
+        if(on) lv_obj_add_event_cb(p, hifi_led_scroll_event, LV_EVENT_SCROLL_BEGIN, led);
+    }
+}
+static void hifi_led_event(lv_event_t *e){
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *led = lv_event_get_user_data(e);
+    if(code == LV_EVENT_DELETE){
+        hifi_led_scroll_hooks(lv_event_get_target(e), led, 0);
+        return;
+    }
+    if(code != LV_EVENT_PRESSED && code != LV_EVENT_RELEASED && code != LV_EVENT_PRESS_LOST) return;
+    hifi_led_scroll_hooks(lv_event_get_target(e), led, code == LV_EVENT_PRESSED);
+    lv_obj_set_style_bg_color(led, code == LV_EVENT_PRESSED ? TC(ACCENT_PRIMARY) : TC(BORDER_STRONG), 0);
+}
+static void hifi_led_scroll_event(lv_event_t *e){
+    lv_obj_t *led = lv_event_get_user_data(e);
+    lv_obj_set_style_bg_color(led, TC(BORDER_STRONG), 0);
+}
+static void hifi_led_attach(lv_obj_t *led){
+    lv_obj_t *row = lv_obj_get_parent(led);
+    for(uint32_t i = 0; i < lv_obj_get_event_count(row); i++){
+        lv_event_dsc_t *d = lv_obj_get_event_dsc(row, i);
+        if(lv_event_dsc_get_cb(d) == hifi_led_event && lv_event_dsc_get_user_data(d) == led) return;
+    }
+    lv_obj_add_event_cb(row, hifi_led_event, LV_EVENT_ALL, led);
+}
 static void hifi_style(lv_obj_t *o, kit_role_t r){
     switch(r){
     case KIT_TITLE:
@@ -98,12 +281,15 @@ static void hifi_style(lv_obj_t *o, kit_role_t r){
     case KIT_ROW_TEXT:
         lv_obj_set_style_text_letter_space(o, 1, 0);
         break;
-    case KIT_ROW_CHEVRON:                             /* the drill-down mark becomes an unlit indicator slot */
+    case KIT_ROW_CHEVRON:                             /* the drill-down mark becomes an unlit LED */
         lv_label_set_text(o, "");
-        lv_obj_set_size(o, 4, 16);
+        lv_obj_set_size(o, 6, 6);
         lv_obj_set_style_bg_color(o, TC(BORDER_STRONG), 0);
         lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(o, 2, 0);
+        lv_obj_set_style_radius(o, LV_RADIUS_CIRCLE, 0);
+        lv_obj_align(o, LV_ALIGN_RIGHT_MID, -8, 0);
+        lv_obj_clear_flag(o, LV_OBJ_FLAG_CLICKABLE);
+        hifi_led_attach(o);
         break;
     case KIT_BUTTON: case KIT_CARD: case KIT_POPUP:
         lv_obj_set_style_radius(o, r == KIT_POPUP ? 8 : 6, 0);
@@ -224,10 +410,13 @@ static void hifi_home(const home_parts_t *p){
 }
 static void hifi_np(const np_parts_t *p){
     own_backgrounds();
-    /* a thin amber ring over the tick bezel, LCD time counters either side, a machined play key */
+    /* The real ring remains the seek geometry; its fill is drawn by the bezel ticks. */
     lv_obj_set_style_arc_width(p->ring, 3, LV_PART_MAIN);
     lv_obj_set_style_arc_width(p->ring, 3, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(p->ring, TC(BORDER_STRONG), LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(p->ring, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(p->ring, LV_OPA_TRANSP, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(p->ring, LV_OPA_TRANSP, LV_PART_KNOB);
     lv_obj_set_style_pad_all(p->ring, 3, LV_PART_KNOB);
     lv_obj_set_style_radius(p->cover, 6, 0);
     lv_obj_set_style_border_width(p->cover, 1, 0);
@@ -270,10 +459,68 @@ static void hifi_qs_tile(lv_obj_t *c, lv_obj_t *g, lv_obj_t *cap, int on, int to
 static void hifi_saver(const saver_parts_t *p){
     if(p->clock) lv_obj_set_style_text_color(p->clock, TC(ACCENT_PRIMARY), 0);
     if(p->date){ lv_obj_set_style_text_letter_space(p->date, 3, 0); lv_obj_set_style_text_color(p->date, TC(TEXT_SECONDARY), 0); }
+    if(p->track && p->artist){
+        lv_obj_t *well = lv_obj_get_parent(p->track);
+        if(well == p->root){
+            well = lv_obj_create(p->root);
+            lv_obj_remove_style_all(well);
+            kit_keep(well);
+            lv_obj_clear_flag(well, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_set_size(well, 204, 49);
+            lv_obj_set_style_radius(well, 6, 0);
+            lv_obj_set_style_bg_color(well, TC(SURFACE), 0);
+            lv_obj_set_style_bg_opa(well, LV_OPA_COVER, 0);
+            lv_obj_set_style_border_width(well, 1, 0);
+            lv_obj_set_style_border_color(well, TC(BORDER_STRONG), 0);
+            lv_obj_set_style_border_opa(well, LV_OPA_COVER, 0);
+            lv_obj_set_parent(p->track, well);
+            lv_obj_set_parent(p->artist, well);
+        }
+        int well_y = saver_song_y(p->date, p->style == 4 ? 272 : 278);
+        /* Keep the full text width; shorten the well at the lower arc instead. */
+        int well_h = 49;
+        while(well_h > 1){
+            int dy = well_y + well_h - 180;
+            if(102 * 102 + dy * dy <= 176 * 176) break;
+            well_h--;
+        }
+        lv_obj_set_size(well, 204, well_h);
+        lv_obj_align(well, LV_ALIGN_TOP_MID, 0, well_y);
+        lv_obj_set_width(p->track, 192);
+        lv_obj_set_width(p->artist, 192);
+        lv_obj_set_style_text_font(p->track, TF(USER_16), 0);
+        lv_obj_set_style_text_font(p->artist, TF(USER_14), 0);
+        lv_obj_set_style_text_color(p->track, TC(ACCENT_PRIMARY), 0);
+        lv_obj_set_style_text_color(p->artist, TC(TEXT_SECONDARY), 0);
+        lv_obj_align(p->track, LV_ALIGN_TOP_MID, 0, well_h < 45 ? 3 : 5);
+        lv_obj_align(p->artist, LV_ALIGN_TOP_MID, 0, well_h < 45 ? 24 : 26);
+    }
+}
+static void hifi_empty(kit_empty_kind_t kind, lv_obj_t *message){
+    (void)kind;
+    if(!message) return;
+    lv_obj_set_style_text_font(message, TF(USER_16), 0);
+    lv_obj_set_style_text_color(message, TC(TEXT_MUTED), 0);
+    lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_translate_y(message, 0, 0);
+    lv_obj_update_layout(message);
+    lv_area_t a; lv_obj_get_coords(message, &a);
+    lv_obj_set_style_translate_y(message, 180 - (a.y1 + a.y2) / 2, 0);
+}
+static void hifi_cover(lv_obj_t *cover, lv_obj_t *note, int show, int loading){
+    if(!cover || !note) return;
+    lv_obj_set_style_bg_color(cover, TC(SURFACE), 0);
+    lv_obj_set_style_radius(cover, 2, 0);
+    if(!show) return;
+    lv_label_set_text(note, loading ? LV_SYMBOL_REFRESH : LV_SYMBOL_AUDIO);
+    lv_obj_set_style_text_font(note, TF(UI_32), 0);   /* LVGL's symbol fallback has the music note */
+    lv_obj_set_style_text_color(note, TC(ACCENT_PRIMARY), 0);
+    lv_obj_center(note);
 }
 const theme_kit_t theme_kit_hifi = { .id = "hi-fi", .header = kit_edge_header, .style = hifi_style, .home = hifi_home,
                                      .home_clock = hifi_clock,
                                      .nowplaying = hifi_np, .qs_tile = hifi_qs_tile, .saver = hifi_saver,
+                                     .empty_state = hifi_empty, .np_cover_state = hifi_cover,
                                      .saver_mer_apart = 1 };   /* the segment face draws "PM" as "PN" */
 
 /* ================================================================ terminal
@@ -288,6 +535,85 @@ static int is_neutral_fill(lv_obj_t *o){
     return 0;
 }
 static void term_square(lv_obj_t *o){ lv_obj_set_style_radius(o, 0, 0); }
+static const char term_cursor_tag;
+static lv_timer_t *term_cursor_timer;
+static lv_obj_t *term_cursor_active;
+static lv_obj_t *term_cursor_for(lv_obj_t *root){
+    if(!root) return NULL;
+    for(uint32_t i = 0; i < lv_obj_get_child_count(root); i++){
+        lv_obj_t *c = lv_obj_get_child(root, (int32_t)i);
+        if(lv_obj_get_user_data(c) == (void *)&term_cursor_tag) return c;
+    }
+    return NULL;
+}
+static void term_cursor_place(lv_obj_t *title){
+    lv_obj_t *cur = term_cursor_for(lv_obj_get_parent(title));
+    if(!cur) return;
+    const lv_font_t *f = lv_obj_get_style_text_font(title, 0);
+    lv_point_t sz;
+    lv_text_get_size(&sz, lv_label_get_text(title), f, lv_obj_get_style_text_letter_space(title, 0),
+                     0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    int room = lv_obj_get_width(title);
+    if(sz.x > room) sz.x = room;
+    int x = lv_obj_get_x(title) + (room + sz.x) / 2 + 3;
+    if(x > 318) x = 318;
+    lv_obj_set_pos(cur, x, lv_obj_get_y(title) + (lv_obj_get_height(title) - 16) / 2);
+}
+static void term_cursor_resize(lv_event_t *e){ term_cursor_place(lv_event_get_target(e)); }
+static void term_cursor_tick(lv_timer_t *timer){
+    (void)timer;
+    lv_obj_t *root = screen_get_root(screen_current());
+    if(!ui_screen_backlight_on() || !term_cursor_active || !root ||
+       lv_obj_get_parent(term_cursor_active) != root || lv_obj_has_flag(root, LV_OBJ_FLAG_HIDDEN)){
+        lv_timer_pause(term_cursor_timer); term_cursor_active = NULL; return;
+    }
+    if(lv_obj_has_flag(term_cursor_active, LV_OBJ_FLAG_HIDDEN)) lv_obj_remove_flag(term_cursor_active, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(term_cursor_active, LV_OBJ_FLAG_HIDDEN);
+}
+void kit_cursor_sync(int backlight_on){
+    if(strcmp(theme_kit()->id, "terminal")) return;
+    lv_obj_t *cur = backlight_on ? term_cursor_for(screen_get_root(screen_current())) : NULL;
+    if(!cur){ if(term_cursor_timer) lv_timer_pause(term_cursor_timer); term_cursor_active = NULL; return; }
+    if(cur == term_cursor_active && term_cursor_timer && !lv_timer_get_paused(term_cursor_timer)) return;
+    term_cursor_active = cur;
+    lv_obj_remove_flag(cur, LV_OBJ_FLAG_HIDDEN); /* every entry/wake starts ON */
+    if(!term_cursor_timer) term_cursor_timer = lv_timer_create(term_cursor_tick, 550, NULL);
+    lv_timer_reset(term_cursor_timer);
+    lv_timer_resume(term_cursor_timer);
+}
+#ifdef DISKOS_HOST
+int kit_cursor_host_paused(void){ return !term_cursor_timer || lv_timer_get_paused(term_cursor_timer); }
+int kit_cursor_host_on(void){ return term_cursor_active && !lv_obj_has_flag(term_cursor_active, LV_OBJ_FLAG_HIDDEN); }
+void kit_cursor_host_phase(int on){
+    if(!term_cursor_active) return;
+    if(on) lv_obj_remove_flag(term_cursor_active, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(term_cursor_active, LV_OBJ_FLAG_HIDDEN);
+    if(term_cursor_timer) lv_timer_reset(term_cursor_timer);
+}
+#endif
+static void term_title_cursor(lv_obj_t *title){
+    lv_obj_t *root = lv_obj_get_parent(title);
+    if(!root || term_cursor_for(root)) return;
+    lv_obj_t *cur = lv_obj_create(root);
+    lv_obj_remove_style_all(cur); kit_keep(cur);
+    lv_obj_set_user_data(cur, (void *)&term_cursor_tag);
+    lv_obj_clear_flag(cur, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(cur, 8, 16);
+    lv_obj_set_style_bg_color(cur, TC(ACCENT_PRIMARY), 0);
+    lv_obj_set_style_bg_opa(cur, LV_OPA_COVER, 0);
+    lv_obj_add_event_cb(title, term_cursor_resize, LV_EVENT_SIZE_CHANGED, NULL);
+    term_cursor_place(title);
+}
+static void term_row_value(lv_obj_t *row, lv_obj_t *title, lv_obj_t *sub, lv_obj_t *value, kit_value_kind_t kind){
+    (void)row;
+    if(kind != KIT_VALUE_DURATION) return;
+    lv_obj_set_pos(value, 198, 17); lv_obj_set_size(value, 58, 18);
+    lv_obj_set_style_text_font(value, TF(UI_14), 0);
+    lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_style_text_color(value, TC(TEXT_SECONDARY), 0);
+    lv_obj_set_width(title, 178); /* reserve a fixed column before long text is dotted */
+    if(sub) lv_obj_set_width(sub, 178);
+}
 /* a switch drawn as "[x]" / "[ ]" at draw time, so every state change shows (the user's and the code's) */
 static void term_switch_draw(lv_event_t *e){
     lv_obj_t *o = lv_event_get_target(e);
@@ -303,7 +629,12 @@ static void term_switch_draw(lv_event_t *e){
     lv_draw_label(layer, &d, &a);
 }
 static void term_style(lv_obj_t *o, kit_role_t r){
+    if(lv_color_eq(lv_obj_get_style_text_color(o, 0), TC(STATUS_INFO)))
+        lv_obj_set_style_text_color(o, TC(ACCENT_PRIMARY), 0);
     switch(r){
+    case KIT_TITLE:
+        term_title_cursor(o);
+        break;
     case KIT_ROW:
         lv_obj_set_style_radius(o, 0, 0);
         lv_obj_set_style_bg_opa(o, LV_OPA_TRANSP, 0);
@@ -393,6 +724,7 @@ static void term_title(lv_obj_t *label, const char *text){   /* "~/library" (alr
     char path[160]; int n = lv_snprintf(path, sizeof path, "~/%s", text);
     for(int i = 2; i < n && i < (int)sizeof path; i++) if(path[i] == ' ') path[i] = '_';
     lv_label_set_text(label, path);
+    term_cursor_place(label);
 }
 static lv_obj_t *term_text(lv_obj_t *parent, const char *txt, lv_color_t c, int x, int y){
     lv_obj_t *l = lv_label_create(parent);
@@ -592,11 +924,63 @@ static void term_qs_tile(lv_obj_t *c, lv_obj_t *g, lv_obj_t *cap, int on, int to
 }
 static void term_saver(const saver_parts_t *p){
     if(p->date) lv_obj_set_style_text_color(p->date, TC(TEXT_SECONDARY), 0);
+    if(p->track && p->artist){
+        int y = saver_song_y(p->date, p->style == 4 ? 274 : 280);
+        lv_obj_set_width(p->track, 230); lv_obj_set_width(p->artist, 230);
+        lv_obj_set_style_text_font(p->track, TF(USER_16), 0);
+        lv_obj_set_style_text_font(p->artist, TF(USER_14), 0);
+        lv_obj_set_style_text_color(p->track, TC(ACCENT_PRIMARY), 0);
+        lv_obj_set_style_text_color(p->artist, TC(TEXT_MUTED), 0);
+        lv_obj_set_style_text_align(p->track, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_align(p->artist, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(p->track, LV_ALIGN_TOP_MID, 0, y);
+        lv_obj_align(p->artist, LV_ALIGN_TOP_MID, 0, y + 22);
+        int width = saver_song_width(p->artist, 230);
+        lv_obj_set_width(p->track, width); lv_obj_set_width(p->artist, width);
+    }
+}
+#define TERM_PROMPT LV_OBJ_FLAG_USER_1
+static void term_prompt_deleted(lv_event_t *e){ free(lv_obj_get_user_data(lv_event_get_target(e))); }
+static void term_prompt_draw(lv_event_t *e){
+    lv_obj_t *message = lv_event_get_target(e);
+    const char *saved = lv_obj_get_user_data(message);
+    if(!saved || strcmp(saved, lv_label_get_text(message))) return;
+    lv_area_t a; lv_obj_get_coords(message, &a);
+    lv_area_t mark = { a.x1 + 2, a.y1, a.x1 + 30, a.y2 };
+    lv_draw_label_dsc_t d; lv_draw_label_dsc_init(&d);
+    d.text = "$ ";
+    d.font = TF(UI_16);
+    d.color = TC(ACCENT_PRIMARY);
+    lv_draw_label(lv_event_get_layer(e), &d, &mark);
+}
+static void term_empty(kit_empty_kind_t kind, lv_obj_t *message){
+    (void)kind;
+    if(!message) return;
+    lv_obj_set_style_text_font(message, TF(UI_16), 0);
+    lv_obj_set_style_text_color(message, TC(TEXT_MUTED), 0);
+    lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_width(message, 272);
+    lv_obj_set_style_pad_left(message, 24, 0);
+    lv_obj_set_style_translate_x(message, 0, 0);
+    lv_obj_set_style_translate_y(message, 0, 0);
+    lv_obj_update_layout(message);
+    lv_area_t a; lv_obj_get_coords(message, &a);
+    lv_obj_set_style_translate_x(message, 38 - a.x1, 0);
+    lv_obj_set_style_translate_y(message, 174 - a.y1, 0);
+    /* Draw only for this empty message; a reused Lyrics label sheds the mark when its text changes. */
+    if(lv_obj_has_flag(message, TERM_PROMPT)) free(lv_obj_get_user_data(message));
+    lv_obj_set_user_data(message, strdup(lv_label_get_text(message)));
+    if(!lv_obj_has_flag(message, TERM_PROMPT)){
+        lv_obj_add_flag(message, TERM_PROMPT);
+        lv_obj_add_event_cb(message, term_prompt_draw, LV_EVENT_DRAW_MAIN_END, NULL);
+        lv_obj_add_event_cb(message, term_prompt_deleted, LV_EVENT_DELETE, NULL);
+    }
 }
 const theme_kit_t theme_kit_term = { .id = "terminal", .header = term_header, .style = term_style, .home = term_home,
                                      .home_clock = term_clock,
                                      .nowplaying = term_np, .quicksettings = term_qs, .qs_tile = term_qs_tile,
-                                     .saver = term_saver, .title = term_title, .np_state = term_np_state, .back_text = "<" };
+                                     .saver = term_saver, .empty_state = term_empty, .row_value = term_row_value,
+                                     .title = term_title, .np_state = term_np_state, .back_text = "<" };
 
 /* ================================================================ blueprint
  * A technical drawing on drafting paper: thin 1 px line work, square corners, spaced monospace titles with a rule
@@ -673,10 +1057,14 @@ static void blue_unshift(lv_obj_t *row){                   /* exactly what blue_
  * a subtitle) is unnumbered as a whole: the number column would cut the subtitles (blueprint's small face is
  * monospace). One walk over the list: every row's number is added, updated or removed so the list always agrees,
  * however its rows arrived (all at once or in batches). */
+int playlistview_row_pos(lv_obj_t *row, int *rows, int *two_line);   /* playlistview.c */
 static void blue_renumber(lv_obj_t *par){
     uint32_t cnt = lv_obj_get_child_count(par);
     int rows = 0, two_line = 0;
-    for(uint32_t j = 0; j < cnt; j++){
+    /* a playlist streams its rows in: its shape and numbers come from the whole playlist, not the rows built yet */
+    int streamed = par == playlistview_scroller();
+    if(streamed) playlistview_row_pos(NULL, &rows, &two_line);
+    else for(uint32_t j = 0; j < cnt; j++){
         lv_obj_t *row = lv_obj_get_child(par, (int32_t)j);
         if(!blue_is_row(row)) continue;
         rows++;
@@ -707,7 +1095,7 @@ static void blue_renumber(lv_obj_t *par){
             lv_obj_align(num, LV_ALIGN_LEFT_MID, 8, 0);
             lv_obj_add_flag(num, LV_OBJ_FLAG_USER_4);             /* already styled: the pass leaves it as drawn here */
         }
-        char b[8]; lv_snprintf(b, sizeof b, "%02d", n);
+        char b[8]; lv_snprintf(b, sizeof b, "%02d", streamed ? playlistview_row_pos(row, NULL, NULL) : n);
         if(strcmp(lv_label_get_text(num), b)) lv_label_set_text(num, b);
     }
 }
@@ -741,6 +1129,60 @@ static void blue_title_fit(lv_obj_t *o, const char *text){
     lv_obj_set_style_text_font(o, f, 0);
     lv_obj_set_style_text_letter_space(o, ls, 0);
 }
+/* A top-layer title inherits the current screen's permanent figure number. */
+static int blue_figure(lv_obj_t *o){
+    for(lv_obj_t *p = o; p; p = lv_obj_get_parent(p))
+        for(int id = SCR_HOME; id < SCR_COUNT; id++) if(p == screen_get_root(id)) return screen_figure_number(id);
+    return screen_figure_number(screen_current());
+}
+static void blue_title_form(lv_obj_t *o, const char *text, char *out, size_t cap){
+    /* EQ has slot arrows in the header band. Its figure is drawn beside the title at a smaller face. */
+    if(blue_figure(o) == screen_figure_number(SCR_EQ)){ lv_snprintf(out, cap, "%s", text ? text : ""); return; }
+    char full[192]; lv_snprintf(full, sizeof full, "fig.%d  %s", blue_figure(o), text ? text : "");
+    /* First fit the complete title by stepping down. If it still exceeds the round glass,
+     * omit the prefix so the original title keeps its full available width. */
+    const lv_font_t *f = TF(HEADER);
+    int fits = 0;
+    int32_t y = lv_obj_get_y(o);
+    int room = y >= 16 ? ui_round_width(y + 2, 10) : 250;
+    if(room > 250) room = 250;
+    room -= 20;  /* the rule's left and right padding */
+    for(int k = 0; k < 12; k++){
+        lv_point_t sz; lv_text_get_size(&sz, full, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        if(sz.x <= room){ fits = 1; break; }
+        const lv_font_t *next = theme_title_smaller(f);
+        if(!next) break;
+        f = next;
+    }
+    lv_snprintf(out, cap, "%s", fits ? full : text);
+}
+static void blue_title(lv_obj_t *o, const char *text){
+    char shown[192]; blue_title_form(o, text, shown, sizeof shown);
+    blue_title_fit(o, shown);
+    lv_label_set_text(o, shown);
+}
+static void blue_mark(lv_layer_t *layer, int x1, int y1, int x2, int y2, int dashed){
+    lv_draw_line_dsc_t d; lv_draw_line_dsc_init(&d);
+    d.p1 = (lv_point_precise_t){x1, y1}; d.p2 = (lv_point_precise_t){x2, y2};
+    d.color = TC(ACCENT_PRIMARY); d.width = 1; d.opa = LV_OPA_COVER;
+    if(dashed){ d.dash_width = 5; d.dash_gap = 4; }
+    lv_draw_line(layer, &d);
+}
+static void blue_row_draw(lv_event_t *e){
+    lv_area_t a; lv_obj_get_coords(lv_event_get_target(e), &a);
+    for(int x = a.x1 + 3; x <= a.x2 - 3; x += a.x2 - a.x1 - 6)
+        for(int y = a.y1 + 3; y <= a.y2 - 3; y += a.y2 - a.y1 - 6){
+            blue_mark(lv_event_get_layer(e), x - 2, y, x + 2, y, 0);
+            blue_mark(lv_event_get_layer(e), x, y - 2, x, y + 2, 0);
+        }
+}
+static void blue_row_decor(lv_obj_t *row, lv_obj_t *title){
+    if(!title) return;
+    lv_obj_remove_event_cb(row, blue_row_draw);
+    lv_obj_add_event_cb(row, blue_row_draw, LV_EVENT_DRAW_MAIN_END, NULL);
+}
+static lv_obj_t *g_blue_eq_fig;
+static lv_font_t g_blue_eq_font;
 static void blue_style(lv_obj_t *o, kit_role_t r){
     switch(r){
     case KIT_TITLE: {
@@ -756,6 +1198,24 @@ static void blue_style(lv_obj_t *o, kit_role_t r){
         lv_obj_set_style_border_color(o, TC(ACCENT_PRIMARY), 0);
         lv_obj_set_y(o, lv_obj_get_y(o) - 3);
         lv_obj_align(o, LV_ALIGN_TOP_MID, 0, lv_obj_get_y(o));
+        if(lv_obj_get_parent(o) == screen_get_root(SCR_EQ)){
+            if(!g_blue_eq_font.get_glyph_dsc){ g_blue_eq_font = *TF(UI_12); g_blue_eq_font.fallback = TF(UI_14); }
+            lv_obj_set_style_text_font(o, &g_blue_eq_font, 0);
+            lv_obj_set_style_text_letter_space(o, 1, 0);
+            lv_obj_set_style_pad_bottom(o, 12, 0);  /* retain the common header box; ink ends above the arrows */
+            lv_obj_set_style_border_width(o, 0, 0);
+            lv_obj_set_size(o, LV_SIZE_CONTENT, 25);
+            lv_obj_align(o, LV_ALIGN_TOP_MID, 0, 37);
+            if(!g_blue_eq_fig){
+                g_blue_eq_fig = lv_label_create(lv_obj_get_parent(o));
+                char number[16]; lv_snprintf(number, sizeof number, "fig.%d", blue_figure(o));
+                lv_label_set_text(g_blue_eq_fig, number);
+                lv_obj_set_style_text_font(g_blue_eq_fig, TF(UI_12), 0);
+                lv_obj_set_style_text_color(g_blue_eq_fig, TC(DECOR_1), 0);
+                kit_keep(g_blue_eq_fig);
+            }
+            lv_obj_align(g_blue_eq_fig, LV_ALIGN_TOP_MID, 0, 18);
+        }
         break; }
     case KIT_ROW: blue_row(o); break;
     case KIT_ROW_CHEVRON:
@@ -934,6 +1394,89 @@ static void blue_np(const np_parts_t *p){
     lv_obj_set_style_text_color(p->next, TC(ACCENT_PRIMARY), 0);
     np_text_rows(p, 191, 219, 241);                          /* the album line clears the ring at 264, no two rows touch */
     np_sides_on_cover(p, 0);                                 /* times stay at 318: the play ring ends at 312 */
+    /* Dimension rules sit under the time labels, split around the page dots. The existing
+     * circular seek remains the full input surface and its progress stays visible. */
+    for(int i = 0; i < 2; i++){
+        int x = i ? 198 : 112;
+        blue_line(p->root, x, 340, 50, 1, TC(ACCENT_PRIMARY));
+        blue_line(p->root, x, 337, 1, 7, TC(ACCENT_PRIMARY));
+        blue_line(p->root, x + 49, 337, 1, 7, TC(ACCENT_PRIMARY));
+    }
+}
+static void blue_cover_draw(lv_event_t *e){
+    lv_obj_t *cover = lv_event_get_target(e);
+    if(!lv_obj_has_flag(cover, LV_OBJ_FLAG_USER_3)) return;
+    lv_area_t a; lv_obj_get_coords(cover, &a);
+    int x1 = a.x1 + 4, y1 = a.y1 + 4, x2 = a.x2 - 4, y2 = a.y2 - 4;
+    lv_layer_t *layer = lv_event_get_layer(e);
+    blue_mark(layer, x1, y1, x2, y1, 1); blue_mark(layer, x2, y1, x2, y2, 1);
+    blue_mark(layer, x2, y2, x1, y2, 1); blue_mark(layer, x1, y2, x1, y1, 1);
+    blue_mark(layer, x1 + 10, y1 + 10, x2 - 10, y2 - 10, 0);
+    blue_mark(layer, x2 - 10, y1 + 10, x1 + 10, y2 - 10, 0);
+}
+static void blue_cover(lv_obj_t *cover, lv_obj_t *note, int show, int loading){
+    if(!cover || !note) return;
+    lv_obj_remove_event_cb(cover, blue_cover_draw);
+    lv_obj_add_event_cb(cover, blue_cover_draw, LV_EVENT_DRAW_MAIN_END, NULL);
+    if(show && !loading){ lv_obj_add_flag(cover, LV_OBJ_FLAG_USER_3); lv_obj_add_flag(note, LV_OBJ_FLAG_HIDDEN); }
+    else { lv_obj_remove_flag(cover, LV_OBJ_FLAG_USER_3); if(show) lv_obj_remove_flag(note, LV_OBJ_FLAG_HIDDEN); }
+    lv_obj_invalidate(cover);
+}
+static void blue_empty_draw(lv_event_t *e){
+    lv_obj_t *o = lv_event_get_user_data(e);
+    const char *saved = lv_obj_get_user_data(o);
+    if(lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN)) return;
+    if(!saved || strcmp(saved, lv_label_get_text(o))) return; /* Lyrics reuses this label for real lyrics */
+    lv_area_t a; lv_obj_get_coords(o, &a);
+    lv_point_t sz; lv_text_get_size(&sz, saved, lv_obj_get_style_text_font(o, 0), 0, 2, 256, LV_TEXT_FLAG_NONE);
+    int fw = sz.x + 24; if(fw < 100) fw = 100; if(fw > 280) fw = 280;
+    int x = (a.x1 + a.x2 - fw) / 2;
+    a.x1 = x; a.x2 = x + fw;
+    if(!lv_obj_has_flag(o, LV_OBJ_FLAG_USER_2)){ a.y1 -= 12; a.y2 += 12; }
+    lv_layer_t *layer = lv_event_get_layer(e);
+    blue_mark(layer, a.x1, a.y1, a.x2, a.y1, 1);
+    blue_mark(layer, a.x2, a.y1, a.x2, a.y2, 1);
+    blue_mark(layer, a.x2, a.y2, a.x1, a.y2, 1);
+    blue_mark(layer, a.x1, a.y2, a.x1, a.y1, 1);
+}
+static void blue_empty_deleted(lv_event_t *e){
+    lv_obj_t *o = lv_event_get_target(e);
+    lv_obj_remove_event_cb_with_user_data(lv_obj_get_parent(o), blue_empty_draw, o);
+    free(lv_obj_get_user_data(o));
+}
+static void blue_empty(kit_empty_kind_t kind, lv_obj_t *message){
+    if(!message) return;
+    const char *s = lv_label_get_text(message);
+    lv_obj_set_style_text_font(message, TF(UI_14), 0);
+    lv_obj_set_style_text_color(message, TC(ACCENT_PRIMARY), 0);
+    lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_CENTER, 0);
+    if(kind == KIT_EMPTY_LYRICS){
+        lv_obj_remove_flag(message, LV_OBJ_FLAG_USER_2);
+        lv_obj_set_style_pad_ver(message, 0, 0);
+        lv_obj_update_layout(message);
+        lv_area_t a; lv_obj_get_coords(message, &a);
+        lv_obj_set_style_translate_y(message, 180 - (a.y1 + a.y2) / 2, 0);
+    } else {
+        lv_obj_add_flag(message, LV_OBJ_FLAG_USER_2);
+        lv_obj_set_style_pad_ver(message, 12, 0);
+        if(kind == KIT_EMPTY_UPNEXT){
+            lv_obj_t *parent = lv_obj_get_parent(message);
+            lv_obj_update_layout(parent);
+            lv_area_t label, area;
+            lv_obj_get_coords(message, &label);
+            lv_obj_get_coords(parent, &area);
+            lv_obj_set_style_translate_y(message,
+                (area.y1 + area.y2 - label.y1 - label.y2) / 2, 0);
+        }
+    }
+    free(lv_obj_get_user_data(message));
+    lv_obj_set_user_data(message, strdup(s));
+    lv_obj_t *parent = lv_obj_get_parent(message);
+    lv_obj_remove_event_cb_with_user_data(parent, blue_empty_draw, message);
+    lv_obj_add_event_cb(parent, blue_empty_draw, LV_EVENT_DRAW_MAIN_END, message);
+    lv_obj_invalidate(parent);
+    lv_obj_remove_event_cb(message, blue_empty_deleted);
+    lv_obj_add_event_cb(message, blue_empty_deleted, LV_EVENT_DELETE, NULL);
 }
 static void blue_qs_tile(lv_obj_t *c, lv_obj_t *g, lv_obj_t *cap, int on, int toggle){
     (void)toggle;
@@ -953,12 +1496,44 @@ static void blue_qs_tile(lv_obj_t *c, lv_obj_t *g, lv_obj_t *cap, int on, int to
     }
 }
 static void blue_saver(const saver_parts_t *p){
+    static lv_obj_t *bar[9];
     if(p->date){ lv_obj_set_style_text_letter_space(p->date, 2, 0); lv_obj_set_style_text_color(p->date, TC(ACCENT_PRIMARY), 0); }
+    if(!bar[0]){
+        for(int i = 0; i < 8; i++) bar[i] = blue_line(p->root, 0, 0, 16, 8,
+                                                       i % 2 ? TC(CANVAS) : TC(ACCENT_PRIMARY));
+        bar[8] = blue_line(p->root, 0, 0, 128, 1, TC(ACCENT_PRIMARY));
+    }
+    int bottom = 0;
+    lv_obj_t *above[] = {p->date, p->weather};
+    for(int i = 0; i < 2; i++) if(above[i] && !lv_obj_has_flag(above[i], LV_OBJ_FLAG_HIDDEN)){
+        lv_obj_update_layout(above[i]);
+        int edge = lv_obj_get_y(above[i]) + lv_obj_get_height(above[i]);
+        if(edge > bottom) bottom = edge;
+    }
+    int y = bottom + 8;
+    if(y < (p->style == 1 ? 282 : 252)) y = p->style == 1 ? 282 : 252;
+    if(p->track && p->artist){
+        lv_obj_set_style_text_font(p->track, TF(UI_14), 0);
+        lv_obj_set_style_text_font(p->artist, TF(UI_12), 0);
+        lv_obj_set_style_text_color(p->track, TC(ACCENT_PRIMARY), 0);
+        lv_obj_set_style_text_color(p->artist, TC(TEXT_MUTED), 0);
+        lv_obj_set_style_text_align(p->track, LV_TEXT_ALIGN_LEFT, 0);
+        lv_obj_set_style_text_align(p->artist, LV_TEXT_ALIGN_LEFT, 0);
+        lv_obj_set_width(p->track, 160); lv_obj_set_width(p->artist, 160);
+        lv_obj_align(p->track, LV_ALIGN_TOP_LEFT, 100, y);
+        int ay = y + lv_font_get_line_height(TF(UI_14)) + 3;
+        lv_obj_align(p->artist, LV_ALIGN_TOP_LEFT, 100, ay);
+        y = ay + lv_font_get_line_height(TF(UI_12)) + 9;
+    }
+    for(int i = 0; i < 8; i++) lv_obj_set_pos(bar[i], 116 + 16 * i, y);
+    lv_obj_set_pos(bar[8], 116, y + 8);
 }
 const theme_kit_t theme_kit_blue = { .id = "blueprint", .header = kit_edge_header, .style = blue_style, .home = blue_home,
                                      .title_fit = blue_title_fit,
                                      .home_clock = blue_clock,
-                                     .nowplaying = blue_np, .qs_tile = blue_qs_tile, .saver = blue_saver,
+                                     .nowplaying = blue_np, .np_cover_state = blue_cover, .empty_state = blue_empty,
+                                     .row_decor = blue_row_decor, .title = blue_title,
+                                     .qs_tile = blue_qs_tile, .saver = blue_saver,
                                      .pass_end = blue_pass_end };
 
 /* ================================================================ stone
@@ -967,17 +1542,29 @@ const theme_kit_t theme_kit_blue = { .id = "blueprint", .header = kit_edge_heade
  * stays centred. It is drawn as the pill's own shape, filled and dropped 3 px, just before the pill (one more rounded
  * fill: LVGL's shadow path would rebuild a corner buffer on every draw here, with no shadow cache in this build).
  * Chunky rounded controls; the Home time as two overlapping pills, hours and minutes. */
+/* Three overlapping rounded fills give each end a different shoulder. All drawing stays inside the
+ * original rectangular object, so its input box and the position of its children are unchanged. */
+static void stone_blob(lv_layer_t *layer, const lv_area_t *box, lv_color_t color, lv_opa_t opa){
+    lv_draw_rect_dsc_t d; lv_draw_rect_dsc_init(&d);
+    d.bg_color = color; d.bg_opa = opa; d.radius = LV_RADIUS_CIRCLE;
+    lv_area_t a = *box;
+    a.x1 += 5; a.x2 -= 5;
+    lv_draw_rect(layer, &d, &a);
+    a = *box; a.x2 -= 11; a.y1 += 3; a.y2 -= 8;
+    lv_draw_rect(layer, &d, &a);
+    a = *box; a.x1 += 11; a.y1 += 8; a.y2 -= 2;
+    lv_draw_rect(layer, &d, &a);
+}
 static void stone_edge_cb(lv_event_t *e){
     lv_obj_t *o = lv_event_get_target(e);
     int drop = lv_obj_has_state(o, LV_STATE_PRESSED) ? 1 : (int)(intptr_t)lv_event_get_user_data(e);   /* pressed: sinks */
     if(lv_event_get_code(e) == LV_EVENT_REFR_EXT_DRAW_SIZE){ lv_event_set_ext_draw_size(e, 4); return; }
-    lv_draw_rect_dsc_t d; lv_draw_rect_dsc_init(&d);
-    d.radius = lv_obj_get_style_radius(o, 0);
-    d.bg_color = TC(DOT_GRID);
-    d.bg_opa = lv_obj_get_style_opa_recursive(o, 0);
     lv_area_t a; lv_obj_get_coords(o, &a);
     lv_area_move(&a, 0, drop);
-    lv_draw_rect(lv_event_get_layer(e), &d, &a);
+    stone_blob(lv_event_get_layer(e), &a, TC(DOT_GRID), lv_obj_get_style_opa_recursive(o, 0));
+    lv_obj_get_coords(o, &a);
+    stone_blob(lv_event_get_layer(e), &a, lv_obj_get_style_bg_color(o, LV_PART_MAIN),
+               lv_obj_get_style_opa_recursive(o, 0));
 }
 static void stone_edge(lv_obj_t *o, int drop){
     lv_obj_set_style_border_width(o, 0, 0);
@@ -991,7 +1578,8 @@ static void stone_pill(lv_obj_t *o, lv_color_t bg){
     kit_keep(o);
     lv_obj_set_style_radius(o, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(o, bg, 0);
-    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(o, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_opa(o, LV_OPA_TRANSP, LV_STATE_PRESSED);
     stone_edge(o, 3);
     lv_obj_set_style_translate_y(o, 2, LV_STATE_PRESSED);            /* pressed: it sinks into the surface */
 }
@@ -1000,7 +1588,6 @@ static void stone_style(lv_obj_t *o, kit_role_t r){
     case KIT_ROW:
         stone_pill(o, TC(SURFACE));
         lv_obj_set_style_bg_color(o, TC(SURFACE_RAISED), LV_STATE_PRESSED);
-        lv_obj_set_style_bg_opa(o, LV_OPA_COVER, LV_STATE_PRESSED);
         break;
     case KIT_ROW_CHEVRON:
         lv_obj_set_style_text_color(o, TC(ACCENT_PRIMARY), 0);
@@ -1037,6 +1624,122 @@ static void stone_style(lv_obj_t *o, kit_role_t r){
         break;
     default: break;
     }
+}
+static void stone_empty_draw(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_REFR_EXT_DRAW_SIZE){ lv_event_set_ext_draw_size(e, 26); return; }
+    lv_obj_t *message = lv_event_get_target(e);
+    const char *saved = lv_obj_get_user_data(message);
+    if(!saved || strcmp(saved, lv_label_get_text(message))) return; /* Lyrics can reuse this label. */
+    lv_point_t size;
+    lv_text_get_size(&size, saved, lv_obj_get_style_text_font(message, 0), 0, 2,
+                     LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    int w = size.x + 32; if(w < 112) w = 112; if(w > 282) w = 282;
+    int h = lv_obj_get_height(message) + 28; if(h < 46) h = 46;
+    lv_area_t label; lv_obj_get_coords(message, &label);
+    int cx = (label.x1 + label.x2) / 2, cy = (label.y1 + label.y2) / 2;
+    lv_area_t pebble = { cx - w/2, cy - h/2, cx + (w-1)/2, cy + (h-1)/2 };
+    stone_blob(lv_event_get_layer(e), &pebble, TC(SURFACE_RAISED), LV_OPA_COVER);
+}
+static void stone_empty_deleted(lv_event_t *e){ free(lv_obj_get_user_data(lv_event_get_target(e))); }
+static int stone_empty_center(lv_obj_t *message){
+    lv_obj_t *parent = lv_obj_get_parent(message);
+    lv_obj_update_layout(parent);
+    lv_area_t a; lv_obj_get_coords(parent, &a);
+    return a.y1 + lv_obj_get_style_pad_top(parent, 0) + lv_obj_get_content_height(parent)/2;
+}
+static void stone_empty_at(lv_obj_t *message, int center){
+    lv_obj_set_style_translate_y(message, 0, 0);
+    lv_obj_update_layout(message);
+    lv_area_t a; lv_obj_get_coords(message, &a);
+    lv_obj_set_style_translate_y(message, center - (a.y1 + a.y2)/2, 0);
+}
+static void stone_empty(kit_empty_kind_t kind, lv_obj_t *message){
+    if(!message) return;
+    lv_obj_set_style_text_color(message, TC(TEXT_PRIMARY), 0);
+    lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(message, TF(UI_14), 0);
+    lv_obj_update_layout(message);
+    if(kind == KIT_EMPTY_LYRICS) lv_obj_align(message, LV_ALIGN_CENTER, 0, 0);
+    else stone_empty_at(message, stone_empty_center(message));
+    lv_obj_remove_event_cb(message, stone_empty_draw);
+    lv_obj_remove_event_cb(message, stone_empty_deleted);
+    free(lv_obj_get_user_data(message));
+    lv_obj_set_user_data(message, strdup(lv_label_get_text(message)));
+    lv_obj_add_event_cb(message, stone_empty_draw, LV_EVENT_DRAW_MAIN_BEGIN, NULL);
+    lv_obj_add_event_cb(message, stone_empty_draw, LV_EVENT_REFR_EXT_DRAW_SIZE, NULL);
+    lv_obj_refresh_ext_draw_size(message);
+    lv_obj_add_event_cb(message, stone_empty_deleted, LV_EVENT_DELETE, NULL);
+}
+static void zine_scrap(lv_obj_t *o, lv_color_t bg);
+void kit_stone_empty_scan(lv_obj_t *message, lv_obj_t *button){
+    int zine = !strcmp(theme_kit()->id, "zine");
+    if((strcmp(theme_kit()->id, "stone") && !zine) || !message || !button) return;
+    if(zine){   /* a yellow scrap like Home's search button: it reads as something to press, not a second message */
+        zine_scrap(button, TC(DECOR_1));
+        lv_obj_set_style_bg_color(button, TC(DECOR_1), LV_STATE_PRESSED);
+    }
+    int center = stone_empty_center(message);
+    int pebble_h = lv_obj_get_height(message) + (zine ? 0 : 28);
+    if(pebble_h < 46) pebble_h = 46;
+    int gap = 20, button_h = lv_obj_get_height(button);
+    int top = center - (pebble_h + gap + button_h)/2;
+    stone_empty_at(message, top + pebble_h/2);
+    stone_empty_at(button, top + pebble_h + gap + button_h/2);
+    /* the scrap's press nudge is +2 px from where it now sits (a bare pressed translate_y would replace the
+     * placement and drop the button back under the message) */
+    if(zine) lv_obj_set_style_translate_y(button, lv_obj_get_style_translate_y(button, 0) + 2, LV_STATE_PRESSED);
+}
+static void stone_cover_draw(lv_event_t *e){
+    lv_obj_t *cover = lv_event_get_target(e);
+    lv_obj_t *note = lv_event_get_user_data(e);
+    if(!note || lv_obj_has_flag(note, LV_OBJ_FLAG_HIDDEN)) return;
+    lv_area_t a; lv_obj_get_coords(cover, &a);
+    stone_blob(lv_event_get_layer(e), &a, TC(ART_PLACEHOLDER), LV_OPA_COVER);
+}
+static void stone_cover(lv_obj_t *cover, lv_obj_t *note, int show, int loading){
+    if(!cover || !note) return;
+    lv_obj_set_style_bg_opa(cover, LV_OPA_TRANSP, 0);
+    lv_label_set_text(note, loading ? LV_SYMBOL_REFRESH : LV_SYMBOL_AUDIO);
+    lv_obj_set_style_text_font(note, TF(UI_20), 0); /* this face has LVGL's audio symbol */
+    lv_obj_set_style_text_color(note, TC(TEXT_PRIMARY), 0);
+    if(show) lv_obj_center(note);
+}
+static lv_obj_t *g_stone_arc[5];
+static int g_stone_arc_bucket = -1;
+static void stone_progress(int value){
+    if(!g_stone_arc[0]) return;
+    int bucket = (value * 143 + 500) / 1000; /* two-degree steps over the 286-degree sweep */
+    if(bucket == g_stone_arc_bucket) return;
+    g_stone_arc_bucket = bucket;
+    int end = bucket * 2;
+    for(int i = 0; i < 5; i++){
+        int from = i == 0 ? 0 : end - (5-i)*5;
+        int to = i == 0 ? end - 20 : from + 5;
+        if(from < 0) from = 0;
+        if(to > end) to = end;
+        if(to <= from){ lv_obj_add_flag(g_stone_arc[i], LV_OBJ_FLAG_HIDDEN); continue; }
+        lv_arc_set_angles(g_stone_arc[i], from, to);
+        lv_obj_remove_flag(g_stone_arc[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+static void stone_progress_create(lv_obj_t *ring){
+    for(int i = 0; i < 5; i++){
+        lv_obj_t *arc = lv_arc_create(lv_obj_get_parent(ring));
+        lv_obj_set_size(arc, lv_obj_get_width(ring), lv_obj_get_height(ring));
+        lv_obj_align(arc, LV_ALIGN_CENTER, 0, 0);
+        lv_arc_set_rotation(arc, 127);
+        lv_obj_set_style_arc_opa(arc, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(arc, LV_OPA_TRANSP, LV_PART_KNOB);
+        lv_obj_set_style_arc_width(arc, 12, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(arc, TC(ACCENT_PRIMARY), LV_PART_INDICATOR);
+        lv_obj_set_style_arc_opa(arc, i == 0 ? LV_OPA_COVER : (lv_opa_t)(190 - 43*(i-1)), LV_PART_INDICATOR);
+        lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(arc, LV_OBJ_FLAG_HIDDEN);
+        g_stone_arc[i] = arc;
+    }
+    lv_obj_set_style_arc_opa(ring, LV_OPA_TRANSP, LV_PART_INDICATOR);
+    g_stone_arc_bucket = -1;
 }
 /* a clock drawn as separate hours and minutes (12-hour: AM/PM is dropped here; the date line keeps the day) */
 static void split_clock(const char *t, lv_obj_t *hl, lv_obj_t *ml){
@@ -1088,7 +1791,6 @@ static void stone_home(const home_parts_t *p){
     stone_pill(p->search, TC(SURFACE));
     lv_obj_set_pos(p->np, 62, 274); lv_obj_set_size(p->np, 236, 48);
     stone_pill(p->np, TC(SURFACE));
-    lv_obj_set_style_bg_opa(p->np, LV_OPA_COVER, 0);
     lv_obj_set_pos(p->np_thumb, 8, 6); lv_obj_set_size(p->np_thumb, 38, 38);
     lv_obj_set_pos(p->np_title, 54, 6);  lv_obj_set_width(p->np_title, 130);
     lv_obj_set_pos(p->np_artist, 54, 26); lv_obj_set_width(p->np_artist, 130);
@@ -1104,6 +1806,9 @@ static void stone_np(const np_parts_t *p){
     lv_obj_set_style_arc_rounded(p->ring, true, LV_PART_MAIN);
     lv_obj_set_style_arc_rounded(p->ring, true, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(p->ring, TC(SURFACE_RAISED), LV_PART_MAIN);
+    stone_progress_create(p->ring);
+    lv_obj_set_style_bg_opa(p->cover, LV_OPA_TRANSP, 0);
+    lv_obj_add_event_cb(p->cover, stone_cover_draw, LV_EVENT_DRAW_MAIN_BEGIN, p->cover_note);
     lv_obj_set_style_pad_all(p->ring, 2, LV_PART_KNOB);
     lv_obj_set_style_radius(p->cover, 26, 0);
     lv_obj_set_size(p->pp, 64, 44);
@@ -1128,6 +1833,44 @@ static void stone_qs_tile(lv_obj_t *c, lv_obj_t *g, lv_obj_t *cap, int on, int t
 }
 /* the screensaver keeps Home's two-pill clock (in every style that shows a clock); the date and weather sit under it */
 static lv_obj_t *g_stone_shh, *g_stone_smm, *g_stone_smer;
+static lv_obj_t *g_stone_song_track, *g_stone_song_artist, *g_stone_song_pebble;
+static void stone_song_draw(lv_event_t *e){
+    if(!g_stone_song_track || !g_stone_song_artist ||
+       lv_obj_has_flag(g_stone_song_track, LV_OBJ_FLAG_HIDDEN) ||
+       lv_obj_has_flag(g_stone_song_artist, LV_OBJ_FLAG_HIDDEN)) return;
+    lv_area_t a; lv_obj_get_coords(lv_event_get_target(e), &a);
+    stone_blob(lv_event_get_layer(e), &a, TC(ACCENT_PRIMARY), LV_OPA_COVER);
+}
+static void stone_song_layout(const saver_parts_t *p){
+    if(!p->track || !p->artist) return;
+    int y = saver_song_y(p->date, p->style == 1 ? 278 : 270);
+    if(p->weather && !lv_obj_has_flag(p->weather, LV_OBJ_FLAG_HIDDEN)){
+        lv_obj_update_layout(p->weather);
+        int below = lv_obj_get_y(p->weather) + lv_obj_get_height(p->weather) + 8;
+        if(below > y) y = below;
+    }
+    lv_obj_align(p->track, LV_ALIGN_TOP_MID, 0, y);
+    lv_obj_update_layout(p->track);
+    lv_obj_align(p->artist, LV_ALIGN_TOP_MID, 0, y + lv_obj_get_height(p->track) + 2);
+    int width = saver_song_width(p->artist, 218);
+    int pebble_fit = ui_round_width(lv_obj_get_y(p->artist) + lv_obj_get_height(p->artist) + 7, 10);
+    if(pebble_fit < width) width = pebble_fit;
+    if(width < 120) width = 120;
+    lv_obj_set_width(p->track, width - 24);
+    lv_obj_set_width(p->artist, width - 24);
+    lv_obj_set_style_text_color(p->track, TC(ON_ACCENT), 0);
+    lv_obj_set_style_text_color(p->artist, TC(ON_ACCENT), 0);
+    g_stone_song_track = p->track; g_stone_song_artist = p->artist;
+    if(!g_stone_song_pebble){
+        g_stone_song_pebble = lv_obj_create(p->root);
+        lv_obj_remove_style_all(g_stone_song_pebble);
+        lv_obj_clear_flag(g_stone_song_pebble, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_event_cb(g_stone_song_pebble, stone_song_draw, LV_EVENT_DRAW_MAIN_BEGIN, NULL);
+        lv_obj_move_to_index(g_stone_song_pebble, lv_obj_get_index(p->track));
+    }
+    lv_obj_set_size(g_stone_song_pebble, width, lv_obj_get_y(p->artist) + lv_obj_get_height(p->artist) - y + 14);
+    lv_obj_align(g_stone_song_pebble, LV_ALIGN_TOP_MID, 0, y - 7);
+}
 static void stone_saver_clock(const char *t){
     split_clock(t, g_stone_shh, g_stone_smm);
     char hm[16], mer[8]; clock_parts(t, hm, sizeof hm, mer, sizeof mer);
@@ -1141,10 +1884,10 @@ static void stone_saver(const saver_parts_t *p){
         g_stone_smer = mer_label(p->root, TF(UI_16), TC(TEXT_SECONDARY));
         stone_saver_clock(lv_label_get_text(p->clock));
     }
-    if(!g_stone_shh) return;
+    if(!g_stone_shh){ stone_song_layout(p); return; }
     lv_obj_t *ph = lv_obj_get_parent(g_stone_shh), *pm = lv_obj_get_parent(g_stone_smm);
     if(!shown){ lv_obj_add_flag(ph, LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(pm, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_add_flag(g_stone_smer, LV_OBJ_FLAG_HIDDEN); return; }
+                lv_obj_add_flag(g_stone_smer, LV_OBJ_FLAG_HIDDEN); stone_song_layout(p); return; }
     int y = p->style == 2 ? 112 : 78;                         /* Minimal: lower, nothing under the date */
     lv_obj_remove_flag(ph, LV_OBJ_FLAG_HIDDEN); lv_obj_remove_flag(pm, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(g_stone_smer, LV_OBJ_FLAG_HIDDEN);
@@ -1153,10 +1896,12 @@ static void stone_saver(const saver_parts_t *p){
     lv_obj_add_flag(p->clock, LV_OBJ_FLAG_HIDDEN);
     if(p->date){ lv_obj_align(p->date, LV_ALIGN_TOP_MID, 0, y + 28 + 76 + 10); lv_obj_update_layout(p->date); }
     if(p->weather && p->date) lv_obj_align(p->weather, LV_ALIGN_TOP_MID, 0, lv_obj_get_y(p->date) + 26);
+    stone_song_layout(p);
 }
 const theme_kit_t theme_kit_stone = { .id = "stone", .style = stone_style, .home = stone_home, .home_clock = stone_clock,
                                       .nowplaying = stone_np, .qs_tile = stone_qs_tile, .saver = stone_saver,
-                                      .saver_clock = stone_saver_clock };
+                                      .saver_clock = stone_saver_clock, .np_progress = stone_progress,
+                                      .empty_state = stone_empty, .np_cover_state = stone_cover };
 
 /* ================================================================ bauhaus
  * Poster geometry: square blocks, bold upper-case type, the three primaries. Titles are solid caps of yellow, blue or
@@ -1197,6 +1942,78 @@ static void bauh_block(lv_obj_t *o, lv_color_t bg){
     lv_obj_set_style_bg_color(o, bg, 0);
     lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(o, 0, 0);
+}
+/* Reserve a fixed bullet slot. Only the leading content moves; right values and controls stay put. */
+#define BAUH_ROW_MARK LV_OBJ_FLAG_USER_1
+static void bauh_triangle(lv_event_t *e){
+    lv_obj_t *o = lv_event_get_target(e); lv_area_t a; lv_obj_get_coords(o, &a);
+    lv_draw_triangle_dsc_t d; lv_draw_triangle_dsc_init(&d);
+    d.bg_color = lv_obj_get_style_bg_color(o, 0); d.bg_opa = LV_OPA_COVER;
+    d.p[0] = (lv_point_precise_t){a.x2, a.y2};
+    d.p[1] = (lv_point_precise_t){a.x1, a.y2};
+    d.p[2] = (lv_point_precise_t){(a.x1 + a.x2)/2, a.y1};
+    lv_draw_triangle(lv_event_get_layer(e), &d);
+}
+static lv_obj_t *bauh_shape(lv_obj_t *parent, int x, int y, int w, int h, int kind, lv_color_t color){
+    lv_obj_t *o = lv_obj_create(parent); lv_obj_remove_style_all(o); kit_keep(o);
+    lv_obj_set_pos(o, x, y); lv_obj_set_size(o, w, h);
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(o, color, 0);
+    if(kind == 2) lv_obj_add_event_cb(o, bauh_triangle, LV_EVENT_DRAW_MAIN_END, NULL);
+    else { lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+           lv_obj_set_style_radius(o, kind == 0 ? LV_RADIUS_CIRCLE : 0, 0); }
+    return o;
+}
+static void bauh_row_press(lv_event_t *e){
+    lv_obj_t *row = lv_event_get_target(e);
+    lv_obj_t *mark = lv_obj_get_child(row, lv_obj_get_child_count(row) - 1);
+    int kind = lv_obj_get_index(row) % 3;
+    lv_color_t color = kind == 0 ? TC(ACCENT_PRIMARY) : kind == 1 ? TC(DECOR_2) : TC(DECOR_1);
+    lv_obj_set_style_bg_color(mark, lv_event_get_code(e) == LV_EVENT_PRESSED ? TC(DOT_GRID) : color, 0);
+    lv_obj_invalidate(mark);
+}
+static void bauh_row_decor(lv_obj_t *row, lv_obj_t *title){
+    if(!title || lv_obj_has_flag(row, BAUH_ROW_MARK)) return;
+    kit_row_layout_t layout = kit_row_layout_get(row);
+    const char *s = lv_label_get_text(title);
+    if(!s || !*s) return;
+    /* kit_pass laid out the screen once before styling. Use those coordinates:
+     * flushing here repeats the entire growing list's flex layout for each row. */
+    lv_area_t r, t; lv_obj_get_coords(row, &r); lv_obj_get_coords(title, &t);
+    int inset = t.x1 - r.x1;
+    if(lv_obj_get_width(row) < 260) return;
+    if(layout == KIT_ROW_PLAIN && (inset < 11 || inset > 24 || (unsigned char)s[0] == 0xEF)) return;
+    uint32_t count = lv_obj_get_child_count(row);
+    for(uint32_t i = 0; i < count; i++){
+        lv_obj_t *child = lv_obj_get_child(row, (int32_t)i);
+        lv_area_t a; lv_obj_get_coords(child, &a);
+        int x = a.x1 - r.x1;
+        if(layout == KIT_ROW_ICON){
+            if(i == 0) lv_obj_set_x(child, 24);
+            else if(i == 1){ lv_obj_set_x(child, 50); lv_obj_set_width(child, lv_obj_get_width(child) - 10); }
+        } else if(layout == KIT_ROW_SWATCH){
+            if(i < 3) lv_obj_set_x(child, x + 6);
+            else if(i == 3){
+                lv_obj_set_x(child, x + 6);
+                lv_obj_set_width(child, 148);
+                lv_label_set_long_mode(child, LV_LABEL_LONG_DOT);
+            }
+        } else if(lv_obj_check_type(child, &lv_label_class) && x >= 11 && x <= 24){
+            int shift = 24 - x;
+            if(shift > 0){
+                lv_obj_set_x(child, 24);
+                if(lv_label_get_long_mode(child) != LV_LABEL_LONG_WRAP)
+                    lv_obj_set_width(child, lv_obj_get_width(child) - shift);
+            }
+        }
+    }
+    int kind = lv_obj_get_index(row) % 3;
+    lv_color_t c = kind == 0 ? TC(ACCENT_PRIMARY) : kind == 1 ? TC(DECOR_2) : TC(DECOR_1);
+    bauh_shape(row, 8, (lv_obj_get_height(row) - 8)/2, 8, 8, kind, c);
+    lv_obj_add_event_cb(row, bauh_row_press, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(row, bauh_row_press, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(row, bauh_row_press, LV_EVENT_PRESS_LOST, NULL);
+    lv_obj_add_flag(row, BAUH_ROW_MARK);
 }
 static void bauh_style(lv_obj_t *o, kit_role_t r){
     switch(r){
@@ -1324,6 +2141,7 @@ static void bauh_home(const home_parts_t *p){
     lv_obj_set_style_text_color(p->pp_label, TC(ON_ACCENT), 0);
     lv_obj_add_flag(p->hint, LV_OBJ_FLAG_HIDDEN);
 }
+static lv_obj_t *g_bauh_triangle;
 static void bauh_np(const np_parts_t *p){
     own_backgrounds();
     /* the split: the art block on the left, a red rule, everything else on the right; seek is a straight bar */
@@ -1332,7 +2150,10 @@ static void bauh_np(const np_parts_t *p){
     lv_obj_set_size(p->cover, 176, 360); lv_obj_align(p->cover, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_set_style_radius(p->cover, 0, 0);
     lv_obj_set_style_bg_color(p->cover, TC(DECOR_1), 0);
-    lv_obj_align(p->cover_img, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_align(p->cover_img, LV_ALIGN_CENTER, 0, 0);
+    lv_image_set_scale(p->cover_img, 623); /* 148 px art fills the 360 px height; parent clips its blue half */
+    lv_obj_clear_flag(p->cover, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+    g_bauh_triangle = bauh_shape(p->cover, 27, 110, 122, 140, 2, TC(ACCENT_PRIMARY));
     lv_obj_t *rule = lv_obj_create(p->root);
     lv_obj_remove_style_all(rule);
     lv_obj_clear_flag(rule, LV_OBJ_FLAG_CLICKABLE);
@@ -1343,14 +2164,21 @@ static void bauh_np(const np_parts_t *p){
     for(int i = 0; i < 3; i++){
         lv_obj_set_style_text_align(txt[i], LV_TEXT_ALIGN_LEFT, 0);
         lv_obj_set_width(txt[i], 140);
-        lv_obj_align(txt[i], LV_ALIGN_TOP_LEFT, 194, i == 0 ? 92 : 124 + i * 18);
+        lv_obj_align(txt[i], LV_ALIGN_TOP_LEFT, 194, i == 0 ? 74 : 106 + i * 18);
     }
+    /* the queue position gets its own line under the album (owner 2026-10-07: "Album - 1605/3285" was cut off) */
+    lv_obj_remove_flag(p->pos, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_align(p->pos, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_width(p->pos, 140);
+    lv_obj_align(p->pos, LV_ALIGN_TOP_LEFT, 194, 160);
     lv_obj_set_style_text_font(p->title, TF(UI_20), 0);
+    lv_obj_set_width(p->title, 128);   /* a 2-line title starts at y 72, where the glass ends at x ~335: 194+128 fits */
     lv_label_set_long_mode(p->title, LV_LABEL_LONG_WRAP);
-    /* the title stands on the artist: its last line ends at y 140 whether it takes one line or two */
+    /* the title stands on the artist: its last line ends at y 122 whether it takes one line or two (moved up 18 px
+     * into the free top so the position fits on its own line) */
     lv_obj_set_height(p->title, LV_SIZE_CONTENT);
     lv_obj_set_style_max_height(p->title, 50, 0);
-    lv_obj_align(p->title, LV_ALIGN_BOTTOM_LEFT, 194, -(360 - 140));
+    lv_obj_align(p->title, LV_ALIGN_BOTTOM_LEFT, 194, -(360 - 122));
     lv_obj_align(p->prev, LV_ALIGN_TOP_LEFT, 196, 204);
     lv_obj_align(p->next, LV_ALIGN_TOP_LEFT, 300, 204);
     lv_obj_set_ext_click_area(p->prev, 8); lv_obj_set_ext_click_area(p->next, 8);   /* never into the play disc */
@@ -1379,10 +2207,54 @@ static void bauh_np(const np_parts_t *p){
     lv_obj_set_style_text_align(p->remain, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_add_flag(p->sep, LV_OBJ_FLAG_HIDDEN);
     /* shuffle and heart (or moon) in the free top of the right column, fully on the glass */
-    lv_obj_set_size(p->mode, 40, 36); lv_obj_align(p->mode, LV_ALIGN_TOP_LEFT, 196, 44);
-    lv_obj_set_size(p->fav, 40, 36);  lv_obj_align(p->fav, LV_ALIGN_TOP_LEFT, 244, 44);
-    lv_obj_set_size(p->sleep, 40, 36); lv_obj_align(p->sleep, LV_ALIGN_TOP_LEFT, 244, 44);
+    lv_obj_set_size(p->mode, 40, 36); lv_obj_align(p->mode, LV_ALIGN_TOP_LEFT, 196, 34);   /* y 34: the heart's box */
+    lv_obj_set_size(p->fav, 40, 36);  lv_obj_align(p->fav, LV_ALIGN_TOP_LEFT, 244, 34);    /* still ends inside the */
+    lv_obj_set_size(p->sleep, 40, 36); lv_obj_align(p->sleep, LV_ALIGN_TOP_LEFT, 244, 34); /* glass (chord x 285)  */
     lv_obj_add_flag(p->dots[0], LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(p->dots[1], LV_OBJ_FLAG_HIDDEN);
+}
+static void bauh_cover(lv_obj_t *cover, lv_obj_t *note, int show, int loading){
+    if(!cover || !note) return;
+    if(g_bauh_triangle){
+        if(show && !loading) lv_obj_remove_flag(g_bauh_triangle, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(g_bauh_triangle, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(show && !loading) lv_obj_add_flag(note, LV_OBJ_FLAG_HIDDEN);
+    else if(show){ lv_obj_remove_flag(note, LV_OBJ_FLAG_HIDDEN); lv_obj_center(note); }
+}
+static void bauh_empty_draw(lv_event_t *e){
+    lv_obj_t *o = lv_event_get_target(e);
+    const char *saved = lv_obj_get_user_data(o);
+    if(!saved || strcmp(saved, lv_label_get_text(o))) return;
+    lv_area_t a; lv_obj_get_coords(o, &a);
+    lv_draw_rect_dsc_t d; lv_draw_rect_dsc_init(&d);
+    d.bg_color = TC(DECOR_2); d.bg_opa = LV_OPA_COVER;
+    lv_draw_rect(lv_event_get_layer(e), &d, &a);
+}
+static void bauh_empty_deleted(lv_event_t *e){ free(lv_obj_get_user_data(lv_event_get_target(e))); }
+static void bauh_empty(kit_empty_kind_t kind, lv_obj_t *message){
+    if(!message) return;
+    lv_obj_set_style_text_font(message, TF(USER_16), 0);
+    lv_obj_set_style_text_color(message, TC(DOT_GRID), 0);
+    lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_CENTER, 0);
+    lv_point_t sz;
+    lv_text_get_size(&sz, lv_label_get_text(message), TF(USER_16), 0, 0, 240, LV_TEXT_FLAG_NONE);
+    int w = sz.x + 28; if(w > 270) w = 270; if(w < 80) w = 80;
+    lv_obj_set_width(message, w);
+    lv_obj_set_height(message, LV_SIZE_CONTENT);
+    lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_pad_hor(message, 14, 0); lv_obj_set_style_pad_ver(message, 12, 0);
+    lv_obj_set_style_translate_x(message, 0, 0); lv_obj_set_style_translate_y(message, 0, 0);
+    lv_obj_update_layout(message);
+    lv_area_t a; lv_obj_get_coords(message, &a);
+    lv_obj_set_style_translate_x(message, 180 - (a.x1 + a.x2)/2, 0);
+    lv_obj_set_style_translate_y(message, (kind == KIT_EMPTY_LIBRARY ? 205 : 180) - (a.y1 + a.y2)/2, 0);
+    if(lv_obj_has_flag(message, LV_OBJ_FLAG_USER_2)) free(lv_obj_get_user_data(message));
+    lv_obj_set_user_data(message, strdup(lv_label_get_text(message)));
+    if(!lv_obj_has_flag(message, LV_OBJ_FLAG_USER_2)){
+        lv_obj_add_flag(message, LV_OBJ_FLAG_USER_2);
+        lv_obj_add_event_cb(message, bauh_empty_draw, LV_EVENT_DRAW_MAIN_BEGIN, NULL);
+        lv_obj_add_event_cb(message, bauh_empty_deleted, LV_EVENT_DELETE, NULL);
+    }
 }
 static void bauh_qs_tile(lv_obj_t *c, lv_obj_t *g, lv_obj_t *cap, int on, int toggle){
     /* switches are squares, actions are circles; a lit switch is a solid red block */
@@ -1398,10 +2270,36 @@ static void bauh_qs_tile(lv_obj_t *c, lv_obj_t *g, lv_obj_t *cap, int on, int to
 }
 static void bauh_saver(const saver_parts_t *p){
     if(p->clock) lv_obj_set_style_text_color(p->clock, TC(ACCENT_PRIMARY), 0);
+    if(!p->track || !p->artist) return;
+    int panel_y = 270;
+    if(p->date && !lv_obj_has_flag(p->date, LV_OBJ_FLAG_HIDDEN)){
+        lv_obj_update_layout(p->date);
+        int below_date = lv_obj_get_y(p->date) + lv_obj_get_height(p->date) + 3;
+        if(below_date > panel_y) panel_y = below_date;
+    }
+    lv_obj_t *panel = lv_obj_get_parent(p->track);
+    if(panel == p->root){
+        lv_obj_t *bar = bauh_shape(p->root, 24, 95, 26, 135, 1, TC(DECOR_1));
+        lv_obj_move_background(bar);
+        panel = bauh_shape(p->root, 84, panel_y, 192, 52, 1, TC(DECOR_2));
+        bauh_shape(panel, 0, 0, 40, 5, 1, TC(DECOR_1));
+        bauh_shape(panel, 180, 0, 12, 12, 0, TC(ACCENT_PRIMARY));
+        lv_obj_set_parent(p->track, panel); lv_obj_set_parent(p->artist, panel);
+    }
+    lv_obj_set_pos(panel, 84, panel_y);
+    lv_obj_set_width(p->track, 176); lv_obj_set_width(p->artist, 176);
+    lv_obj_set_style_text_font(p->track, TF(USER_16), 0);
+    lv_obj_set_style_text_font(p->artist, TF(USER_14), 0);
+    lv_obj_set_style_text_color(p->track, TC(DOT_GRID), 0);
+    lv_obj_set_style_text_color(p->artist, TC(DOT_GRID), 0);
+    lv_obj_align(p->track, LV_ALIGN_TOP_MID, 0, 8);
+    lv_obj_align(p->artist, LV_ALIGN_TOP_MID, 0, 29);
+    lv_obj_move_foreground(panel);
 }
 const theme_kit_t theme_kit_bauh = { .id = "bauhaus", .header = bauh_header, .style = bauh_style, .home = bauh_home,
                                      .home_clock = bauh_clock, .nowplaying = bauh_np, .qs_tile = bauh_qs_tile,
-                                     .saver = bauh_saver, .title = bauh_title,
+                                     .saver = bauh_saver, .title = bauh_title, .row_decor = bauh_row_decor,
+                                     .np_cover_state = bauh_cover, .empty_state = bauh_empty,
                                      .saver_mer_apart = 2 };   /* the saver's PM beside the numerals, as on Home */
 
 /* ================================================================ zine
@@ -1410,6 +2308,96 @@ const theme_kit_t theme_kit_bauh = { .id = "bauhaus", .header = bauh_header, .st
  * cut-out digit tiles, the cover taped on. Paper is light in both variants (dark: a light scrap on black). */
 static lv_color_t zine_paper(void){ return theme_variant() ? TC(SURFACE) : TC(TEXT_PRIMARY); }
 static lv_color_t zine_ink(void){ return theme_variant() ? TC(TEXT_PRIMARY) : TC(CANVAS); }
+static void zine_rect(lv_layer_t *layer, int x1, int y1, int x2, int y2, lv_color_t color){
+    lv_draw_rect_dsc_t d; lv_draw_rect_dsc_init(&d);
+    d.bg_color = color; d.bg_opa = LV_OPA_COVER;
+    lv_area_t a = { x1, y1, x2, y2 };
+    lv_draw_rect(layer, &d, &a);
+}
+static void zine_title_draw(lv_event_t *e){
+    lv_obj_t *o = lv_event_get_target(e);
+    if(lv_obj_get_y(o) >= 100) return; /* the Now Playing song title is not a screen header */
+    lv_area_t a; lv_obj_get_coords(o, &a);
+    lv_point_t text;
+    lv_text_get_size(&text, lv_label_get_text(o), lv_obj_get_style_text_font(o, 0),
+                     lv_obj_get_style_text_letter_space(o, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    int w = text.x + 18;
+    if(w > a.x2 - a.x1 - 2) w = a.x2 - a.x1 - 2;
+    if(w < 28) w = 28;
+    int x = (a.x1 + a.x2 - w)/2, y = a.y1 + 1;
+    /* An offset at each end reads as hand-cut tape; all ink stays on top. */
+    zine_rect(lv_event_get_layer(e), x, y + 2, x + w - 1, a.y2 - 2, TC(DECOR_1));
+    zine_rect(lv_event_get_layer(e), x + 4, y, x + w - 5, a.y2, TC(DECOR_1));
+}
+static void zine_title(lv_obj_t *o, const char *text){
+    int box = lv_obj_get_style_width(o, 0); /* final style width; layout may still report the old 360 px */
+    int room = box > 0 && box != LV_SIZE_CONTENT && !LV_COORD_IS_PCT(box) ? box - 12 : 0;
+    if(room > 0){
+        const lv_font_t *f = lv_obj_get_style_text_font(o, 0);
+        for(int k = 0; k < 6; k++){
+            lv_point_t size;
+            lv_text_get_size(&size, text, f, lv_obj_get_style_text_letter_space(o, 0),
+                             0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+            if(size.x <= room) break;
+            const lv_font_t *smaller = theme_title_smaller(f);
+            if(!smaller || smaller == f) break;
+            f = smaller;
+        }
+        lv_obj_set_style_text_font(o, f, 0);
+    }
+    lv_label_set_text(o, text);
+}
+static void zine_row_scroll(lv_event_t *e){
+    lv_obj_t *row = lv_event_get_user_data(e);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_USER_1);
+    lv_obj_invalidate(row);
+}
+static void zine_row_scroll_hooks(lv_obj_t *row, int on){
+    for(lv_obj_t *p = row; p; p = lv_obj_get_parent(p)){
+        if(!lv_obj_has_flag(p, LV_OBJ_FLAG_SCROLLABLE)) continue;
+        lv_obj_remove_event_cb_with_user_data(p, zine_row_scroll, row);
+        if(on) lv_obj_add_event_cb(p, zine_row_scroll, LV_EVENT_SCROLL_BEGIN, row);
+    }
+}
+static void zine_row_event(lv_event_t *e){
+    lv_obj_t *row = lv_event_get_target(e);
+    lv_event_code_t code = lv_event_get_code(e);
+    if(code != LV_EVENT_DELETE && code != LV_EVENT_PRESSED && code != LV_EVENT_RELEASED &&
+       code != LV_EVENT_PRESS_LOST) return;
+    if(code == LV_EVENT_DELETE || code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST)
+        zine_row_scroll_hooks(row, 0);
+    if(code == LV_EVENT_PRESSED){
+        lv_obj_remove_flag(row, LV_OBJ_FLAG_USER_1);
+        zine_row_scroll_hooks(row, 1);
+    }
+    if(code != LV_EVENT_DELETE) lv_obj_invalidate(row);
+}
+static void zine_row_draw(lv_event_t *e){
+    lv_obj_t *row = lv_event_get_target(e), *title = lv_event_get_user_data(e);
+    if(!title || !lv_obj_has_state(row, LV_STATE_PRESSED) || lv_obj_has_flag(row, LV_OBJ_FLAG_USER_1)) return;
+    lv_area_t a, t; lv_obj_get_coords(row, &a); lv_obj_get_coords(title, &t);
+    lv_point_t text;
+    lv_text_get_size(&text, lv_label_get_text(title), lv_obj_get_style_text_font(title, 0),
+                     lv_obj_get_style_text_letter_space(title, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    int x1 = t.x1 + 2, x2 = x1 + (text.x < 116 ? text.x : 116);
+    if(x2 > a.x2 - 16) x2 = a.x2 - 16;
+    if(x2 > x1 + 8){
+        int y = t.y2 - 2;
+        lv_draw_line_dsc_t d; lv_draw_line_dsc_init(&d);
+        d.color = TC(ACCENT_PRIMARY); d.opa = LV_OPA_COVER; d.width = 2;
+        d.p1 = (lv_point_precise_t){x1, y}; d.p2 = (lv_point_precise_t){x1 + (x2-x1)*2/3, y + 1};
+        lv_draw_line(lv_event_get_layer(e), &d);
+        d.p1 = d.p2; d.p2 = (lv_point_precise_t){x2, y - 1};
+        lv_draw_line(lv_event_get_layer(e), &d);
+    }
+}
+static void zine_row_decor(lv_obj_t *row, lv_obj_t *title){
+    if(!title) return;
+    lv_obj_remove_event_cb(row, zine_row_event);
+    lv_obj_remove_event_cb(row, zine_row_draw);
+    lv_obj_add_event_cb(row, zine_row_event, LV_EVENT_ALL, NULL);
+    lv_obj_add_event_cb(row, zine_row_draw, LV_EVENT_DRAW_POST, title);
+}
 static void zine_scrap(lv_obj_t *o, lv_color_t bg){      /* a stamped paper scrap with an ink edge */
     kit_keep(o);
     lv_obj_set_style_radius(o, 0, 0);
@@ -1446,7 +2434,11 @@ static void zine_row(lv_obj_t *o){
 static void zine_style(lv_obj_t *o, kit_role_t r){
     switch(r){
     case KIT_TITLE:
-        lv_obj_set_style_text_color(o, TC(ACCENT_PRIMARY), 0);
+        lv_obj_set_style_text_color(o, lv_obj_get_y(o) < 100 ? TC(DECOR_2) : TC(ACCENT_PRIMARY), 0);
+        if(lv_obj_get_y(o) < 100){
+            lv_obj_remove_event_cb(o, zine_title_draw);
+            lv_obj_add_event_cb(o, zine_title_draw, LV_EVENT_DRAW_MAIN_BEGIN, NULL);
+        }
         break;
     case KIT_ROW: zine_row(o); break;
     /* row words keep their own case: lower-casing only some rows (menu words in UI faces, not library names in user
@@ -1488,7 +2480,18 @@ static void zine_style(lv_obj_t *o, kit_role_t r){
         lv_obj_set_style_border_width(o, 2, LV_PART_KNOB);
         lv_obj_set_style_border_color(o, TC(DECOR_1), LV_PART_KNOB);
         break;
-    case KIT_ROLLER: case KIT_TEXTAREA:
+    case KIT_TEXTAREA:
+        /* Match the search scrap's paper/ink pair, including editing states. */
+        lv_obj_set_style_bg_color(o, zine_paper(), 0);
+        lv_obj_set_style_text_color(o, zine_ink(), 0);
+        lv_obj_set_style_text_color(o, zine_ink(), LV_PART_TEXTAREA_PLACEHOLDER);
+        lv_obj_set_style_border_color(o, zine_ink(), LV_PART_CURSOR);
+        lv_obj_set_style_border_width(o, 2, LV_PART_CURSOR);
+        lv_obj_set_style_border_side(o, LV_BORDER_SIDE_LEFT, LV_PART_CURSOR);
+        lv_obj_set_style_bg_color(o, zine_ink(), LV_PART_CURSOR);
+        lv_obj_set_style_text_color(o, zine_paper(), LV_PART_CURSOR);
+        /* fall through */
+    case KIT_ROLLER:
         lv_obj_set_style_radius(o, 0, 0);
         lv_obj_set_style_radius(o, 0, LV_PART_SELECTED);
         lv_obj_set_style_bg_color(o, TC(DECOR_1), LV_PART_SELECTED);
@@ -1674,6 +2677,109 @@ static void zine_qs_tile(lv_obj_t *c, lv_obj_t *g, lv_obj_t *cap, int on, int to
              lv_obj_set_style_bg_opa(cap, on ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
              lv_obj_set_style_pad_hor(cap, 3, 0); }
 }
+static void zine_empty_draw(lv_event_t *e){
+    lv_obj_t *o = lv_event_get_target(e);
+    const char *saved = lv_obj_get_user_data(o);
+    if(!saved || strcmp(saved, lv_label_get_text(o))) return; /* Lyrics reuses its label. */
+    lv_area_t a; lv_obj_get_coords(o, &a);
+    lv_layer_t *layer = lv_event_get_layer(e);
+    zine_rect(layer, a.x1 + 4, a.y1 + 5, a.x2, a.y2, TC(ACCENT_PRIMARY));
+    zine_rect(layer, a.x1 + 2, a.y1 + 2, a.x2 - 5, a.y2 - 5, zine_paper());
+    zine_rect(layer, a.x1 + 7, a.y1, a.x2 - 9, a.y2 - 3, zine_paper());
+    zine_rect(layer, a.x1, a.y1 + 8, a.x2 - 4, a.y2 - 9, zine_paper());
+}
+static void zine_empty_deleted(lv_event_t *e){ free(lv_obj_get_user_data(lv_event_get_target(e))); }
+static void zine_empty(kit_empty_kind_t kind, lv_obj_t *message){
+    if(!message) return;
+    lv_obj_set_style_text_font(message, TF(UI_14), 0);
+    lv_obj_set_style_text_color(message, zine_ink(), 0);
+    lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
+    lv_point_t sz;
+    lv_text_get_size(&sz, lv_label_get_text(message), TF(UI_14), 0, 0, 246, LV_TEXT_FLAG_NONE);
+    int w = sz.x + 40; if(w < 114) w = 114; if(w > 286) w = 286;
+    lv_obj_set_width(message, w);
+    lv_obj_set_height(message, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_hor(message, 20, 0);
+    lv_obj_set_style_pad_ver(message, 13, 0);
+    lv_obj_set_style_translate_x(message, 0, 0);
+    lv_obj_set_style_translate_y(message, 0, 0);
+    lv_obj_update_layout(message);
+    lv_area_t a; lv_obj_get_coords(message, &a);
+    lv_obj_set_style_translate_x(message, 180 - (a.x1 + a.x2)/2, 0);
+    stone_empty_at(message, kind == KIT_EMPTY_LYRICS ? 180 : stone_empty_center(message));
+    lv_obj_remove_event_cb(message, zine_empty_draw);
+    lv_obj_remove_event_cb(message, zine_empty_deleted);
+    free(lv_obj_get_user_data(message));
+    lv_obj_set_user_data(message, strdup(lv_label_get_text(message)));
+    lv_obj_add_event_cb(message, zine_empty_draw, LV_EVENT_DRAW_MAIN_BEGIN, NULL);
+    lv_obj_add_event_cb(message, zine_empty_deleted, LV_EVENT_DELETE, NULL);
+}
+static void zine_cover_draw(lv_event_t *e){
+    lv_obj_t *cover = lv_event_get_target(e);
+    lv_obj_t *note = lv_event_get_user_data(e);
+    if(!note || lv_obj_has_flag(note, LV_OBJ_FLAG_HIDDEN)) return;
+    lv_area_t a; lv_obj_get_coords(cover, &a);
+    lv_layer_t *layer = lv_event_get_layer(e);
+    zine_rect(layer, a.x1 + 3, a.y1 + 1, a.x2 - 4, a.y2 - 2, zine_paper());
+    zine_rect(layer, a.x1, a.y1 + 7, a.x2 - 2, a.y2 - 8, zine_paper());
+    zine_rect(layer, a.x1 + 8, a.y1, a.x2 - 10, a.y2, zine_paper());
+    zine_rect(layer, a.x1 + 5, a.y1 + 3, a.x2 - 7, a.y2 - 5, zine_paper());
+}
+static void zine_cover(lv_obj_t *cover, lv_obj_t *note, int show, int loading){
+    if(!cover || !note) return;
+    lv_obj_set_style_bg_opa(cover, LV_OPA_TRANSP, 0);
+    lv_label_set_text(note, loading ? LV_SYMBOL_REFRESH : LV_SYMBOL_AUDIO);
+    lv_obj_set_style_text_font(note, TF(UI_32), 0);
+    lv_obj_set_style_text_color(note, TC(ACCENT_PRIMARY), 0);
+    if(show) lv_obj_center(note);
+    lv_obj_remove_event_cb(cover, zine_cover_draw);
+    lv_obj_add_event_cb(cover, zine_cover_draw, LV_EVENT_DRAW_MAIN_BEGIN, note);
+}
+static lv_obj_t *g_zine_song_tape;
+void kit_zine_song_visibility(int show){
+    if(g_zine_song_tape){
+        if(show) lv_obj_remove_flag(g_zine_song_tape, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(g_zine_song_tape, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+static void zine_song_layout(const saver_parts_t *p){
+    if(!p->track || !p->artist) return;
+    int y = saver_song_y(p->date, p->style == 1 ? 278 : 270);
+    if(p->weather && !lv_obj_has_flag(p->weather, LV_OBJ_FLAG_HIDDEN)){
+        lv_obj_update_layout(p->weather);
+        int below = lv_obj_get_y(p->weather) + lv_obj_get_height(p->weather) + 8;
+        if(below > y) y = below;
+    }
+    y += 2; /* the tape starts two pixels above the song's text */
+    /* one line each, so a long title ends in "..." on the tape instead of wrapping past it */
+    int track_h = lv_font_get_line_height(lv_obj_get_style_text_font(p->track, 0));
+    int artist_h = lv_font_get_line_height(lv_obj_get_style_text_font(p->artist, 0));
+    lv_obj_set_height(p->track, track_h);
+    lv_obj_set_height(p->artist, artist_h);
+    int bottom = y + track_h + 2 + artist_h + 8;
+    int dy = bottom - 180;
+    int width = dy < 170 ? 2 * (int)sqrtf((float)(170*170 - dy*dy)) - 2 : 0;
+    if(width > 204) width = 204;
+    if(width < 70) width = 70;
+    lv_obj_set_width(p->track, width - 20);
+    lv_obj_set_width(p->artist, width - 20);
+    lv_obj_align(p->track, LV_ALIGN_TOP_MID, 0, y);
+    lv_obj_align(p->artist, LV_ALIGN_TOP_MID, 0, y + track_h + 2);
+    lv_obj_set_style_text_color(p->track, TC(DECOR_2), 0);
+    lv_obj_set_style_text_color(p->artist, TC(DECOR_2), 0);
+    if(!g_zine_song_tape){
+        g_zine_song_tape = lv_obj_create(p->root);
+        lv_obj_remove_style_all(g_zine_song_tape);
+        lv_obj_clear_flag(g_zine_song_tape, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_bg_color(g_zine_song_tape, TC(DECOR_1), 0);
+        lv_obj_set_style_bg_opa(g_zine_song_tape, LV_OPA_COVER, 0);
+        kit_keep(g_zine_song_tape);
+        lv_obj_move_to_index(g_zine_song_tape, lv_obj_get_index(p->track));
+    }
+    lv_obj_set_size(g_zine_song_tape, width, bottom - y + 1);
+    lv_obj_align(g_zine_song_tape, LV_ALIGN_TOP_MID, 0, y - 2);
+}
 static void zine_saver(const saver_parts_t *p){
     if(p->date){
         lv_obj_set_style_bg_color(p->date, TC(DECOR_1), 0);
@@ -1683,10 +2789,12 @@ static void zine_saver(const saver_parts_t *p){
         lv_obj_set_width(p->date, LV_SIZE_CONTENT);              /* the stroke hugs the words, as on Home */
     }
     if(p->clock) lv_obj_set_style_text_color(p->clock, TC(ACCENT_PRIMARY), 0);
+    zine_song_layout(p);
 }
 const theme_kit_t theme_kit_zine = { .id = "zine", .header = kit_edge_header, .style = zine_style, .home = zine_home,
                                      .home_clock = zine_clock, .nowplaying = zine_np, .qs_tile = zine_qs_tile,
-                                     .saver = zine_saver, .back_text = "<<" };
+                                     .saver = zine_saver, .empty_state = zine_empty, .np_cover_state = zine_cover,
+                                     .row_decor = zine_row_decor, .title = zine_title, .back_text = "<<" };
 
 /* ================================================================ something
  * The owner's design (assets/reference/something/): dot-grid paper, dot-matrix titles, flat hairline rows with accent
@@ -1729,14 +2837,86 @@ static void some_style(lv_obj_t *o, kit_role_t r){
     case KIT_TEXT:
         if(is_large_default_text(o)) lv_obj_set_style_text_font(o, TF(UI_24), 0);
         break;
+    case KIT_ROW_CHEVRON:
+        kit_some_dot_arrow(o, 0);
+        break;
     default: break;
     }
+}
+void kit_some_dot_arrow(lv_obj_t *glyph, int left){
+    if(!glyph || lv_obj_get_child_count(glyph)) return;
+    static const uint8_t x_right[5] = {0, 5, 10, 5, 0};
+    lv_obj_set_style_text_opa(glyph, LV_OPA_TRANSP, 0);
+    for(int i = 0; i < 5; i++){
+        lv_obj_t *dot = lv_obj_create(glyph);
+        lv_obj_remove_style_all(dot);
+        lv_obj_set_size(dot, 4, 4);
+        lv_obj_set_pos(dot, left ? 10 - x_right[i] : x_right[i], i * 5);
+        lv_obj_set_style_bg_color(dot, TC(ACCENT_PRIMARY), 0);
+        lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    }
+}
+static void some_empty(kit_empty_kind_t kind, lv_obj_t *message){
+    (void)kind;
+    if(!message) return;
+    lv_obj_set_style_text_font(message, TF(UI_16), 0);
+    lv_obj_set_style_text_color(message, TC(TEXT_MUTED), 0);
+    lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_translate_y(message, 0, 0); /* repeated list/search refreshes must not shift the message */
+    lv_obj_update_layout(message);
+    lv_area_t a; lv_obj_get_coords(message, &a);
+    lv_obj_set_style_translate_y(message, 180 - (a.y1 + a.y2) / 2, 0);
+}
+static void some_cover(lv_obj_t *cover, lv_obj_t *note, int show, int loading){
+    if(!cover || !note) return;
+    static lv_obj_t *pattern;
+    static uint8_t pixels[140 * 140 * 4];
+    if(!pattern){
+        pattern = lv_canvas_create(cover);
+        lv_canvas_set_buffer(pattern, pixels, 140, 140, LV_COLOR_FORMAT_ARGB8888);
+        lv_obj_center(pattern);
+        lv_obj_clear_flag(pattern, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        uint32_t dim = theme_rgb(THEME_CLR_BORDER), red = theme_rgb(THEME_CLR_ACCENT_PRIMARY);
+        for(int y = 0; y < 14; y++) for(int x = 0; x < 14; x++){
+            for(int yy = 0; yy < 2; yy++) for(int xx = 0; xx < 2; xx++){
+                uint8_t *p = pixels + ((y * 10 + yy + 4) * 140 + x * 10 + xx + 4) * 4;
+                p[0] = dim & 255; p[1] = dim >> 8 & 255; p[2] = dim >> 16 & 255; p[3] = 100;
+            }
+        }
+        static const uint8_t note_xy[][2] = {
+            {7,3},{8,3},{9,3},{7,4},{9,4},{7,5},{9,5},{7,6},{9,6},{7,7},{9,7},
+            {6,8},{7,8},{8,8},{9,8},{5,9},{6,9},{8,9},{9,9},{5,10},{6,10},{8,10},{9,10}
+        };
+        for(unsigned i = 0; i < sizeof note_xy / sizeof note_xy[0]; i++){
+            for(int yy = 0; yy < 5; yy++) for(int xx = 0; xx < 5; xx++){
+                uint8_t *p = pixels + ((note_xy[i][1] * 8 + 14 + yy) * 140 + note_xy[i][0] * 8 + 14 + xx) * 4;
+                p[0] = red & 255; p[1] = red >> 8 & 255; p[2] = red >> 16 & 255; p[3] = 255;
+            }
+        }
+        lv_obj_invalidate(pattern);
+    }
+    lv_obj_set_style_radius(cover, 0, 0);
+    if(show && !loading){ lv_obj_remove_flag(pattern, LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(note, LV_OBJ_FLAG_HIDDEN); }
+    else { lv_obj_add_flag(pattern, LV_OBJ_FLAG_HIDDEN); if(show) lv_obj_remove_flag(note, LV_OBJ_FLAG_HIDDEN); }
 }
 static void some_np(const np_parts_t *p){ np_sides_on_cover(p, 0); }   /* times stay: the play circle ends at 316 */
 /* the screensaver keeps Home's block-matrix clock (in every style that shows a clock) */
 static int g_some_smc = -1;
 static void some_saver_clock(const char *t){ if(g_some_smc == 0) mclock_set(1, t); }
 static void some_saver(const saver_parts_t *p){
+    int song_y = saver_song_y(p->date, p->style == 1 ? 278 : 260);
+    lv_obj_set_style_text_font(p->track, TF(DATE), 0);
+    lv_obj_set_style_text_font(p->artist, TF(UI_16), 0);
+    lv_obj_set_style_text_color(p->track, TC(TEXT_PRIMARY), 0);
+    lv_obj_set_style_text_color(p->artist, TC(TEXT_MUTED), 0);
+    lv_obj_set_width(p->track, 230); lv_obj_set_width(p->artist, 230);
+    lv_obj_align(p->track, LV_ALIGN_TOP_MID, 0, song_y);
+    lv_obj_align(p->artist, LV_ALIGN_TOP_MID, 0, song_y + 25);
+    if(p->style == 1){
+        int width = saver_song_width(p->artist, 230);
+        lv_obj_set_width(p->track, width); lv_obj_set_width(p->artist, width);
+    }
     int shown = p->style != 1 && p->style != 4;               /* analog and vinyl have no digital clock */
     if(g_some_smc < 0 && shown){ g_some_smc = mclock_new(1, p->root, 0); some_saver_clock(lv_label_get_text(p->clock)); }
     if(g_some_smc != 0) return;
@@ -1748,4 +2928,5 @@ static void some_saver(const saver_parts_t *p){
     if(p->weather && p->date) lv_obj_align(p->weather, LV_ALIGN_TOP_MID, 0, lv_obj_get_y(p->date) + 28);
 }
 const theme_kit_t theme_kit_something = { .id = "something", .style = some_style, .nowplaying = some_np,
+                                          .empty_state = some_empty, .np_cover_state = some_cover,
                                           .saver = some_saver, .saver_clock = some_saver_clock };

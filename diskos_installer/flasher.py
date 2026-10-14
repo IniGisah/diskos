@@ -8,15 +8,21 @@ result interpretation.
 """
 
 import os
+import ctypes
+import json
+import secrets
 import shutil
 import signal
 import struct
+import sys
 import subprocess
 import tempfile
+from contextlib import contextmanager
+from contextvars import ContextVar
 
-from . import basegate, bundle, platform_probe
+from . import _build_capabilities, basegate, bundle, flash_child, platform_probe, windows_usb
 from .reporter import CLIReporter
-from .errors import FlashError, DEVICE_RESULT_CODES, RECOVERABLE, WAIT_THEN_RECOVER
+from .errors import FlashError, DEVICE_RESULT_CODES, WAIT_THEN_RECOVER, RECOVERABLE
 
 
 class BaseRefused(FlashError):
@@ -39,10 +45,10 @@ PLAN_ADDR = "0xa0b00000"
 IMG_SIZE = 100663296
 SQUASH_MAGIC = b"hsqs"
 
-# usbboot waits FLASH_WAIT seconds for the writer, then reads the DONE marker back. The writer
-# finishes well inside this on real hardware (validated repeatedly). A too-short wait shows as a
-# not-DONE readback (retry with a longer wait) - it never corrupts the flash. A device with an
-# unusually high bad-block count can raise it via DISKOS_FLASH_WAIT.
+# usbboot waits FLASH_WAIT seconds for the writer, then reads the DONE marker back. A
+# missing DONE means UNKNOWN: the Disc may still be writing. Leave it powered and connected
+# for the recovery interval before power-cycling; never automatically retry an uncertain write.
+# DISKOS_FLASH_WAIT sets the fixed wait; this path does not poll for early completion.
 # my_write6 first hashes the ~96 MiB image and ~25 MiB of base partitions from uncached DRAM (time not yet measured on
 # a device), so the wait has 3 min more than my_write5's 15.
 FLASH_WAIT = os.environ.get("DISKOS_FLASH_WAIT", "1080")   # 18 min
@@ -56,6 +62,175 @@ FLASH_EXPECT_SECS = 20 * 60   # ~20 min expected (the base check + image hash ad
 # terminate it (E303) rather than blocking forever.
 FLASH_HARD_TIMEOUT_SECS = _FLASH_WAIT_SECS + 15 * 60   # writer wait + 15 min margin
 
+
+_WINDOWS_DEV_FLASH = ContextVar("windows_dev_flash", default=False)
+
+
+def flash_eligible(*, dev_requested=None):
+    """Shared host admission; the image, USB and writer gates remain separate."""
+    if platform_probe.host()[0] != "windows":
+        return platform_probe.is_supported()
+    if getattr(sys, "frozen", False):
+        return (_build_capabilities.WINDOWS_FLASH is True
+                and platform_probe.windows_native_runtime())
+    requested = _WINDOWS_DEV_FLASH.get() if dev_requested is None else dev_requested
+    return (requested is True and os.environ.get("DISKOS_WINDOWS_DEV_FLASH") == "1"
+            and platform_probe.windows_dev_runtime())
+
+
+@contextmanager
+def windows_dev_flash(requested=False):
+    """Scope source opt-ins; frozen admission comes only from the artifact."""
+    if requested and (platform_probe.host()[0] != "windows"
+                      or not flash_eligible(dev_requested=requested)):
+        raise FlashError("development Windows flash requires native x64 Windows CPython "
+                         "and DISKOS_WINDOWS_DEV_FLASH=1; frozen, MSYS/Cygwin, ARM and "
+                         "32-bit runtimes are refused", code="E101",
+                         action="use native x64 Windows CPython and --windows-dev-flash "
+                                "only for an owner-supervised development install")
+    token = _WINDOWS_DEV_FLASH.set(requested is True and not getattr(sys, "frozen", False))
+    try:
+        yield
+    finally:
+        _WINDOWS_DEV_FLASH.reset(token)
+
+
+class _SuspendedProcess:
+    """Keep CreateProcess's primary thread handle until assignment is complete."""
+    def __init__(self, argv, stdin, creationflags, stdout=None, stderr=None, env=None):
+        import _winapi as win
+        import msvcrt
+        self.win, self.argv = win, argv
+        self._handle = self._thread = None
+        self.stdin = None
+        read, write = win.CreatePipe(None, 0)
+        handles = [read, write]
+        try:
+            current = win.GetCurrentProcess()
+            def inherited(handle):
+                copy = win.DuplicateHandle(current, handle, current, 0, True,
+                                           win.DUPLICATE_SAME_ACCESS)
+                handles.append(copy)
+                return copy
+            startup = subprocess.STARTUPINFO()
+            startup.dwFlags = win.STARTF_USESTDHANDLES
+            startup.hStdInput = inherited(read)
+            startup.hStdOutput = inherited(msvcrt.get_osfhandle(
+                (stdout if stdout is not None else sys.stdout).fileno()))
+            startup.hStdError = startup.hStdOutput if stderr == subprocess.STDOUT else inherited(
+                msvcrt.get_osfhandle((stderr if stderr is not None else sys.stderr).fileno()))
+            startup.lpAttributeList = {"handle_list": list({startup.hStdInput,
+                startup.hStdOutput, startup.hStdError})}
+            self._handle, self._thread, self.pid, _ = win.CreateProcess(
+                argv[0], subprocess.list2cmdline(argv), None, None, True,
+                creationflags, env, None, startup)
+            self.stdin = os.fdopen(msvcrt.open_osfhandle(write, os.O_WRONLY | os.O_BINARY), "wb")
+            handles.remove(write)  # fd now owns it; not inheritable
+        except BaseException:
+            if self._handle is not None:
+                try:
+                    self.kill()
+                    self.wait(timeout=30)
+                finally:
+                    self.close_handles()
+            raise
+        finally:
+            for handle in handles:
+                win.CloseHandle(handle)
+
+    def wait(self, timeout=None):
+        ms = self.win.INFINITE if timeout is None else max(0, int(timeout * 1000))
+        result = self.win.WaitForSingleObject(self._handle, ms)
+        if result == self.win.WAIT_TIMEOUT:
+            raise subprocess.TimeoutExpired(self.argv, timeout)
+        if result != 0:
+            raise OSError("could not wait for Windows child")
+        return self.win.GetExitCodeProcess(self._handle)
+
+    def kill(self):
+        self.win.TerminateProcess(self._handle, 1)
+
+    def close_handles(self):
+        for name in ("_thread", "_handle"):
+            handle = getattr(self, name)
+            if handle is not None:
+                self.win.CloseHandle(handle)
+                setattr(self, name, None)
+
+
+class _WindowsChild:
+    """An unnamed parent-owned job; no child code runs before assignment."""
+    def __init__(self, cmd, target_ver=None, api=None, popen=None, **kwargs):
+        if not flash_eligible():
+            raise FlashError(platform_probe.host_status(), code="E101")
+        nonce = secrets.token_hex(32)
+        argv = flash_child.launch_argv(nonce)
+        request = dict(nonce=nonce, parent=os.getpid(), dev_requested=_WINDOWS_DEV_FLASH.get(),
+                       cmd=flash_child.validate_command(cmd), target=target_ver)
+        self.api = api or flash_child.windows_api()
+        self.job = self.api.CreateJobObjectW(None, None)
+        self.proc = None
+        if not self.job:
+            raise OSError("could not create child job")
+        try:
+            if not self.api.SetHandleInformation(self.job, 1, 0):
+                raise OSError("could not make parent job non-inheritable")
+            limits = flash_child.JobLimits()
+            limits.basic.flags = 0x2000
+            if not self.api.SetInformationJobObject(self.job, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
+                raise OSError("could not set kill-on-close job limit")
+            self.proc = (popen or _SuspendedProcess)(argv, stdin=subprocess.PIPE,
+                                                    creationflags=0x204, **kwargs)
+            if not self.api.AssignProcessToJobObject(self.job, int(self.proc._handle)):
+                raise OSError("could not assign child to job")
+            if self.api.ResumeThread(int(self.proc._thread)) != 1:
+                raise OSError("could not resume assigned child")
+            self.proc.stdin.write(b"G" + json.dumps(request, ensure_ascii=True).encode("ascii"))
+            self.proc.stdin.close()
+        except BaseException:
+            try:
+                if self.proc is not None:
+                    self.proc.kill()
+                    self.proc.wait(timeout=30)
+            finally:
+                try:
+                    if self.proc is not None and self.proc.stdin is not None:
+                        self.proc.stdin.close()
+                finally:
+                    self.close()
+            raise
+
+    def wait(self, timeout=None):
+        return self.proc.wait(timeout=timeout)
+
+    def kill(self):
+        if not self.api.TerminateJobObject(self.job, 1):
+            raise OSError("could not terminate child job")
+
+    def close(self):
+        if self.job:
+            self.api.CloseHandle(self.job)
+            self.job = None
+        if self.proc is not None:
+            self.proc.close_handles()
+
+def _start_child(cmd, **kwargs):
+    if platform_probe.host()[0] == "windows":
+        return _WindowsChild(cmd, **kwargs)
+    return subprocess.Popen(cmd, start_new_session=True, **kwargs)
+
+def _kill_child(proc):
+    if isinstance(proc, _WindowsChild):
+        proc.kill()
+    else:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except OSError:
+            proc.kill()
+    try:
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        pass
 
 def _probe_helpers():
     """Confirm every bundled native tool can actually execute (and load its libs)
@@ -82,6 +257,9 @@ def _probe_helpers():
 
 def preflight(image_path, rep=None):
     """Validate the image and that exactly one device is in mask-ROM. Fail closed."""
+    windows = platform_probe.host()[0] == "windows"
+    if not flash_eligible():
+        raise FlashError(platform_probe.host_status(), code="E101")
     rep = rep or CLIReporter()
     if not os.path.exists(image_path):
         raise FlashError(f"image not found: {image_path}", code="E120")
@@ -93,7 +271,31 @@ def preflight(image_path, rep=None):
         if f.read(4) != SQUASH_MAGIC:
             raise FlashError("image is not a squashfs (bad magic) - not a diskOS/stock image", code="E122")
 
+    if windows:
+        bundle.verify_windows_flash_bundle()
     _probe_helpers()   # every bundled tool must actually execute (catches noexec /tmp, missing libs)
+
+    if windows:
+        from .errors import PreflightError
+        try:
+            windows_usb.require_target(windows_usb.inventory())
+        except PreflightError as e:
+            raise FlashError(e.message, code=e.code, action=e.action) from e
+        except OSError as e:
+            raise FlashError(f"Windows USB inventory failed: {e}", code="E112",
+                             action="fix USB enumeration and repeat check A") from e
+        tool = bundle.native("usbboot")
+        try:
+            def run(cmd, **kw):
+                return subprocess.run(cmd, env=bundle.native_env(tool), **kw)
+            raw = windows_usb.diagnostic(tool, runner=run)
+            if raw["length"] != 5 or raw["hex"] != "5832303030":
+                raise ValueError("mask-ROM reply is not the validated X2000 identity")
+        except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+            raise FlashError(f"native mask-ROM access check failed: {e}", code="E115",
+                             action="power-cycle into fresh mask-ROM and repeat check A; "
+                                    "check WinUSB binding and USB connection") from e
+        return
 
     n = platform_probe.maskrom_count()
     if n == 0:
@@ -126,7 +328,7 @@ def _parse_debug(dbg_path):
         raw = f.read(1024)
     if len(raw) < 1024:
         raise FlashError(f"short debug readback ({len(raw)} bytes) - flash result UNKNOWN", code="E302",
-                         action=RECOVERABLE)
+                         action=WAIT_THEN_RECOVER)
     w = struct.unpack("<256I", raw)
     nbad = w[20]
     return {
@@ -168,15 +370,19 @@ def flash(image_path, target_ver, log_path=None, rep=None):
     gate refused (nothing written), FlashError otherwise (fail-closed)."""
     rep = rep or CLIReporter()
     launched = [False]
+    completed = [False]
     try:
-        return _flash(image_path, target_ver, log_path, rep, launched)
+        return _flash(image_path, target_ver, log_path, rep, launched, completed)
     except FlashError as e:
         if not launched[0]:
             e.pre_launch = True                          # usbboot never started: the Disc is untouched
         raise
     except Exception as e:
         if launched[0]:
-            raise
+            if completed[0]:
+                raise FlashError(f"flash writer finished; host/reporting error: {e}",
+                                 code="E301", action=RECOVERABLE) from e
+            raise FlashError(f"flash result UNKNOWN: {e}", code="E301", action=WAIT_THEN_RECOVER) from e
         # an OS/tool error before usbboot started (temp dir, plan/log file, Popen itself): the Disc is untouched
         err = FlashError(f"could not start the flash: {e}", code="E304",
                          action="nothing was sent to the Disc; fix the problem above and retry")
@@ -184,7 +390,19 @@ def flash(image_path, target_ver, log_path=None, rep=None):
         raise err from e
 
 
-def _flash(image_path, target_ver, log_path, rep, launched):
+def _flash_command(usbboot, spl, writer, image_path, plan, poison, dbg):
+    return [
+        usbboot, "-v", "--cpu", "x2000", "--stage1", spl, "--wait", "2",
+        "--addr", "0xa0c00000", "--download", writer,
+        "--addr", "0xa1000000", "--download", image_path,
+        "--addr", PLAN_ADDR, "--download", plan,
+        "--addr", "0xa0a00000", "--download", poison,
+        "--start1", "0xa0c00030", "--wait", FLASH_WAIT,
+        "--addr", "0xa0a00000", "--length", "0x400", "--upload", dbg,
+    ]
+
+
+def _flash(image_path, target_ver, log_path, rep, launched, completed):
     preflight(image_path, rep)
     image_path = os.path.abspath(image_path)
 
@@ -222,15 +440,7 @@ def _flash(image_path, target_ver, log_path, rep, launched):
         f.write(basegate.build_plan(target_ver, image_path))     # binds the base AND this exact image
     rep.log(f"base required on the Disc: {basegate.CATALOGUE[target_ver]['name']}")
 
-    cmd = [
-        usbboot, "-v", "--cpu", "x2000", "--stage1", spl, "--wait", "2",
-        "--addr", "0xa0c00000", "--download", writer,
-        "--addr", "0xa1000000", "--download", image_path,
-        "--addr", PLAN_ADDR, "--download", plan,
-        "--addr", "0xa0a00000", "--download", poison,
-        "--start1", "0xa0c00030", "--wait", FLASH_WAIT,
-        "--addr", "0xa0a00000", "--length", "0x400", "--upload", dbg,
-    ]
+    cmd = _flash_command(usbboot, spl, writer, image_path, plan, poison, dbg)
 
     rep.phase("Flashing (mask-ROM) - about 20 minutes", destructive=True)
     rep.warning("Do NOT disconnect the device or let the host sleep during the flash.")
@@ -238,13 +448,15 @@ def _flash(image_path, target_ver, log_path, rep, launched):
     logf = open(log_path, "w") if log_path else open(os.path.join(tmp, "flash.log"), "w")
     rep.indeterminate(True, note="flashing (scan -> erase -> program -> verify -> retry)",
                       expect_secs=FLASH_EXPECT_SECS)
+    proc = None
     try:
         try:
             with _sleep_inhibited(rep):
                 # own session so a GUI/parent crash can't SIGPIPE the flasher; output goes
                 # to a file (never a pipe) so a closed reader can't deadlock or kill it.
-                proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT,
-                                        env=bundle.native_env(cmd[0]), start_new_session=True)
+                child_kw = {"target_ver": target_ver} if platform_probe.host()[0] == "windows" else {}
+                proc = _start_child(cmd, **child_kw, stdout=logf, stderr=subprocess.STDOUT,
+                                    env=bundle.native_env(cmd[0]))
                 launched[0] = True                       # usbboot is running: from here on the Disc may be written
 
                 def _kill_flasher():
@@ -252,14 +464,7 @@ def _flash(image_path, target_ver, log_path, rep, launched):
                     # can't kill it - but that also means it SURVIVES us. Kill the host process group
                     # and reap without blocking. NB this stops only the HOST side: once usbboot has
                     # started the writer, the writer keeps running ON THE DISC regardless.
-                    try:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                    except OSError:
-                        proc.kill()
-                    try:
-                        proc.wait(timeout=30)   # reap; don't block if stuck in D-state
-                    except subprocess.TimeoutExpired:
-                        pass
+                    _kill_child(proc)
 
                 try:
                     # A3: bound the wait. If the device resets/re-enumerates mid-flash,
@@ -279,6 +484,8 @@ def _flash(image_path, target_ver, log_path, rep, launched):
                     _kill_flasher()                      # a second Ctrl-C during the reap must not lose the warning
                     raise
         finally:
+            if isinstance(proc, _WindowsChild):
+                proc.close()
             rep.indeterminate(False)
             logf.close()
 
@@ -286,22 +493,29 @@ def _flash(image_path, target_ver, log_path, rep, launched):
         if not os.path.exists(dbg):
             raise FlashError(
                 "no debug readback produced - flash result UNKNOWN; assume FAILED",
-                code="E301", action=RECOVERABLE)
+                code="E301", action=WAIT_THEN_RECOVER)
 
         d = _parse_debug(dbg)
         with open(dbg, "rb") as f:
-            verdict = basegate.read_verdict(f.read(1024))
+            raw = f.read(1024)
+        verdict = basegate.read_verdict(raw)
         d["gate"] = verdict
-        if d["magic"] == 0x4006E006 and d["done"] == 0x55555555 and verdict["result"] != 1:
+        complete = d["magic"] == 0x4006E006 and d["done"] == 0x55555555
+        refusal = verdict["result"] in basegate.GATE_CODES and verdict["result"] not in (1, 0x9A7E0B5E)
+        if complete and refusal and d["result"] == verdict["result"]:
             # the gate refused: the writer returned before unlocking/erasing anything
+            if struct.unpack_from("<I", raw, basegate.G_ERASING * 4)[0] != 0:
+                raise FlashError("the writer reported a refusal AFTER starting to erase - flash result UNKNOWN",
+                                 code="E321", action=WAIT_THEN_RECOVER)
+            completed[0] = True
             rep.log(f"base gate: 0x{verdict['result']:08X} ({verdict['meaning']}); Disc base seen: "
                     f"{verdict['matched_base'] or 'unknown'}")
-            if verdict["erase_started"]:
-                raise FlashError("the writer reported a refusal AFTER starting to erase - flash result UNKNOWN",
-                                 code="E321", action=RECOVERABLE)
             raise BaseRefused(basegate.refusal_message(verdict, target_ver), verdict)
         ok = (d["magic"] == 0x4006E006 and d["done"] == 0x55555555
               and d["result"] == 0x600DF10C and verdict["result"] == 1)
+        # DONE alone is insufficient: accept only success or a known post-gate abort.
+        completed[0] = complete and verdict["result"] == 1 and (
+            ok or 0xDEAD0001 <= d["result"] <= 0xDEAD0006)
         # SAFETY: the writer only programs its compiled NLOGBLOCKS (dbg[6]) logical blocks. If that is
         # fewer than the image occupies, the TAIL is silently dropped - and squashfs keeps its
         # inode/directory/fragment tables at the tail, so a truncated image mounts-fails and won't
@@ -322,15 +536,17 @@ def _flash(image_path, target_ver, log_path, rep, launched):
                     f"last-logical-block={d['worst_retries']}")
         else:
             rep.log(f"write: skipped={d['skipped']}")
-        fcode, name = DEVICE_RESULT_CODES.get(d["result"], ("F000", "UNKNOWN"))
+        fcode, name = DEVICE_RESULT_CODES.get(d["result"], ("F000", "UNKNOWN")) if complete else ("F000", "UNKNOWN")
+        if not ok and "nothing written" in name:
+            fcode, name = "F000", "UNKNOWN (unvalidated refusal)"
         rep.log(f"result: 0x{d['result']:08X} [{fcode}] {name}")
 
         if not ok:
             e = FlashError(
-                f"flash FAILED (device result [{fcode}] {name}, "
+                f"flash result UNKNOWN or FAILED (device result [{fcode}] {name}, "
                 f"magic=0x{d['magic']:08X} done=0x{d['done']:08X})",
-                code="E310", action=RECOVERABLE)
-            e.verdict = verdict                                  # the gate had passed: the base IS target_ver's
+                code="E310", action=RECOVERABLE if completed[0] else WAIT_THEN_RECOVER)
+            e.verdict = verdict                                  # preserve the observed gate report for recovery
             raise e
         if not cap_ok:
             raise FlashError(
@@ -355,22 +571,31 @@ def _flash(image_path, target_ver, log_path, rep, launched):
                 rep.log(f"flash log saved to {kept}")
             except OSError:
                 pass
-        shutil.rmtree(tmp, ignore_errors=True)
+        if platform_probe.host()[0] == "windows" and not completed[0]:
+            # Keep the plan (which binds the image hash), readback and host log for recovery.
+            rep.log(f"Windows flash evidence retained: {tmp}; do not resume a partial transfer")
+        else:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class _sleep_inhibited:
-    """Best-effort host sleep inhibitor for the duration of the flash. No-op if the
-    platform tool isn't available; never blocks or fails the flash. If it CAN'T
-    inhibit sleep, it warns (B5) - a suspend mid-flash would abort it."""
+    """Hold sleep inhibition through the flash; Windows fails closed before launch.
+    Linux/macOS retain their existing best-effort warning behaviour."""
 
-    def __init__(self, rep=None):
+    def __init__(self, rep=None, host=None, api=None):
         self.rep = rep
+        self.host = host
+        self.api = api
+        self.windows_active = False
 
     def __enter__(self):
         self.proc = None
-        o, _ = platform_probe.host()
+        o = self.host or platform_probe.host()[0]
         try:
-            if o == "macos":
+            if o == "windows":
+                self.api = self.api or bundle._windows_api()
+                self.windows_active = bool(self.api.SetThreadExecutionState(0x80000001))
+            elif o == "macos":
                 self.proc = subprocess.Popen(["caffeinate", "-dimsu"])
             elif o == "linux":
                 import shutil
@@ -381,7 +606,11 @@ class _sleep_inhibited:
                          "--why=diskOS flash in progress", "sleep", "infinity"])
         except Exception:
             self.proc = None
-        if self.proc is None and self.rep is not None:
+        if o == "windows" and not self.windows_active:
+            raise FlashError("could not hold the Windows system sleep request", code="E116",
+                             action="fix Windows power-request access before retrying; "
+                                    "nothing was sent to the Disc")
+        if self.proc is None and not self.windows_active and self.rep is not None:
             self.rep.warning(
                 "could not auto-inhibit system sleep on this host - make sure your "
                 "computer will NOT sleep/suspend for the next ~25 minutes (a suspend "
@@ -389,6 +618,10 @@ class _sleep_inhibited:
         return self
 
     def __exit__(self, *exc):
+        if self.windows_active:
+            if not self.api.SetThreadExecutionState(0x80000000) and self.rep:
+                self.rep.warning("could not release the Windows sleep request")
+            self.windows_active = False
         if self.proc:
             try:
                 self.proc.terminate()

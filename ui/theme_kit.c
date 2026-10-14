@@ -148,6 +148,7 @@ static void pass(lv_obj_t *o, kit_role_t parent_role, int is_root, int on_top, i
             if(f) lv_obj_set_style_text_font(o, f, 0);
         }
         style(o, r);
+        if(r == KIT_ROW && theme_kit()->row_decor) theme_kit()->row_decor(o, first_label(o));
         /* a one-line label with a fixed height shorter than the theme's face: grow it to the face (accents and
          * descenders are not cut off) */
         if(lv_obj_check_type(o, &lv_label_class) && lv_label_get_long_mode(o) != LV_LABEL_LONG_WRAP){
@@ -188,6 +189,15 @@ void kit_restyle(lv_obj_t *root){
 }
 
 void kit_keep(lv_obj_t *obj){ if(obj) lv_obj_add_flag(obj, KIT_DONE); }
+void kit_row_layout(lv_obj_t *row, kit_row_layout_t layout){
+    if(!row) return;
+    if(layout & 1) lv_obj_add_flag(row, LV_OBJ_FLAG_USER_2);
+    if(layout & 2) lv_obj_add_flag(row, LV_OBJ_FLAG_USER_3);
+}
+kit_row_layout_t kit_row_layout_get(const lv_obj_t *row){
+    return (kit_row_layout_t)((lv_obj_has_flag(row, LV_OBJ_FLAG_USER_2) ? 1 : 0) |
+                              (lv_obj_has_flag(row, LV_OBJ_FLAG_USER_3) ? 2 : 0));
+}
 
 /* content can be built after a screen is shown (lists fill asynchronously, popups open on the top layer): before
  * each redraw, style whatever is new on the visible screen and the top layer. Styled widgets are skipped, and nothing
@@ -211,9 +221,15 @@ void kit_install(void){
 
 /* ---- the active kit ---- */
 lv_obj_t *kit_default_header(lv_obj_t *root, const char *title, lv_event_cb_t back_cb);   /* ui.c */
+void kit_default_empty_state(kit_empty_kind_t kind, lv_obj_t *message);
+void kit_default_np_cover_state(lv_obj_t *cover, lv_obj_t *note, int show, int loading);
+void kit_default_home_progress(lv_obj_t *pill, int progress, int have_track, lv_color_t accent);
 const theme_kit_t theme_kit_default = {
     .id = "default",
     .header = kit_default_header,
+    .empty_state = kit_default_empty_state,
+    .np_cover_state = kit_default_np_cover_state,
+    .home_progress = kit_default_home_progress,
 };
 
 static theme_kit_t g_kit;
@@ -223,7 +239,13 @@ const theme_kit_t *theme_kit(void){
         const theme_kit_t *k = theme_kit_for_active();
         g_kit = *k;
         if(!g_kit.header) g_kit.header = theme_kit_default.header;
+        if(!g_kit.empty_state) g_kit.empty_state = theme_kit_default.empty_state;
+        if(!g_kit.np_cover_state) g_kit.np_cover_state = theme_kit_default.np_cover_state;
+        if(!g_kit.home_progress) g_kit.home_progress = theme_kit_default.home_progress;
         g_kit_ready = 1;
     }
     return &g_kit;
+}
+void kit_row_value(lv_obj_t *row, lv_obj_t *title, lv_obj_t *sub, lv_obj_t *value, kit_value_kind_t kind){
+    if(value && theme_kit()->row_value) theme_kit()->row_value(row, title, sub, value, kind);
 }

@@ -640,12 +640,17 @@ int mdb_plan_materialize(mdb_plan_t *plan){
     /* read back in the player's order and map each row to its song (PATH+TRACK+cue/iso identify it) */
     int *order = malloc((size_t)plan->count * sizeof *order);
     if(!order) return 0;
+    int *sorted = malloc((size_t)plan->count * sizeof *sorted);   /* sorted ID lookups; NULL -> plain scans */
+    if(sorted){
+        memcpy(sorted, plan->ids, (size_t)plan->count * sizeof *sorted);
+        qsort(sorted, (size_t)plan->count, sizeof *sorted, mdb_id_cmp);
+    }
     sqlite3_stmt *rd, *map;
     int n = 0; ok = 1;
     if(sqlite3_prepare_v2(d, "SELECT PATH,TRACK,IS_CUE,IS_ISO FROM CUSTOM_PLAYLIST WHERE PLAYLIST_ID=" XSTR(DISKOS_RSV_LISTID) ";",
-                          -1, &rd, NULL) != SQLITE_OK){ free(order); return 0; }
+                          -1, &rd, NULL) != SQLITE_OK){ free(sorted); free(order); return 0; }
     if(sqlite3_prepare_v2(d, "SELECT ID FROM SONG WHERE PATH=?1 AND TRACK IS ?2 AND IS_CUE IS ?3 AND IS_ISO IS ?4;", -1, &map, NULL) != SQLITE_OK){
-        sqlite3_finalize(rd); free(order); return 0;
+        sqlite3_finalize(rd); free(sorted); free(order); return 0;
     }
     int rrc;
     while(ok && (rrc = sqlite3_step(rd)) == SQLITE_ROW){
@@ -654,14 +659,24 @@ int mdb_plan_materialize(mdb_plan_t *plan){
         int id = 0, hits = 0, mrc;
         while((mrc = sqlite3_step(map)) == SQLITE_ROW){
             int cand = sqlite3_column_int(map, 0);
-            for(int j = 0; j < plan->count; j++) if(plan->ids[j] == cand){ id = cand; hits++; break; }
+            int hit = 0;
+            if(sorted) hit = bsearch(&cand, sorted, (size_t)plan->count, sizeof *sorted, mdb_id_cmp) != NULL;
+            else for(int j = 0; j < plan->count && !hit; j++) hit = (plan->ids[j] == cand);
+            if(hit){ id = cand; hits++; }
         }
         if(mrc != SQLITE_DONE || hits != 1 || n >= plan->count) ok = 0; else order[n++] = id;   /* a read error = failure */
     }
     if(ok && rrc != SQLITE_DONE) ok = 0;            /* the read-back must END cleanly, not stop on an error */
     sqlite3_finalize(rd); sqlite3_finalize(map);
-    if(!ok || n != plan->count){ free(order); return 0; }
-    for(int i = 0; i < n; i++) for(int j = i + 1; j < n; j++) if(order[i] == order[j]){ free(order); return 0; }
+    if(!ok || n != plan->count){ free(sorted); free(order); return 0; }
+    int dup = 0;
+    if(sorted){
+        memcpy(sorted, order, (size_t)n * sizeof *sorted);
+        qsort(sorted, (size_t)n, sizeof *sorted, mdb_id_cmp);
+        for(int i = 1; i < n && !dup; i++) dup = (sorted[i-1] == sorted[i]);
+    } else for(int i = 0; i < n && !dup; i++) for(int j = i + 1; j < n && !dup; j++) dup = (order[i] == order[j]);
+    free(sorted);
+    if(dup){ free(order); return 0; }
     free(plan->ids); plan->ids = order;
     return 1;
 }
@@ -906,12 +921,26 @@ void mdb_set_artist_mode(int album_artist){
 }
 int mdb_artist_mode(void){ return g_artist_mode; }
 
+static int artist_credited(const char *raw, const char *artist);
+/* Empty view key is missing metadata; raw song keys and the player's grouping stay intact. */
+int mdb_artist_missing(const char *key){
+    return !key || key[strspn(key, " \t\r\n\v\f")] == 0;
+}
+static int artist_has(const mdb_song_t *s, const char *key){
+    const char *raw = g_artist_mode ? s->artist_group : s->artist;
+    if(!key[0]) return mdb_artist_missing(raw);
+    return g_artist_mode ? !strcmp(raw, key) : artist_credited(raw, key);
+}
+
 int mdb_artists(char names[][MDB_STR], int cap){
     if(g_cart_n < 0 && g_artist_mode){                       /* by album artist: the player's exact keys, unsplit */
         char (*buf)[MDB_STR] = malloc((size_t)(g_n > 0 ? g_n : 1) * MDB_STR);
         if(!buf) return 0;
         int n = 0;
-        for(int i = 0; i < g_n; i++) if(g_songs[i].artist_group[0]) memcpy(buf[n++], g_songs[i].artist_group, MDB_STR);
+        for(int i = 0; i < g_n; i++){
+            if(mdb_artist_missing(g_songs[i].artist_group)) memset(buf[n++], 0, MDB_STR);
+            else memcpy(buf[n++], g_songs[i].artist_group, MDB_STR);
+        }
         qsort(buf, (size_t)n, MDB_STR, mdb_name_ci_exact_cmp);   /* total order: equal keys end up adjacent */
         int w = 0;
         for(int i = 0; i < n; i++)                           /* exact duplicates only: "ABBA" and "Abba" are two queues */
@@ -935,8 +964,10 @@ int mdb_artists(char names[][MDB_STR], int cap){
         char (*buf)[MDB_STR] = malloc((size_t)(maxtok>0?maxtok:1) * MDB_STR);
         if(!buf) return 0;                                   /* transient OOM: leave -1, retry later */
         int n = 0;
-        for(int i=0;i<g_n && n<maxtok;i++)
-            n += mdb_split_artists(g_songs[i].artist, buf + n, (int)(maxtok - n));
+        for(int i=0;i<g_n && n<maxtok;i++){
+            if(mdb_artist_missing(g_songs[i].artist)) memset(buf[n++], 0, MDB_STR);
+            else n += mdb_split_artists(g_songs[i].artist, buf + n, (int)(maxtok - n));
+        }
         qsort(buf, (size_t)n, MDB_STR, mdb_name_ci_cmp);
         int w = 0;
         for(int i=0;i<n;i++)
@@ -994,6 +1025,11 @@ int mdb_genres(char names[][MDB_STR], int *counts, int cap){
     return n;
 }
 
+int mdb_genre_count(void){
+    if(g_cgen_n < 0) mdb_genres(NULL, NULL, 0);
+    return g_cgen_n > 0 ? g_cgen_n : 0;
+}
+
 int mdb_genre_songs(const char *genre, const mdb_song_t **out, int cap){
     int n = 0;
     for(int i=0;i<g_n && n<cap;i++)
@@ -1020,36 +1056,74 @@ int mdb_album_track_ids(const char *album, int *ids, int cap){
     return n;
 }
 
+static int alb_id_cmp(const void *a, const void *b){
+    const alb_key_t *x = a, *y = b;
+    return (x->s->id > y->s->id) - (x->s->id < y->s->id);
+}
+static int alb_id_find(const void *a, const void *b){
+    int id = *(const int *)a;
+    const alb_key_t *k = b;
+    return (id > k->s->id) - (id < k->s->id);
+}
+/* One DISC/TRACK read per key not read yet (disc 0); a miss or a read error sorts just that song last. */
+static void alb_read_each(sqlite3 *d, alb_key_t *k, int n){
+    sqlite3_stmt *st = NULL;
+    if(sqlite3_prepare_v2(d, "SELECT DISC,TRACK FROM SONG WHERE ID=?;", -1, &st, NULL) != SQLITE_OK) st = NULL;
+    for(int i=0;i<n;i++){
+        if(k[i].disc) continue;
+        int disc = 0, track = 0;
+        if(st){
+            sqlite3_reset(st);
+            sqlite3_bind_int(st, 1, k[i].s->id);
+            if(sqlite3_step(st) == SQLITE_ROW){ disc = sqlite3_column_int(st,0); track = sqlite3_column_int(st,1); }
+        }
+        k[i].disc  = (disc  > 0) ? disc  : INT_MAX;   /* unknown -> last */
+        k[i].track = (track > 0) ? track : INT_MAX;
+    }
+    if(st) sqlite3_finalize(st);
+}
 int mdb_album_songs(const char *album, const mdb_song_t **out, int cap){
     if(cap <= 0) return 0;
-    /* Select the album set by exact ALBUM value (the player's type-3 queue is ALBUM=?). Then reorder that set by the player's disc/track order so
-     * the displayed rows match playback; g_songs' title order is the stable tiebreak. If the DB is
-     * unavailable or the query won't prepare, the whole list keeps its title order (the old
-     * behavior); a single per-song disc/track read miss just sorts that one song last. Taps play
-     * by song ID via mdb_play_pos regardless, so a tap always lands on the right track. */
+    /* Select the album set by exact ALBUM value (the player's type-3 queue is ALBUM=?). Then reorder that set by the
+     * player's disc/track order so the displayed rows match playback; g_songs' title order is the stable tiebreak. If
+     * the DB is unavailable or the keys can't be allocated, the whole list keeps its title order; a single per-song
+     * disc/track miss just sorts that one song last. Taps play by song ID via mdb_play_pos regardless. */
     int n = 0;
     for(int i=0;i<g_n && n<cap;i++)
         if(!strcmp(g_songs[i].album, album)) out[n++] = &g_songs[i];
     if(n <= 1) return n;
-
-    sqlite3 *d = db();
-    if(!d) return n;
-    sqlite3_stmt *st;
-    if(sqlite3_prepare_v2(d, "SELECT DISC,TRACK FROM SONG WHERE ID=?;", -1, &st, NULL) != SQLITE_OK)
-        return n;
+    sqlite3 *d = db(); if(!d) return n;
     alb_key_t *k = malloc((size_t)n * sizeof *k);
-    if(!k){ sqlite3_finalize(st); return n; }
-    for(int i=0;i<n;i++){
-        int disc = 0, track = 0;
-        sqlite3_reset(st);
-        sqlite3_bind_int(st, 1, out[i]->id);
-        if(sqlite3_step(st) == SQLITE_ROW){ disc = sqlite3_column_int(st,0); track = sqlite3_column_int(st,1); }
-        k[i].disc  = (disc  > 0) ? disc  : INT_MAX;   /* unknown -> last */
-        k[i].track = (track > 0) ? track : INT_MAX;
-        k[i].ord   = i;                               /* stable: keep title order within ties */
-        k[i].s     = out[i];
+    if(!k) return n;
+    for(int i=0;i<n;i++){ k[i].disc = 0; k[i].track = INT_MAX; k[i].ord = i; k[i].s = out[i]; }   /* disc 0 = not read yet */
+    /* One read of the selected IDs (not the trimmed/truncated display album). Without its SQL buffer, or on a
+     * prepare/read error, the keys not read yet fall back to one read each. */
+    size_t size = (size_t)n > ((size_t)-1 - 64) / 12 ? 0 : (size_t)n * 12 + 64;
+    char *sql = size ? malloc(size) : NULL;
+    sqlite3_stmt *st = NULL;
+    int rc = SQLITE_ERROR;
+    if(sql){
+        size_t used = (size_t)snprintf(sql, size, "SELECT ID,DISC,TRACK FROM SONG WHERE ID IN (");
+        for(int i=0;i<n;i++) used += (size_t)snprintf(sql + used, size - used, "%s%d", i ? "," : "", out[i]->id);
+        snprintf(sql + used, size - used, ");");
+        if(sqlite3_prepare_v2(d, sql, -1, &st, NULL) != SQLITE_OK) st = NULL;
+        free(sql);
+    }
+    if(st){
+        qsort(k, (size_t)n, sizeof *k, alb_id_cmp);
+        while((rc = sqlite3_step(st)) == SQLITE_ROW){
+            int id = sqlite3_column_int(st, 0);
+            alb_key_t *hit = bsearch(&id, k, (size_t)n, sizeof *k, alb_id_find);
+            if(hit){
+                int disc = sqlite3_column_int(st, 1), track = sqlite3_column_int(st, 2);
+                hit->disc = disc > 0 ? disc : INT_MAX;
+                hit->track = track > 0 ? track : INT_MAX;
+            }
     }
     sqlite3_finalize(st);
+    }
+    if(rc == SQLITE_DONE){ for(int i=0;i<n;i++) if(!k[i].disc) k[i].disc = INT_MAX; }   /* no row -> last */
+    else alb_read_each(d, k, n);
     qsort(k, (size_t)n, sizeof *k, alb_cmp);
     for(int i=0;i<n;i++) out[i] = k[i].s;
     free(k);
@@ -1076,7 +1150,7 @@ static int artist_credited(const char *raw, const char *artist){
 int mdb_artist_songs(const char *artist, const mdb_song_t **out, int cap){
     int n = 0;
     for(int i=0;i<g_n && n<cap;i++)
-        if(g_artist_mode ? !strcmp(g_songs[i].artist_group, artist) : artist_credited(g_songs[i].artist, artist))
+        if(artist && artist_has(&g_songs[i], artist))
             out[n++] = &g_songs[i];
     return n;
 }
@@ -1085,8 +1159,18 @@ int mdb_artist_songs(const char *artist, const mdb_song_t **out, int cap){
  * exactly the songs the view shows; else an exact reserved-slot queue (type 5) of the view's songs. plan->ids is the
  * queue in the order it will play, so mdb_plan_pos is a position in the queue the player really builds. */
 int mdb_artist_plan(const char *key, mdb_plan_t *plan){
-    if(!key || !key[0] || !plan) return 0;
+    if(!key || !plan) return 0;
     memset(plan, 0, sizeof *plan);
+    if(!key[0]){                      /* multiple raw keys: exact songs, in unchanged library order */
+        int n = 0;
+        for(int i = 0; i < g_n; i++) if(artist_has(&g_songs[i], key)) n++;
+        if(!n) return 0;
+        plan->ids = malloc((size_t)n * sizeof *plan->ids);
+        if(!plan->ids) return 0;
+        for(int i = 0; i < g_n; i++) if(artist_has(&g_songs[i], key)) plan->ids[plan->count++] = g_songs[i].id;
+        plan->list_type = 5;
+        return 1;
+    }
     int n = 0;
     for(int i = 0; i < g_n; i++) if(!strcmp(g_songs[i].artist_group, key)) n++;
     if(n <= 0) return 0;
@@ -1112,10 +1196,10 @@ int mdb_artist_plan(const char *key, mdb_plan_t *plan){
         if(rc != SQLITE_DONE) m = -1;
     }
     int same = m == n;                                   /* same membership (the queue order is the player's) */
-    for(int i = 0; same && i < n; i++){
-        int hit = 0;
-        for(int j = 0; j < m && !hit; j++) hit = (b[j] == a[i]);
-        same = hit;
+    if(same){
+        qsort(a, (size_t)n, sizeof *a, mdb_id_cmp);
+        for(int i = 0; same && i < n; i++)
+            same = bsearch(&b[i], a, (size_t)n, sizeof *a, mdb_id_cmp) != NULL;
     }
     /* a key that filled MDB_STR may be a truncated name: never the player's queue (always exact) */
     if(same && mdb_artist_class_type() == 1 && strlen(key) < MDB_STR - 1 && strlen(key) < sizeof plan->name){
@@ -1123,6 +1207,10 @@ int mdb_artist_plan(const char *key, mdb_plan_t *plan){
         memcpy(a, b, (size_t)n * sizeof *a);             /* the player's order */
     } else {
         plan->list_type = 5; plan->name[0] = 0;
+        if(m == n){                                     /* restore view order after membership sorting */
+            k = 0;
+            for(int i = 0; i < g_n && k < n; i++) if(!strcmp(g_songs[i].artist_group, key)) a[k++] = g_songs[i].id;
+        }
     }
     free(b);
     plan->ids = a; plan->count = n;
@@ -1136,7 +1224,7 @@ int mdb_artist_plan(const char *key, mdb_plan_t *plan){
  * (mdb_artist_songs / mdb_genre_songs), so an album row's count matches the songs it opens. */
 static int scope_has(int kind, const mdb_song_t *s, const char *key){
     if(kind == MDB_SCOPE_GENRE) return !strcasecmp(s->genre, key);
-    return g_artist_mode ? !strcmp(s->artist_group, key) : artist_credited(s->artist, key);
+    return artist_has(s, key);
 }
 static int scope_song_cmp(const void *a, const void *b){        /* the player's album order (code, name; exact name = one group), then library order */
     const mdb_song_t *x = *(const mdb_song_t *const *)a, *y = *(const mdb_song_t *const *)b;
@@ -1150,7 +1238,7 @@ static int scope_id_cmp(const void *a, const void *b){
     return (x > y) - (x < y);
 }
 int mdb_scope_albums(int kind, const char *key, char names[][MDB_STR], char artists[][MDB_STR], int *counts, int cap){
-    if(!key || !key[0]) return 0;
+    if(!key || (!key[0] && kind != MDB_SCOPE_ARTIST)) return 0;
     const mdb_song_t **tmp = malloc((size_t)(g_n > 0 ? g_n : 1) * sizeof *tmp);
     if(!tmp) return 0;
     int m = 0;
@@ -1175,7 +1263,7 @@ int mdb_scope_albums(int kind, const char *key, char names[][MDB_STR], char arti
  * read for every row, so the rows are in library order (the plan then always uses the exact custom queue). */
 static int scope_album_rows(int kind, const char *key, const char *album, const mdb_song_t **out, int cap, int *exact){
     if(exact) *exact = 0;
-    if(!key || !key[0] || !album || !album[0]) return 0;
+    if(!key || (!key[0] && kind != MDB_SCOPE_ARTIST) || !album || !album[0]) return 0;
     const mdb_song_t **cand = malloc((size_t)(g_n > 0 ? g_n : 1) * sizeof *cand);
     if(!cand) return 0;
     int n = 0;
@@ -1217,7 +1305,7 @@ int mdb_scope_album_songs(int kind, const char *key, const char *album, const md
 int mdb_scope_album_plan(int kind, const char *key, const char *album, mdb_plan_t *plan){
     if(!plan) return 0;
     memset(plan, 0, sizeof *plan);
-    if(!key || !key[0] || !album || !album[0]) return 0;
+    if(!key || (!key[0] && kind != MDB_SCOPE_ARTIST) || !album || !album[0]) return 0;
     int n = scope_album_rows(kind, key, album, NULL, 0, NULL);
     if(n <= 0) return 0;
     const mdb_song_t **rows = malloc((size_t)n * sizeof *rows);
@@ -1227,7 +1315,7 @@ int mdb_scope_album_plan(int kind, const char *key, const char *album, mdb_plan_
     for(int i = 0; i < n; i++) a[i] = rows[i]->id;
     free(rows);
     plan->list_type = 5;
-    int quotable = !strchr(key, '"') && !strchr(album, '"') && strlen(key) < MDB_TYPE7_MAX && strlen(album) < MDB_TYPE7_MAX;
+    int quotable = key[0] && !strchr(key, '"') && !strchr(album, '"') && strlen(key) < MDB_TYPE7_MAX && strlen(album) < MDB_TYPE7_MAX;
     const char *where = NULL, *fmt = NULL; int lt = 0;
     if(kind == MDB_SCOPE_GENRE){
         where = "GENRE=?1 AND ALBUM=?2"; lt = 8; fmt = "{\"style\":\"%s\", \"album\":\"%s\"}";
@@ -1353,6 +1441,17 @@ static int mdb_stats_list(mdb_song_t *out, int cap, int by_recent){
         trim(s->title); trim(s->artist); trim(s->album);
     }
     sqlite3_finalize(st); return n;
+}
+int mdb_stats_count(int by_recent){
+    sqlite3 *d = db(); if(!d) return -1;
+    sqlite3_stmt *st;
+    const char *sql = by_recent
+        ? "SELECT COUNT(*) FROM PLAY_STATS P JOIN SONG S ON S.PATH=P.PATH WHERE lower(S.PATH) NOT LIKE '%.m4b';"
+        : "SELECT COUNT(*) FROM PLAY_STATS P JOIN SONG S ON S.PATH=P.PATH WHERE P.PLAYS>0 AND lower(S.PATH) NOT LIKE '%.m4b';";
+    if(sqlite3_prepare_v2(d, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    int n = sqlite3_step(st) == SQLITE_ROW ? sqlite3_column_int(st, 0) : -1;
+    sqlite3_finalize(st);
+    return n;
 }
 int mdb_mostplayed(mdb_song_t *out, int cap){ return mdb_stats_list(out, cap, 0); }
 int mdb_recent(mdb_song_t *out, int cap){ return mdb_stats_list(out, cap, 1); }
@@ -1844,10 +1943,14 @@ int mdb_playlist_sync_registry(void){
         "UPDATE CUSTOM_PLAYLIST_INDEX SET LIST_NAME=(SELECT NAME FROM PLAYLIST_INFO p WHERE p.ID=LIST_ID) "
         "WHERE LIST_ID>0 AND LIST_NAME='custom list '||LIST_ID AND EXISTS (SELECT 1 FROM PLAYLIST_INFO p "
         "WHERE p.ID=LIST_ID AND p.NAME<>LIST_NAME AND substr(p.NAME,1,1)<>char(1));", 0, 0, 0) != SQLITE_OK) ok = 0;
-    /* 4. remember every playlist now in both registries (step -1's evidence for a later stock-side deletion) */
-    if(ok && sqlite3_exec(d, "INSERT OR REPLACE INTO DISKOS_PL_SYNCED(PID, MEMBERS) SELECT p.ID, "
-                             "(SELECT COUNT(*) FROM CUSTOM_PLAYLIST m WHERE m.PLAYLIST_ID=p.ID) FROM PLAYLIST_INFO p "
-                             "WHERE p.ID>0 AND EXISTS (SELECT 1 FROM CUSTOM_PLAYLIST_INDEX i WHERE i.LIST_ID=p.ID);", 0, 0, 0) != SQLITE_OK) ok = 0;
+    /* 4. remember every playlist now in both registries (step -1's evidence for a later stock-side deletion); only a
+     *    new row or a changed member count is written, so a sync of agreeing registries writes nothing */
+    if(ok && sqlite3_exec(d, "INSERT OR REPLACE INTO DISKOS_PL_SYNCED(PID, MEMBERS) "
+                             "SELECT c.ID,c.MEMBERS FROM (SELECT p.ID,COUNT(m.PLAYLIST_ID) AS MEMBERS "
+                             "FROM PLAYLIST_INFO p LEFT JOIN CUSTOM_PLAYLIST m ON m.PLAYLIST_ID=p.ID "
+                             "WHERE p.ID>0 AND EXISTS (SELECT 1 FROM CUSTOM_PLAYLIST_INDEX i WHERE i.LIST_ID=p.ID) "
+                             "GROUP BY p.ID) c WHERE NOT EXISTS (SELECT 1 FROM DISKOS_PL_SYNCED y "
+                             "WHERE y.PID=c.ID AND y.MEMBERS=c.MEMBERS);", 0, 0, 0) != SQLITE_OK) ok = 0;
     if(ok && sqlite3_exec(d, "RELEASE plsync;", 0, 0, 0) == SQLITE_OK) return 2;
     sqlite3_exec(d, "ROLLBACK TO plsync;", 0, 0, 0);
     sqlite3_exec(d, "RELEASE plsync;", 0, 0, 0);
@@ -2291,7 +2394,7 @@ static int mdb_playlist_export_leased(long pid, const char *name, char *outname,
 /* Rename a playlist. */
 /* Write a custom EQ curve into the player's PEQ table (STYLE_PRESET slot). The player
  * reloads bands -> biquad coeffs when 0689 selects this preset. Format captured from the
- * stock UI (RE_CATALOGUE §3): PARAMS_JSON = 10 band objects, gain/qValue as STRINGS. */
+ * stock UI (RE_CATALOGUE section 3): PARAMS_JSON = 10 band objects, gain/qValue as STRINGS. */
 int mdb_set_peq(int style_preset, double master_gain, const char *params_json){
     sqlite3 *d = db(); if(!d) return 0;
     sqlite3_stmt *st;
@@ -2928,18 +3031,30 @@ int mdb_playlist_num(void){
     return n;
 }
 
-int mdb_playlists(char names[][MDB_STR], long *ids, int cap){
+/* counts (optional) gets each playlist's track count from the same query, so a listing that shows counts
+ * needs no per-playlist COUNT(*). */
+int mdb_playlists_counted(char names[][MDB_STR], long *ids, int *counts, int cap){
     sqlite3 *d = db(); if(!d) return 0;
     sqlite3_stmt *st;
-    if(sqlite3_prepare_v2(d, "SELECT NAME,ID FROM PLAYLIST_INFO WHERE NAME<>? ORDER BY ADD_TIME,ID;", -1, &st, NULL) != SQLITE_OK) return 0;
+    const char *q = counts
+        ? "SELECT p.NAME,p.ID,COUNT(m.PLAYLIST_ID) FROM PLAYLIST_INFO p LEFT JOIN CUSTOM_PLAYLIST m "
+          "ON m.PLAYLIST_ID=p.ID WHERE p.NAME<>? GROUP BY p.ID ORDER BY p.ADD_TIME,p.ID;"
+        : "SELECT NAME,ID FROM PLAYLIST_INFO WHERE NAME<>? ORDER BY ADD_TIME,ID;";
+    if(sqlite3_prepare_v2(d, q, -1, &st, NULL) != SQLITE_OK) return 0;
     sqlite3_bind_text(st, 1, BOOK_SCOPE_NAME, -1, SQLITE_STATIC);   /* hide the reserved book-scope playlist */
     int n=0;
     while(n<cap && sqlite3_step(st) == SQLITE_ROW){
         snprintf(names[n], MDB_STR, "%s", colt(st,0)); trim(names[n]);
-        ids[n] = (long)sqlite3_column_int64(st,1); n++;
+        ids[n] = (long)sqlite3_column_int64(st,1);
+        if(counts) counts[n] = sqlite3_column_int(st,2);
+        n++;
     }
     sqlite3_finalize(st);
     return n;
+}
+
+int mdb_playlists(char names[][MDB_STR], long *ids, int cap){
+    return mdb_playlists_counted(names, ids, NULL, cap);
 }
 
 int mdb_search(const char *q, const mdb_song_t **out, int cap){

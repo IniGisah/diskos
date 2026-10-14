@@ -111,7 +111,7 @@ void anim_page_slide_y(lv_obj_t *o, int from, int to, uint32_t ms, lv_anim_compl
 
 /* Depth scrim: a reusable full-screen translucent-black overlay that dims the screen BENEATH the
  * incoming panel during a push (0 -> ~14%) and lifts on back, so the covered screen reads as
- * receding. Cheap (one rect), no re-render of the heavy screen underneath. */
+ * receding. The changing dimming redraws the visible screen underneath. */
 void anim_scrim_fade(lv_obj_t *scrim, int in, uint32_t ms){
     start_expo(scrim, exec_opa, in ? 0 : 36, in ? 36 : 0, ms, NULL);  /* 36/255 ~= 14% */
 }

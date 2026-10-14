@@ -22,7 +22,7 @@ fi
 
 VENV=build/venv
 [ -d "$VENV" ] || python3 -m venv "$VENV"
-"$VENV/bin/pip" install --quiet --upgrade pip pyinstaller pyusb pycryptodome
+"$VENV/bin/pip" install --quiet --upgrade pip pyinstaller -r requirements.txt
 
 "$VENV/bin/pyinstaller" --clean --noconfirm \
   --distpath build/dist --workpath build/work \

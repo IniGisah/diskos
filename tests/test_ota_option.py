@@ -29,7 +29,9 @@ class OtaOptionTests(unittest.TestCase):
         self.env_key = self._write("env.pem", _pub(1))
         self.payload_key = self._write("payload.pem", _pub(2))
         self.own_key = self._write("own.pem", _pub(3))
-        env = {k: v for k, v in os.environ.items() if k != "DISKOS_OTA_ROOTPUB"}
+        ota_env = {"DISKOS_OTA_ROOTPUB", "DISKOS_MIN_KEY_EPOCH",
+                   "DISKOS_MIN_UI_EPOCH"}
+        env = {k: v for k, v in os.environ.items() if k not in ota_env}
         p = mock.patch.dict(os.environ, env, clear=True)
         p.start()
         self.addCleanup(p.stop)
@@ -50,6 +52,24 @@ class OtaOptionTests(unittest.TestCase):
         with self._payload(None):
             self.assertIsNone(imagebuild.resolve_ota_config())
             self.assertTrue(imagebuild.describe_ota(None).startswith("OFF"))
+
+    def test_payload_key_bakes_release_floors(self):
+        with self._payload(self.payload_key):
+            cfg = imagebuild.resolve_ota_config()
+        self.assertEqual(cfg["epochs"],
+                         b"MIN_KEY_EPOCH=1\nMIN_UI_EPOCH=6\n")
+
+    def test_floor_overrides_keep_their_precedence(self):
+        os.environ["DISKOS_MIN_UI_EPOCH"] = "9"
+        with self._payload(self.payload_key):
+            self.assertEqual(imagebuild.resolve_ota_config()["epochs"],
+                             b"MIN_KEY_EPOCH=1\nMIN_UI_EPOCH=9\n")
+            for floor in (1, 5, 6, 7):
+                with self.subTest(floor=floor):
+                    cfg = imagebuild.resolve_ota_config(min_ui_epoch=floor)
+                    self.assertEqual(
+                        cfg["epochs"],
+                        f"MIN_KEY_EPOCH=1\nMIN_UI_EPOCH={floor}\n".encode("ascii"))
 
     def test_no_ota_overrides_env_and_payload_key(self):
         with self._payload(self.payload_key):
@@ -90,7 +110,7 @@ class OtaOptionTests(unittest.TestCase):
         with self.assertRaises(SystemExit), mock.patch("sys.stderr"):
             p.parse_args(["install", "--stock", "x", "--no-ota", "--ota-key", "k.pem"])
         with mock.patch.object(cli.service, "do_install", return_value={"ok": True}) as di, \
-                mock.patch.object(cli.platform_probe, "is_supported", return_value=True):
+                mock.patch.object(cli.flasher, "flash_eligible", return_value=True):
             cli.cmd_install(p.parse_args(["install", "--stock", "x", "--no-ota", "-y"]))
         self.assertTrue(di.call_args[0][0]["no_ota"])
 

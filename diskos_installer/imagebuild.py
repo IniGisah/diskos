@@ -17,6 +17,8 @@ import sys
 import zipfile
 
 from . import bundle
+from .buildfs import FileSystem, TreeFS, ArchiveFS, archive_extraction_fs
+from .pseudofs import Archive
 from .reporter import CLIReporter
 
 IMG_SIZE = 100663296         # diskOS image size: 768 NAND blocks (~96 MiB) - fits v2.40's 88 MB rootfs and covers v2.09/v2.28. The NAND writer (my_write6) MUST be built for this many blocks (NLOGBLOCKS=768); the flasher checks the pinned writer's descriptor and dbg[6] so a mismatched writer can't silently truncate. Written to the start of the mtd2 rootfs partition (128 MB); the RO squashfs need not fill it.
@@ -87,6 +89,11 @@ def validate_stock_rootfs(stock_squashfs, rep=None, allow_override=True):
         mver = _grep1(ver_in, r"MAIN_OS_VER=([0-9]+)")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    return _validate_stock_version(stock_squashfs, prod, mver, rep, allow_override)
+
+
+def _validate_stock_version(stock_squashfs, prod, mver, rep, allow_override):
+    import hashlib
     # allow_override=False (install/build of this release): the pin is absolute - the override may only ever
     # relax validation of a saved stock image being RESTORED, never what diskOS gets built on or installed onto.
     override = allow_override and os.environ.get("DISKOS_ALLOW_UNTESTED_FW") == "1"
@@ -328,7 +335,7 @@ _LAUNCH = _OLD_IF + "\n    /usr/data/mq_ui &"
 # hook). The launcher is used only when S97 selected a signed, non-flashed build for THIS boot (BUILD=trial|good|prev
 # in /tmp/.diskos_run, which S97 writes before the hook runs). The OTA additions are two clearly delimited pieces
 # (helpers, and one extra leading branch); removing them and turning that branch's `elif` back into `if` gives the
-# v1.1.3 hook byte for byte (tests/release/test_ota_boot.py checks this against the v1.1.3 tag).
+# v1.1.3 hook byte for byte.
 _LAUNCHER = "/opt/diskos/bin/diskos-launch"
 _LAUNCH_RUN = _LAUNCHER + " /usr/data/mq_ui"
 _LAUNCH_CMD = "diskos_ui_start &"
@@ -554,16 +561,18 @@ def _validate_boot_hook(fi):
         bad("has no gated /usr/data launch (unexpected structure)")
 
 
-def _check_decision_file(path, payload_path, name):
+def _check_decision_file(path, payload_path, name, fs=None):
     """One boot-decision file in the output image: a regular file (lstat - never a symlink), permission
     bits EXACTLY 0755 (S_IMODE: no setuid/setgid/sticky either), and byte-identical to the payload."""
     import stat as _st
-    m = os.lstat(path).st_mode
+    if fs is None:
+        fs, path = TreeFS(os.path.dirname(path)), os.fsencode(os.path.basename(path))
+    m = fs.lstat(path).st_mode
     if not _st.S_ISREG(m) or _st.S_IMODE(m) != 0o755:
         raise BuildError(f"repacked image: {name} is not a regular 0755 file (mode {oct(m)}) - do NOT flash",
                          code="E232")
-    with open(path, "rb") as a, open(payload_path, "rb") as b:
-        if a.read() != b.read():
+    with open(payload_path, "rb") as b:
+        if fs.read_bytes(path) != b.read():
             raise BuildError(f"repacked image: {name} differs from the shipped payload - do NOT flash", code="E232")
 
 
@@ -576,12 +585,9 @@ def _check_boot_script_output(actual, expected):
                          "do NOT flash", code="E232")
 
 
-def _patch_fiio_init(path, rep):
-    """Patch the stock boot script. Works on RAW BYTES end to end, so no newline translation or decoding
-    leniency can make the hashed, patched or written bytes differ from what is checked."""
+def _patched_boot_bytes(raw):
+    """Derive the boot hook from pinned raw bytes, independent of storage."""
     import hashlib
-    with open(path, "rb") as f:
-        raw = f.read()
     sha = hashlib.sha256(raw).hexdigest()
     if sha not in KNOWN_FIIO_INIT_SHA256:
         raise BuildError(f"fiio_init.sh (sha256 {sha[:12]}...) is not the stock boot script the diskOS boot "
@@ -597,8 +603,16 @@ def _patch_fiio_init(path, rep):
             "incompatible firmware boot structure; do not ship this base untested.", code="E223")
     i = s.index(_LAUNCH)
     s = s[:i] + _BLOCK + s[i + len(_OLD_IF):]
-    with open(path, "wb") as f:
-        f.write(s.encode("utf-8"))
+    return s.encode("utf-8")
+
+
+def _patch_fiio_init(path, rep):
+    # Compatibility entry point for tree callers; the rule lives above.
+    from pathlib import Path
+    p = Path(path)
+    fs = TreeFS(p.parent)
+    target = fs.resolve(os.fsencode(p.name))
+    fs.replace_file(target, _patched_boot_bytes(fs.read_bytes(target)))
 
 
 # --- over-the-air update trust anchor (Tier A; contract: update-system/OTA_CONTRACT.md) ------------------------
@@ -606,10 +620,11 @@ def _patch_fiio_init(path, rep):
 # /etc/diskos-ota/{root.pub.pem, epochs, diskos-verify.sh}. Without a root key the image is built with OTA OFF
 # (nothing is written, and S97/the UI treat the install as "updates not supported"): a public build never
 # trusts a key nobody chose. Key sources, first hit wins: the build_image() argument, $DISKOS_OTA_ROOTPUB,
-# payload/diskos-root.pub.pem. Floors: argument, $DISKOS_MIN_KEY_EPOCH / $DISKOS_MIN_UI_EPOCH, default 1.
+# payload/diskos-root.pub.pem. Floors: argument, environment, then defaults below.
 OTA_DIR = "etc/diskos-ota"
 DEFAULT_MIN_KEY_EPOCH = 1
-DEFAULT_MIN_UI_EPOCH = 1
+# Match the UI release epoch shipped by this installer.
+DEFAULT_MIN_UI_EPOCH = 6
 _P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200")   # SubjectPublicKeyInfo, id-ecPublicKey/prime256v1, uncompressed point
 _OTA_FILES = (("root.pub.pem", 0o644), ("epochs", 0o644), ("diskos-verify.sh", 0o644))
 
@@ -666,39 +681,43 @@ def resolve_ota_config(rootpub=None, min_key_epoch=None, min_ui_epoch=None, no_o
 
 
 def _install_ota(rf, cfg):
-    d = os.path.join(rf, OTA_DIR)
-    _assert_within_rf(rf, d)
-    os.makedirs(d, exist_ok=True)
+    _edit_ota(TreeFS(rf), cfg)
+
+
+def _edit_ota(fs, cfg):
+    d = OTA_DIR.encode("ascii")
+    _edit_within(fs, d)
+    fs.mkdir(d)
     for name, mode in _OTA_FILES:
-        dst = os.path.join(d, name)
-        _assert_within_rf(rf, dst)
-        if os.path.islink(dst):
-            os.unlink(dst)
+        dst = d + b"/" + name.encode("ascii")
+        _edit_within(fs, dst)
         if name == "diskos-verify.sh":
-            _copyfile(bundle.data("diskos-verify.sh"), dst)
+            _edit_install(fs, bundle.data(name), dst, mode)
         else:
-            with open(dst, "wb") as f:
-                f.write(cfg["rootpub"] if name == "root.pub.pem" else cfg["epochs"])
-        os.chmod(dst, mode)
+            fs.replace_file(dst, cfg["rootpub"] if name == "root.pub.pem" else cfg["epochs"], mode)
 
 
 def _check_ota_output(dst, cfg):
     """Output-image check for the OTA files: present iff configured, exact bytes, regular 0644 files."""
     import stat as _st
-    d = os.path.join(dst, OTA_DIR)
+    fs = dst if isinstance(dst, FileSystem) else TreeFS(dst)
+    d = OTA_DIR.encode("ascii")
     if cfg is None:
-        if os.path.lexists(d):
-            raise BuildError("repacked image: unexpected /etc/diskos-ota although OTA is not configured - do NOT flash", code="E232")
-        return
-    _assert_within_rf(dst, d, code="E232")
-    want = {"root.pub.pem": cfg["rootpub"], "epochs": cfg["epochs"],
-            "diskos-verify.sh": open(bundle.data("diskos-verify.sh"), "rb").read()}
-    for name, mode in _OTA_FILES:
-        p = os.path.join(d, name)
-        _assert_within_rf(dst, p, code="E232")
         try:
-            m = os.lstat(p).st_mode
-            ok = _st.S_ISREG(m) and _st.S_IMODE(m) == mode and open(p, "rb").read() == want[name]
+            fs.lstat(d)
+        except FileNotFoundError:
+            return
+        raise BuildError("repacked image: unexpected /etc/diskos-ota although OTA is not configured - do NOT flash", code="E232")
+    _edit_within(fs, d, code="E232")
+    with open(bundle.data("diskos-verify.sh"), "rb") as source:
+        want = {"root.pub.pem": cfg["rootpub"], "epochs": cfg["epochs"],
+                "diskos-verify.sh": source.read()}
+    for name, mode in _OTA_FILES:
+        p = d + b"/" + name.encode("ascii")
+        _edit_within(fs, p, code="E232")
+        try:
+            m = fs.lstat(p).st_mode
+            ok = _st.S_ISREG(m) and _st.S_IMODE(m) == mode and fs.read_bytes(p) == want[name]
         except OSError:
             ok = False
         if not ok:
@@ -706,27 +725,31 @@ def _check_ota_output(dst, cfg):
 
 
 def _install_sd_guards(rf):
+    return _edit_sd_guards(TreeFS(rf))
+
+
+def _edit_sd_guards(fs):
     """Replace the stock rm entry, never its BusyBox target or an outside path."""
     import hashlib, stat
-    from pathlib import Path
-    bindir = os.path.join(rf, "bin")
-    _assert_within_rf(rf, bindir)
-    busybox = os.path.join(bindir, "busybox")
-    _assert_within_rf(rf, busybox)
-    if not stat.S_ISREG(os.lstat(busybox).st_mode):
+    _edit_within(fs, b"bin")
+    _edit_within(fs, b"bin/busybox")
+    if not stat.S_ISREG(fs.lstat(b"bin/busybox").st_mode):
         raise BuildError("stock /bin/busybox is not a regular file", code="E233")
-    before = hashlib.sha256(Path(busybox).read_bytes()).hexdigest()
-    dst = os.path.join(bindir, "rm")
-    # Validate the parent first, then unlink the directory entry itself. In
-    # particular an absolute /bin/busybox symlink must never resolve on the host.
-    if os.path.lexists(dst):
-        if stat.S_ISDIR(os.lstat(dst).st_mode):
+    before = hashlib.sha256(fs.read_bytes(b"bin/busybox")).hexdigest()
+    # Only rm may have an outside final symlink. Check its parent and unlink
+    # the entry without resolving that final component, including hardlinks.
+    try:
+        mode = fs.lstat(b"bin/rm").st_mode
+    except FileNotFoundError:
+        mode = None
+    if mode is not None:
+        if stat.S_ISDIR(mode):
             raise BuildError("stock /bin/rm is a directory", code="E233")
-        os.unlink(dst)
+        fs.unlink(b"bin/rm", follow_final=False)
     src = bundle.data("diskos-rmguard")
-    _install(src, dst, 0o755, rf)
-    _install(src, os.path.join(rf, "opt/diskos/bin/rm"), 0o755, rf)
-    if hashlib.sha256(Path(busybox).read_bytes()).hexdigest() != before:
+    _edit_install(fs, src, b"bin/rm", 0o755)
+    _edit_install(fs, src, b"opt/diskos/bin/rm", 0o755)
+    if hashlib.sha256(fs.read_bytes(b"bin/busybox")).hexdigest() != before:
         raise BuildError("BusyBox changed while installing the SD guard", code="E233")
     return before
 
@@ -734,23 +757,24 @@ def _install_sd_guards(rf):
 def _validate_sd_guards(rf, expected_busybox_sha=None):
     import hashlib, stat
     from pathlib import Path
+    fs = rf if isinstance(rf, FileSystem) else TreeFS(rf)
     expected = Path(bundle.data("diskos-rmguard")).read_bytes()
     for rel in ("bin/rm", "opt/diskos/bin/rm"):
-        path = os.path.join(rf, rel)
-        _assert_within_rf(rf, path, code="E232")
+        path = rel.encode("ascii")
+        _edit_within(fs, path, code="E232")
         try:
-            mode = os.lstat(path).st_mode
+            mode = fs.lstat(path).st_mode
             if not stat.S_ISREG(mode) or not mode & 0o111:
                 raise OSError("not an executable regular file")
-            if Path(path).read_bytes() != expected:
+            if fs.read_bytes(path) != expected:
                 raise OSError("content mismatch")
         except OSError as exc:
             raise BuildError(f"repacked image: invalid SD guard {rel}: {exc} - do NOT flash", code="E232") from exc
     if expected_busybox_sha is not None:
-        path = os.path.join(rf, "bin/busybox")
-        _assert_within_rf(rf, path, code="E232")
-        if (not stat.S_ISREG(os.lstat(path).st_mode)
-                or hashlib.sha256(Path(path).read_bytes()).hexdigest() != expected_busybox_sha):
+        path = b"bin/busybox"
+        _edit_within(fs, path, code="E232")
+        if (not stat.S_ISREG(fs.lstat(path).st_mode)
+                or hashlib.sha256(fs.read_bytes(path)).hexdigest() != expected_busybox_sha):
             raise BuildError("repacked image: BusyBox differs from stock - do NOT flash", code="E232")
 
 
@@ -768,10 +792,15 @@ def _validate_ui_elf(ui_path):
         raise BuildError(f"'{ui_path}' e_machine is not MIPS-LE", code="E222")
 
 
-def _run(cmd, **kw):
+def _run(cmd, msys_paths=(), **kw):
     # cmd[0] is the resolved tool path; native_env tailors the loader path to whether
     # that tool is bundled (gets vendor/lib) or a system copy (clean env).
-    return subprocess.run(cmd, env=bundle.native_env(cmd[0]), **kw)
+    env = bundle.native_env(cmd[0])
+    if bundle.platform_probe.host()[0] == "windows" and msys_paths:
+        cmd = list(cmd)
+        for index in msys_paths:
+            cmd[index] = bundle.msys_path(cmd[index])
+    return subprocess.run(cmd, env=env, **kw)
 
 
 def check_squashfs_tools(mksq, unsq, rep=None):
@@ -1005,50 +1034,253 @@ def _validate_squashfs_output(sq_path, unsq, expect_ui_sha, expect_ui_sz, extrac
             raise BuildError(f"repacked image failed full extraction (unsquashfs rc={r.returncode}) - "
                              f"corrupt/truncated repack: {r.stderr.strip()[:200]}", code="E232")
 
-        def _need(rel, what):
-            p = os.path.join(dst, rel)
-            _assert_within_rf(dst, p, code="E232")   # a crafted rootfs must not escape via a symlink
-            if not os.path.exists(p):
-                raise BuildError(f"repacked image is missing {what} ({rel}) - do NOT flash", code="E232")
-            return p
-
-        # boot hook present + patched
-        with open(_need("usr/project/fiio_init.sh", "boot script"), "rb") as f:
-            fi = f.read()                 # RAW bytes: no newline translation, no lossy decoding
-        if expected_fiio_init is None:
-            raise BuildError("internal: output validation needs the patched boot script bytes", code="E232")
-        _check_boot_script_output(fi, expected_fiio_init)
-        sel = _need("etc/init.d/S96diskos_select", "boot selector")
-        if not (os.stat(sel).st_mode & 0o111):
-            raise BuildError("repacked image: S96diskos_select is not executable", code="E232")
-        # exact identity, not just existence: the boot-time scripts are what decide stock vs diskOS
-        # every file the stock/diskOS decision runs through: exact bytes, a regular file (not a symlink),
-        # and permission bits exactly 0755 - a non-executable helper would silently force every boot to stock
-        for rel, name in _BOOT_DECISION_FILES + _SUPPORT_FILES:
-            _check_decision_file(_need(rel, name), bundle.data(name), name)
-        _validate_sd_guards(dst, expected_busybox_sha)
-        _check_ota_output(dst, ota_cfg)
-        # first-boot installer hook present + executable
-        s97 = _need("etc/init.d/S97diskos_install", "first-boot installer hook")
-        if not (os.stat(s97).st_mode & 0o111):
-            raise BuildError("repacked image: S97diskos_install is not executable", code="E232")
-        # embedded UI: exact identity + exec bit
-        ui = _need("opt/diskos/mq_ui", "embedded UI")
-        if os.path.getsize(ui) != expect_ui_sz:
-            raise BuildError(f"repacked image: embedded UI size {os.path.getsize(ui)} != {expect_ui_sz}", code="E232")
-        if hashlib.sha256(open(ui, "rb").read()).hexdigest() != expect_ui_sha:
-            raise BuildError("repacked image: embedded UI hash mismatch (repack corrupted it) - do NOT flash", code="E232")
-        if not (os.stat(ui).st_mode & 0o111):
-            raise BuildError("repacked image: embedded UI is not executable", code="E232")
-        # manifest present + agrees with the embedded UI (the on-device hook trusts it)
-        man = _need("etc/diskos_manifest", "diskOS manifest")
-        if (_grep1(man, r"SHA256=([0-9a-fA-F]+)") != expect_ui_sha
-                or _grep1(man, r"SIZE=([0-9]+)") != str(expect_ui_sz)):
-            raise BuildError("repacked image: manifest/UI mismatch - do NOT flash", code="E232")
+        validate_image(TreeFS(dst), expect_ui_sha, expect_ui_sz, expected_busybox_sha,
+                       expected_fiio_init, ota_cfg)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     if rep is not None:
         rep.log("output squashfs validated (full extraction + boot hook + S97 + manifest + UI hash/mode)")
+
+
+@contextlib.contextmanager
+def _export_archive(sq_path, unsq, spool_root, code="E232"):
+    """Independent complete strict export; consume every regular inode before success."""
+    import tempfile
+    with contextlib.ExitStack() as stack:
+        try:
+            td = stack.enter_context(tempfile.TemporaryDirectory(
+                prefix="diskos-pfcheck-", dir=spool_root))
+            pf = os.path.join(td, "output.pf")
+            r = _run([unsq, "-processors", "1", "-strict-errors", "-pf", pf, sq_path],
+                     msys_paths=(5, 6), capture_output=True, text=True, timeout=300)
+            if r.returncode:
+                raise ValueError(f"unsquashfs rc={r.returncode}: {(r.stderr or '').strip()[:200]}")
+            source = stack.enter_context(open(pf, "rb"))
+            archive = stack.enter_context(Archive(source))
+            for e in archive.entries.values():
+                if e[0] == b"R":
+                    for _ in archive.chunks(e[6], e[5]):
+                        pass
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            raise BuildError(f"squashfs pseudo export failed: {exc}", code=code) from exc
+        yield archive
+
+
+def validate_archive_output(sq_path, unsq, expect_ui_sha, expect_ui_sz, spool_root,
+                            expected_busybox_sha=None, expected_fiio_init=None, ota_cfg=None,
+                            intended_archive=None):
+    """Check contents and, when supplied, every intended inode after pack transforms."""
+    try:
+        sqsz = os.path.getsize(sq_path)
+        if sqsz > IMG_SIZE:
+            raise BuildError(
+                f"squashfs is {sqsz} > {IMG_SIZE} partition - refusing (truncating would "
+                "make it unbootable). Trim content or use a smaller UI.", code="E231")
+        with open(sq_path, "rb") as source:
+            if source.read(4) != SQUASH_MAGIC:
+                raise BuildError("repacked image is not a valid squashfs (bad superblock magic) - "
+                                 "the repacker produced a corrupt file", code="E232")
+    except OSError as exc:
+        raise BuildError(f"repacked image could not be read: {exc}", code="E232") from exc
+    with _export_archive(sq_path, unsq, spool_root) as archive:
+        validate_image(ArchiveFS(archive), expect_ui_sha, expect_ui_sz, expected_busybox_sha,
+                       expected_fiio_init, ota_cfg)
+        if intended_archive is not None:
+            try:
+                expected = _packed_manifest(intended_archive)
+                actual = _packed_manifest(archive, intended=False)
+            except (OSError, ValueError) as exc:
+                raise BuildError(f"repacked archive could not be compared: {exc} - do NOT flash",
+                                 code="E232") from exc
+            if expected != actual:
+                changed = sorted(p for p in expected.keys() | actual.keys()
+                                 if expected.get(p) != actual.get(p))
+                raise BuildError(f"repacked archive differs from intended image: {changed[:5]!r}",
+                                 code="E232")
+
+
+def _packed_manifest(archive, intended=True):
+    result = archive.manifest()
+    for path, (meta, detail, links, attrs) in result.items():
+        if meta[0] == b"D":
+            meta[1] = 0  # Host directory edits change mtimes; retain every other field.
+        if intended:
+            meta[3:5] = [0, 0]  # -all-root
+            result[path] = (meta, detail, links, {})  # -no-xattrs
+    return result
+
+
+def validate_stock_archive(stock_squashfs, unsq, spool_root, rep=None, allow_override=True):
+    """Archive lookup with the same stock product/version/pin policy as the tree path."""
+    rep = rep or CLIReporter()
+    try:
+        with open(stock_squashfs, "rb") as source:
+            if source.read(4) != SQUASH_MAGIC:
+                raise BuildError("not a squashfs image (bad magic) - not a Snowsky Disc rootfs", code="E220")
+        with _export_archive(stock_squashfs, unsq, spool_root, code="E230") as archive:
+            fs = ArchiveFS(archive)
+            prod = _fs_grep1(fs, b"etc/product_version/version.in", r"PRODUCT=([A-Za-z0-9_]+)")
+            mver = _fs_grep1(fs, b"etc/product_version/version.in", r"MAIN_OS_VER=([0-9]+)")
+    except (OSError, ValueError) as exc:
+        raise BuildError(f"could not read version.in from the stock rootfs: {exc}", code="E230") from exc
+    return _validate_stock_version(stock_squashfs, prod, mver, rep, allow_override)
+
+
+def check_archive_squashfs_tools(mksq, unsq, spool_root, rep=None):
+    """Opt-in pseudo pack/export capability check with stock LZO parameters."""
+    import tempfile
+    from .pseudofs import MARK
+    payload = b"diskos-lzo-probe-0123456789abcdef" * 8192
+    try:
+        with tempfile.TemporaryDirectory(prefix="diskos-pfprobe-", dir=spool_root) as td:
+            empty, pf, sq = (os.path.join(td, name) for name in ("empty", "input.pf", "probe.sq"))
+            os.mkdir(empty)
+            with Archive(b"/ D 1 755 0 0\n" + MARK) as archive:
+                archive.file(b"probe.bin", payload)
+                with open(pf, "wb") as output:
+                    archive.write(output)
+            r = _run([mksq, empty, sq, "-pf", pf, "-comp", "lzo", "-b", "131072",
+                      "-no-xattrs", "-all-root", "-noappend", "-processors", "1"],
+                     msys_paths=(1, 2, 4), capture_output=True, text=True, timeout=120)
+            if r.returncode:
+                raise ValueError(f"mksquashfs rc={r.returncode}: {(r.stderr or '').strip()[:200]}")
+            with _export_archive(sq, unsq, td, code="E104") as result:
+                if ArchiveFS(result).read_bytes(b"probe.bin") != payload:
+                    raise ValueError("pack/export round-trip bytes differ")
+    except (OSError, ValueError, subprocess.SubprocessError, BuildError) as exc:
+        raise BuildError(f"squashfs LZO pseudo capability check failed: {exc}", code="E104",
+                         action="repair/rebuild squashfs tools with working LZO and pseudo-file support") from exc
+    if rep is not None:
+        rep.log("squashfs LZO pseudo capability check passed")
+
+
+def _fs_sha256(fs, path):
+    import hashlib
+    digest = hashlib.sha256()
+    for block in fs.iter_bytes(path):
+        digest.update(block)
+    return digest.hexdigest()
+
+
+def _fs_grep1(fs, path, pattern):
+    m = re.search(pattern, fs.read_bytes(path).decode("utf-8", errors="ignore"))
+    return m.group(1) if m else None
+
+
+def validate_image(fs, expect_ui_sha, expect_ui_sz, expected_busybox_sha=None,
+                   expected_fiio_init=None, ota_cfg=None):
+    """The single content validator for independently unpacked output."""
+    try:
+        _validate_image_contents(fs, expect_ui_sha, expect_ui_sz, expected_busybox_sha,
+                                 expected_fiio_init, ota_cfg)
+    except (OSError, ValueError) as exc:
+        raise BuildError(f"repacked image content could not be read: {exc} - do NOT flash", code="E232") from exc
+
+
+def _validate_image_contents(fs, expect_ui_sha, expect_ui_sz, expected_busybox_sha,
+                             expected_fiio_init, ota_cfg):
+    def _need(rel, what):
+        p = rel.encode("ascii")
+        _edit_within(fs, p, code="E232")   # a crafted rootfs must not escape via a symlink
+        try:
+            fs.stat(p)
+        except FileNotFoundError:
+            raise BuildError(f"repacked image is missing {what} ({rel}) - do NOT flash", code="E232")
+        return p
+
+    # boot hook present + patched
+    fi = fs.read_bytes(_need("usr/project/fiio_init.sh", "boot script"))                 # RAW bytes: no newline translation, no lossy decoding
+    if expected_fiio_init is None:
+        raise BuildError("internal: output validation needs the patched boot script bytes", code="E232")
+    _check_boot_script_output(fi, expected_fiio_init)
+    sel = _need("etc/init.d/S96diskos_select", "boot selector")
+    if not (fs.stat(sel).st_mode & 0o111):
+        raise BuildError("repacked image: S96diskos_select is not executable", code="E232")
+    # exact identity, not just existence: the boot-time scripts are what decide stock vs diskOS
+    # every file the stock/diskOS decision runs through: exact bytes, a regular file (not a symlink),
+    # and permission bits exactly 0755 - a non-executable helper would silently force every boot to stock
+    for rel, name in _BOOT_DECISION_FILES + _SUPPORT_FILES:
+        _check_decision_file(_need(rel, name), bundle.data(name), name, fs)
+    _validate_sd_guards(fs, expected_busybox_sha)
+    _check_ota_output(fs, ota_cfg)
+    # first-boot installer hook present + executable
+    s97 = _need("etc/init.d/S97diskos_install", "first-boot installer hook")
+    if not (fs.stat(s97).st_mode & 0o111):
+        raise BuildError("repacked image: S97diskos_install is not executable", code="E232")
+    # embedded UI: exact identity + exec bit
+    ui = _need("opt/diskos/mq_ui", "embedded UI")
+    if fs.stat(ui).st_size != expect_ui_sz:
+        raise BuildError(f"repacked image: embedded UI size {fs.stat(ui).st_size} != {expect_ui_sz}", code="E232")
+    if _fs_sha256(fs, ui) != expect_ui_sha:
+        raise BuildError("repacked image: embedded UI hash mismatch (repack corrupted it) - do NOT flash", code="E232")
+    if not (fs.stat(ui).st_mode & 0o111):
+        raise BuildError("repacked image: embedded UI is not executable", code="E232")
+    # manifest present + agrees with the embedded UI (the on-device hook trusts it)
+    man = _need("etc/diskos_manifest", "diskOS manifest")
+    if (_fs_grep1(fs, man, r"SHA256=([0-9a-fA-F]+)") != expect_ui_sha
+            or _fs_grep1(fs, man, r"SIZE=([0-9]+)") != str(expect_ui_sz)):
+        raise BuildError("repacked image: manifest/UI mismatch - do NOT flash", code="E232")
+
+
+def _edit_within(fs, path, code="E233"):
+    if isinstance(fs, TreeFS):
+        _assert_within_rf(str(fs.root), str(fs._path(path)), code=code)
+    try:
+        fs.resolve(path)
+    except (ValueError, OSError) as exc:
+        raise BuildError(f"refusing to write outside the rootfs: {path!r}: {exc}", code=code) from exc
+
+
+def _edit_install(fs, src, dst, mode):
+    _edit_within(fs, dst)
+    with open(src, "rb") as source:
+        fs.replace_file(dst, source, mode)
+
+
+def edit_image(fs, ui_binary, variant, ota_cfg, rep=None):
+    """The single image edit phase. Paths are image bytes, never host paths."""
+    import hashlib, time
+    if variant not in ("public", "dev"):
+        raise BuildError(f"variant must be 'public' or 'dev', got {variant!r}", code="E250")
+    try:
+        boot = b"usr/project/fiio_init.sh"
+        _edit_within(fs, boot)
+        patched = _patched_boot_bytes(fs.read_bytes(boot))
+        fs.replace_file(fs.resolve(boot), patched)
+        for rel, name in _BOOT_DECISION_FILES:
+            _edit_install(fs, bundle.data(name), rel.encode("ascii"), 0o755)
+        if ota_cfg:
+            _edit_ota(fs, ota_cfg)
+        for rel, name in _SUPPORT_FILES:
+            _edit_install(fs, bundle.data(name), rel.encode("ascii"), 0o755)
+        # Guard the actual /bin entry too: default PATH and stock fallbacks must
+        # remain protected even when the custom UI/NAND override is unavailable.
+        busybox_sha = _edit_sd_guards(fs)
+        with open(ui_binary, "rb") as source:
+            ui_sha = hashlib.sha256(source.read()).hexdigest()
+        ui_sz = os.path.getsize(ui_binary)
+        manifest = b"etc/diskos_manifest"
+        _edit_within(fs, manifest)
+        fs.replace_file(manifest,
+                        (f"SHA256={ui_sha}\nSIZE={ui_sz}\nARCH=mips-le\nVARIANT={variant}\n"
+                         f"BUILT={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(fs.clock))}\n").encode("ascii"))
+        # Embed the UI INSIDE the rootfs at a fixed path the S97 hook installs from FIRST (SD is only a
+        # fallback source). This makes first boot need no SD card: flash -> reboot -> diskOS. The hook
+        # still verify_ui's this copy against the manifest above, so a corrupt flash can't run it.
+        _edit_install(fs, ui_binary, b"opt/diskos/mq_ui", 0o755)
+        # Debug-access tooling (BOTH variants): the diskos-debug helper + a static dropbear. mq_ui's
+        # "Debug Mode" toggle drives these to start SSH (random per-enable password) and/or the USB
+        # serial shell on demand. Shipping them in the public image too means a normal user can enable
+        # debug access from the UI without needing the dev build.
+        for name in ("dropbearmulti", "diskos-debug.sh"):
+            _edit_install(fs, bundle.data(name), b"usr/project/" + name.encode("ascii"), 0o755)
+        if variant == "dev":
+            # Dev only: an ALWAYS-ON USB serial recovery shell (builds the gadget + attaches the one
+            # diskos-debug shell at boot), so a dev build is reachable over USB even before the UI runs.
+            _edit_install(fs, bundle.data("S99usbserial"), b"etc/init.d/S99usbserial", 0o755)
+        return patched, busybox_sha, ui_sha, ui_sz
+    except ValueError as exc:
+        raise BuildError(f"refusing to edit crafted or corrupt rootfs: {exc}", code="E233") from exc
 
 
 def describe_ota(cfg):
@@ -1066,12 +1298,22 @@ def build_image(stock_squashfs, ui_binary, variant, out_bin, workdir, rep=None, 
     rep = rep or CLIReporter()
     if variant not in ("public", "dev"):
         raise BuildError(f"variant must be 'public' or 'dev', got {variant!r}", code="E250")
+    host = bundle.platform_probe.host()[0]
+    if host not in ("linux", "macos", "windows"):
+        # e.g. an MSYS2/Cygwin Python on Windows: POSIX tree extraction onto NTFS and
+        # MSYS-parented tools are both unqualified. Use native Windows Python instead.
+        from .errors import PreflightError
+        raise PreflightError(f"image building is not supported on host {bundle.platform_probe.host_tag()}",
+                             code="E101", action="run the installer with native Windows, Linux or macOS Python")
     rep.phase(f"Building diskOS image ({variant})")
     ota_cfg = resolve_ota_config(ota_rootpub, min_key_epoch, min_ui_epoch, no_ota)     # BEFORE any heavy work: a bad key fails fast
     rep.log("OTA updates: " + describe_ota(ota_cfg))
 
     unsq = bundle.native("unsquashfs")
     mksq = bundle.native("mksquashfs")
+    if host == "windows":
+        return _build_archive_image(stock_squashfs, ui_binary, variant, out_bin,
+                                    workdir, rep, ota_cfg, mksq, unsq)
     # Prove the resolved squashfs tools can pack+extract with the stock LZO params BEFORE
     # unpacking the firmware - so a system tool without LZO fails cleanly, not mid-build.
     check_squashfs_tools(mksq, unsq, rep)
@@ -1093,56 +1335,8 @@ def build_image(stock_squashfs, ui_binary, variant, out_bin, workdir, rep=None, 
         _validate_ui_elf(ui_binary)
 
         rep.status("[4/6] patching fiio_init.sh + installing first-boot hook")
-        fiio_path = os.path.join(rf, "usr/project/fiio_init.sh")
-        _assert_within_rf(rf, fiio_path)          # a crafted rootfs must not redirect the in-place patch
-        _patch_fiio_init(fiio_path, rep)
-        with open(fiio_path, "rb") as f:
-            patched_fiio_init = f.read()
-        # Runs before S97 so the stock choice is made ahead of any diskOS installation work.
-        _install(bundle.data("S96diskos_select"), os.path.join(rf, "etc/init.d/S96diskos_select"), 0o755, rf)
-        _install(bundle.data("S97diskos_install"), os.path.join(rf, "etc/init.d/S97diskos_install"), 0o755, rf)
-        # the one shell reader of the boot-selection record, used by S97 and by the boot hook
-        _install(bundle.data("diskos-selected"), os.path.join(rf, _SELECTED_HELPER.lstrip("/")), 0o755, rf)
-        # S96's bounded native probe: errno-aware preference lookup + pin read, under its own supervisor
-        _install(bundle.data("diskos-bootprobe"), os.path.join(rf, _BOOTPROBE.lstrip("/")), 0o755, rf)
-        # read-only launcher the boot hook runs instead of exec'ing the writable /usr/data path
-        _install(bundle.data("diskos-launch"), os.path.join(rf, _LAUNCHER.lstrip("/")), 0o755, rf)
-        if ota_cfg:
-            _install_ota(rf, ota_cfg)
-        # artwork helper run by the UI (no stock ffmpeg dependency)
-        _install(bundle.data("diskos-artdec"), os.path.join(rf, _ARTDEC.lstrip("/")), 0o755, rf)
-        # Guard the actual /bin entry too: default PATH and stock fallbacks must
-        # remain protected even when the custom UI/NAND override is unavailable.
-        busybox_sha = _install_sd_guards(rf)
-
-        import hashlib
-        ui_sha = hashlib.sha256(open(ui_binary, "rb").read()).hexdigest()
-        ui_sz = os.path.getsize(ui_binary)
-        import time
-        manifest_path = os.path.join(rf, "etc/diskos_manifest")
-        _assert_within_rf(rf, manifest_path)
-        if os.path.islink(manifest_path):
-            os.unlink(manifest_path)              # never follow a planted symlink at the manifest path
-        with open(manifest_path, "w") as f:
-            f.write(f"SHA256={ui_sha}\nSIZE={ui_sz}\nARCH=mips-le\nVARIANT={variant}\n"
-                    f"BUILT={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")
-
-        # Embed the UI INSIDE the rootfs at a fixed path the S97 hook installs from FIRST (SD is only a
-        # fallback source). This makes first boot need no SD card: flash -> reboot -> diskOS. The hook
-        # still verify_ui's this copy against the manifest above, so a corrupt flash can't run it.
-        _install(ui_binary, os.path.join(rf, "opt/diskos/mq_ui"), 0o755, rf)
-
-        # Debug-access tooling (BOTH variants): the diskos-debug helper + a static dropbear. mq_ui's
-        # "Debug Mode" toggle drives these to start SSH (random per-enable password) and/or the USB
-        # serial shell on demand. Shipping them in the public image too means a normal user can enable
-        # debug access from the UI without needing the dev build.
-        _install(bundle.data("dropbearmulti"), os.path.join(rf, "usr/project/dropbearmulti"), 0o755, rf)
-        _install(bundle.data("diskos-debug.sh"), os.path.join(rf, "usr/project/diskos-debug.sh"), 0o755, rf)
-
-        if variant == "dev":
-            # Dev only: an ALWAYS-ON USB serial recovery shell (builds the gadget + attaches the one
-            # diskos-debug shell at boot), so a dev build is reachable over USB even before the UI runs.
-            _install(bundle.data("S99usbserial"), os.path.join(rf, "etc/init.d/S99usbserial"), 0o755, rf)
+        patched_fiio_init, busybox_sha, ui_sha, ui_sz = edit_image(
+            TreeFS(rf), ui_binary, variant, ota_cfg, rep)
 
         rep.status("[5/6] repacking squashfs (stock params: lzo, -b 131072)")
         out_sq = os.path.join(workdir, "out.squashfs")
@@ -1176,6 +1370,66 @@ def build_image(stock_squashfs, ui_binary, variant, out_bin, workdir, rep=None, 
         return out_bin
 
 
+def _build_archive_image(stock, ui, variant, out_bin, workdir, rep, ota_cfg, mksq, unsq):
+    """Windows build only: Linux inode names and metadata never reach the host FS."""
+    import hashlib
+    import tempfile
+    check_archive_squashfs_tools(mksq, unsq, workdir, rep)
+    rep.status("[1/6] unpacking stock rootfs")
+    rep.status("[2/6] validating base is a Snowsky Disc rootfs")
+    require_installable(validate_stock_archive(stock, unsq, workdir, rep, allow_override=False))
+    rep.status("[3/6] validating the diskOS UI binary")
+    _validate_ui_elf(ui)
+    with _export_archive(stock, unsq, workdir, code="E230") as archive:
+        rep.status("[4/6] patching fiio_init.sh + installing first-boot hook")
+        try:
+            patched, bb_sha, ui_sha, ui_sz = edit_image(
+                archive_extraction_fs(archive), ui, variant, ota_cfg, rep)
+        except OSError as exc:
+            raise BuildError(f"archive edit failed: {exc}", code="E230") from exc
+        rep.status("[5/6] repacking squashfs (stock params: lzo, -b 131072)")
+        try:
+            with tempfile.TemporaryDirectory(prefix="diskos-pfbuild-", dir=workdir) as td:
+                empty, pf, sq = (os.path.join(td, p) for p in ("empty", "edited.pf", "out.squashfs"))
+                try:
+                    os.mkdir(empty)
+                    with open(pf, "wb") as output:
+                        archive.write(output)
+                    root = archive.entries[b"/"]
+                    r = _run([mksq, empty, sq, "-pf", pf, "-comp", "lzo", "-b", "131072",
+                              "-no-xattrs", "-all-root", "-noappend",
+                              "-root-time", str(root[1]), "-root-mode", format(root[2], "o")],
+                             msys_paths=(1, 2, 4), capture_output=True, text=True, timeout=600)
+                    if r.returncode:
+                        raise ValueError(f"mksquashfs failed: {(r.stderr or '').strip()[:400]}")
+                except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                    raise BuildError(f"archive repack failed: {exc}", code="E230") from exc
+                validate_archive_output(sq, unsq, ui_sha, ui_sz, workdir, bb_sha, patched,
+                                        ota_cfg, intended_archive=archive)
+                rep.status("[6/6] finalizing image (pad to partition size)")
+                # Finish a sibling first; the destination only changes once it is complete.
+                partial = out_bin + ".partial"
+                try:
+                    _copyfile(sq, partial)
+                    with open(partial, "r+b") as output:
+                        output.truncate(IMG_SIZE)
+                    os.replace(partial, out_bin)
+                except OSError as exc:
+                    with contextlib.suppress(OSError):
+                        os.unlink(partial)
+                    raise BuildError(f"finalizing image failed: {exc}", code="E230") from exc
+        except OSError as exc:
+            # temp workspace creation/cleanup; coded stage errors pass through unchanged
+            raise BuildError(f"archive repack workspace failed: {exc}", code="E230") from exc
+    try:
+        with open(out_bin, "rb") as source:
+            md5 = hashlib.md5(source.read()).hexdigest()
+    except OSError as exc:
+        raise BuildError(f"built image could not be read back: {exc}", code="E230") from exc
+    rep.ok(f"image built: {out_bin} ({os.path.getsize(out_bin)} bytes) md5={md5}")
+    return out_bin
+
+
 def _grep1(path, pattern):
     try:
         with open(path, encoding="utf-8", errors="ignore") as f:
@@ -1202,8 +1456,4 @@ def _assert_within_rf(rf, dst, code="E233"):
 
 def _install(src, dst, mode, rf):
     _assert_within_rf(rf, dst)
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    if os.path.islink(dst):
-        os.unlink(dst)          # replace a planted symlink with a real file - never follow it
-    _copyfile(src, dst)
-    os.chmod(dst, mode)
+    _edit_install(TreeFS(rf), src, os.fsencode(os.path.relpath(dst, rf)), mode)

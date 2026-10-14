@@ -9,7 +9,7 @@
 
 /* Audiobook feature gate. The audiobook mode (Books view, chapters, resume, sleep timer,
  * chapter-bound ring) is OUT OF SCOPE for the FW2.40 parity release and is not yet device-
- * qualified (see analysis/BOOK_GAPHUNT_2026-09-17.md). Held at 0 for that release so .m4b
+ * qualified. Held at 0 for that release so .m4b
  * files are not indexed and all shared book behaviour reverts to plain music paths. Flip to
  * 1 to restore the full feature once it has had a device-qualification pass. */
 #define DISKOS_AUDIOBOOKS 1
@@ -77,7 +77,7 @@ typedef struct {
 int  mdb_album_keys(mdb_album_key_t *keys, int *counts, int *rep_ids, int cap);   /* all keyed albums, by name */
 int  mdb_album_key_song_ids(const mdb_album_key_t *k, int *ids, int cap);         /* the album's songs, player album order */
 int  mdb_album_plan(const mdb_album_key_t *k, mdb_plan_t *plan);                  /* 1 = plan built (caller frees) */
-int  mdb_artist_plan(const char *key, mdb_plan_t *plan);                           /* Album-Artist view key; 1 = built */
+int  mdb_artist_plan(const char *key, mdb_plan_t *plan);                           /* Album-Artist view key, or empty key in either mode; 1 = built */
 /* Scoped albums (Artist -> Albums -> Songs, Genre -> Albums -> Songs): kind = MDB_SCOPE_*, key = an Artists-view key
  * (grouped per mdb_artist_mode) or a genre name. */
 #define MDB_SCOPE_ARTIST 1
@@ -85,6 +85,10 @@ int  mdb_artist_plan(const char *key, mdb_plan_t *plan);                        
 int  mdb_scope_albums(int kind, const char *key, char names[][MDB_STR], char artists[][MDB_STR], int *counts, int cap);   /* distinct non-empty albums in scope, by name; returns the FULL count (rows written up to cap; artists/counts optional) */
 int  mdb_scope_album_songs(int kind, const char *key, const char *album, const mdb_song_t **out, int cap);  /* that album's songs in scope, player album order; returns the rows written (<= cap; out NULL = full count) */
 int  mdb_scope_album_plan(int kind, const char *key, const char *album, mdb_plan_t *plan);   /* type 7 (artist) / 8 (genre) when exact, else 5; 1 = built (caller frees) */
+static inline int mdb_id_cmp(const void *a, const void *b){
+    int x = *(const int *)a, y = *(const int *)b;
+    return (x > y) - (x < y);
+}
 int  mdb_plan_materialize(mdb_plan_t *plan);   /* type 5: write the reserved slot, adopt the player's real order */
 int  mdb_plan_pos(const mdb_plan_t *plan, int song_id);                           /* 1-based position, 0 = not in it */
 void mdb_plan_free(mdb_plan_t *plan);
@@ -125,10 +129,12 @@ int  ui_play_plan(mdb_plan_t *plan, int song_id);   /* main.c: play song_id thro
 int  mdb_artist_class_type(void);                          /* player Artist grouping: 0 ARTIST, 1 album artist, -1 unknown */
 void mdb_set_artist_mode(int album_artist);                 /* Artists view: 0 = by ARTIST (collabs split), 1 = by album artist */
 int  mdb_artist_mode(void);
+int  mdb_artist_missing(const char *key);                    /* NULL, empty or ASCII whitespace only */
 int  mdb_album_rep_ids(int *out, int cap);                    /* per album (mdb_albums order): its first song's ID */
 int  mdb_album_count(void);                                  /* distinct album count (for dynamic buffer sizing) */
 /* Distinct artists, with comma-separated artists split so a collab shows under
  * each individual name. */
+/* Empty key = one missing row. Display "Unknown artist" without changing its lookup key. */
 int  mdb_artists(char names[][MDB_STR], int cap);
 
 /* Audiobooks (v1: single-file .m4b). Books are kept out of the music Songs/Albums/Artists views. */
@@ -152,6 +158,7 @@ int  mdb_reserved_slot_player_pos(long pid, int row);   /* player's slot positio
 int  mdb_migrate_books(void);                   /* move any .m4b out of music stores into BOOKS; 1=clean/done, 0=failed (retry) */
 int  mdb_artist_count(void);   /* distinct tokenized artist count (for sizing the caller's buffer) */
 /* Distinct genres/tags (with track count). */
+int  mdb_genre_count(void);
 int  mdb_genres(char names[][MDB_STR], int *counts, int cap);
 
 /* Fill out[] with songs in an album / by an artist token / in a genre. Returns count. */
@@ -168,12 +175,14 @@ int  mdb_favorites(mdb_song_t *out, int cap, int stock_order);   /* stock_order:
 int  mdb_favorite_count(void);                                   /* MY_LOVE music rows (may exceed SONG); -1 = error */
 int  mdb_love_path(int love_id, char *out, int cap);              /* MY_LOVE.PATH for a MY_LOVE.ID; 1 = found */
 void mdb_record_play(const char *path);            /* bump PLAY_STATS on a new track */
+int  mdb_stats_count(int by_recent);
 int  mdb_mostplayed(mdb_song_t *out, int cap);     /* songs by play count desc */
 int  mdb_recent(mdb_song_t *out, int cap);         /* songs by last-played desc */
 int  mdb_unfavorite(int love_id);                   /* remove by MY_LOVE.ID */
 int  mdb_playlist_sync_registry(void);   /* reconcile PLAYLIST_INFO with stock's CUSTOM_PLAYLIST_INDEX; 2 = synced, 1 = no index, 0 = failed */
 int  mdb_playlist_num(void);   /* count of playlists (to size a dynamic buffer, no fixed cap) */
 int  mdb_playlists(char names[][MDB_STR], long *ids, int cap);
+int  mdb_playlists_counted(char names[][MDB_STR], long *ids, int *counts, int cap);   /* + each track count (counts may be NULL) */
 /* custom playlists: create returns id (>0) or 0; add copies a SONG row by path */
 long mdb_playlist_create(const char *name);
 int  mdb_playlist_add_song(long pid, const char *path);

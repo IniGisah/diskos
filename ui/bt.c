@@ -29,7 +29,7 @@
  * patchram -> /usr/project/bluetoothd (a2dp,avrcp,source) -> hciconfig up/piscan/class
  * -> bluetoothctl agent. `bluetoothctl` drives scan/pair/connect; `bluealsa` is the
  * a2dp-source audio engine (SBC/LDAC).  Layout matches the Wi-Fi page (control row in the
- * centre band; the list carries on/scanning/empty state; connected ✓ row taps
+ * centre band; the list carries on/scanning/empty state; connected checkmark row taps
  * through to details).  NOTE: routing the player's audio onto a connected BT
  * sink is the stock mq_player's job (it has bluealsa support) - building the
  * profile here is stage 1; confirm real headphone playback with the user. */
@@ -697,7 +697,7 @@ static void bt_conn_poll_cb(lv_timer_t *t){
         } else {
             ui_toast("Paired - audio stays on player");
         }
-        scan_kick();                        /* instant re-list (device already known) -> ✓, no 13s re-scan */
+        scan_kick();                        /* instant re-list (device already known) -> checkmark, no 13s re-scan */
         return;
     }
     if(lv_tick_elaps(g_bt_conn_start) > 25000){   /* pairing can be slow */
@@ -787,7 +787,7 @@ static void info_disc_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
     bt_disconnect(g_sel_mac);
     screen_back();
-    /* re-list shortly so the now-disconnected device loses its ✓ / blue styling
+    /* re-list shortly so the now-disconnected device loses its checkmark / blue styling
      * (mirrors the connect path; disconnect is async via bluetoothctl). */
     if(g_scan_timer) lv_timer_del(g_scan_timer);
     g_scan_timer = lv_timer_create(scan_timer_cb, 4000, NULL);
@@ -887,7 +887,7 @@ static void dev_cb(lv_event_t *e){
     } else {
         bt_connect(mac);
         list_msg("Connecting " LV_SYMBOL_BLUETOOTH);
-        /* re-list shortly so the new connection picks up its ✓ */
+        /* re-list shortly so the new connection picks up its checkmark */
         if(g_scan_timer) lv_timer_del(g_scan_timer);
         g_scan_timer = lv_timer_create(scan_timer_cb, 4000, NULL);
         lv_timer_set_repeat_count(g_scan_timer, 1);
@@ -933,7 +933,7 @@ static void add_dev_row(const char *mac, const char *name, int connected){
 
 /* Show only real AUDIO devices (bluez Icon = audio-card / audio-headset / ...),
  * so BLE gadgets and the "LE-" advertisement entries (which carry no A2DP) are
- * hidden and the user can only tap a connectable sink.  Connected ✓ comes from
+ * hidden and the user can only tap a connectable sink.  Connected checkmark comes from
  * bluez's own "Connected: yes" (not a raw ACL link, which over-reports). */
 /* Enumeration runs OFF the main thread: `bluetoothctl devices` plus a per-device
  * `bluetoothctl info` is up to ~60 blocking popen() spawns - running that inline froze

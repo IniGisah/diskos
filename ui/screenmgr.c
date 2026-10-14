@@ -10,11 +10,51 @@
 #include "modelock.h"
 #include <unistd.h>
 
+void mclock_sync(int backlight_on);
+int ui_screen_backlight_on(void);
+void ui_np_title_scroll(int visible);
+
 #define SCR_W 360
 
 static lv_obj_t *s_roots[SCR_COUNT];
 static lv_obj_t *s_scrim;        /* depth overlay dimming the screen beneath the moving panel */
+static lv_obj_t *s_scrim_panel;
+
+/* The opaque sliding panel replaces these pixels. Clip only the scrim's main
+ * draw; LVGL restores the layer clip before post drawing and siblings. */
+static void scrim_clip(lv_event_t *e)
+{
+    lv_obj_t *o = s_scrim_panel;
+    if (!o || lv_obj_get_style_bg_opa(o, 0) != LV_OPA_COVER ||
+        lv_obj_get_style_opa_recursive(o, 0) != LV_OPA_COVER ||
+        lv_obj_get_style_opa_layered(o, 0) != LV_OPA_COVER ||
+        lv_obj_get_style_radius(o, 0) != 0) return;
+    lv_layer_t *layer = lv_event_get_layer(e);
+    lv_area_t a;
+    lv_obj_get_coords(o, &a);
+    if (a.y1 <= layer->_clip_area.y1 && a.y2 >= layer->_clip_area.y2 &&
+        a.x2 >= layer->_clip_area.x2 && a.x1 <= layer->_clip_area.x2)
+        layer->_clip_area.x2 = a.x1 - 1;
+}
 static int s_current = SCR_HOME;
+/* Permanent drawing figures. Keep existing assignments when adding screens. */
+static const unsigned char s_figure[SCR_COUNT] = {
+    [SCR_HOME] = 1, [SCR_LIBRARY] = 2, [SCR_NOWPLAYING] = 3,
+    [SCR_SETTINGS] = 4, [SCR_SEARCH] = 5, [SCR_APPS] = 6,
+    [SCR_WEATHER] = 7, [SCR_UPNEXT] = 8, [SCR_LYRICS] = 9,
+    [SCR_SONGINFO] = 10, [SCR_NPMENU] = 11, [SCR_NPHUB] = 12,
+    [SCR_TUNE] = 13, [SCR_EQ] = 14, [SCR_SAVER] = 15,
+    [SCR_FOLDER] = 16, [SCR_ALBUMWALL] = 17, [SCR_PLPICK] = 18,
+    [SCR_PLVIEW] = 19, [SCR_BOOKS] = 20, [SCR_CHAPTERS] = 21,
+    [SCR_SETTING_DETAIL] = 22, [SCR_SETLIST] = 23, [SCR_QUICK] = 24,
+    [SCR_QSCONFIG] = 25, [SCR_COLORPICK] = 26, [SCR_DATETIME] = 27,
+    [SCR_WIFI] = 28, [SCR_WIFI_INFO] = 29, [SCR_BT] = 30,
+    [SCR_BT_INFO] = 31, [SCR_WORKMODE] = 32, [SCR_LASTFM] = 33,
+    [SCR_DEBUG] = 34,
+};
+int screen_figure_number(int which){
+    return which >= 0 && which < SCR_COUNT ? s_figure[which] : 0;
+}
 static int s_stack[16];
 static int s_sp = 0;
 #define PUSH_MS 300   /* entrance (cubic ease-out: covers distance fast, settles gently) */
@@ -61,6 +101,7 @@ static void show_raw(int which)
         lv_obj_clear_flag(s_roots[which], LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_roots[which]);
     }
+    ui_np_title_scroll(ui_screen_backlight_on());
 }
 
 /* hide + reset the depth scrim (transition finished or was interrupted). Delete any live scrim
@@ -68,6 +109,7 @@ static void show_raw(int which)
  * rewrite the opacity back to 36 after this reset, breaking the hidden-rest invariant. */
 static void scrim_off(void)
 {
+    s_scrim_panel = NULL;
     if (s_scrim) {
         lv_anim_delete(s_scrim, NULL);
         lv_obj_add_flag(s_scrim, LV_OBJ_FLAG_HIDDEN);
@@ -80,6 +122,7 @@ static void anim_done_hide(lv_anim_t *a)
     lv_obj_t *o = (lv_obj_t *)a->var;
     lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
     root_rest(o);        /* it faded/scaled out - restore rest state for next time it's shown */
+    ui_np_title_scroll(ui_screen_backlight_on());
     scrim_off();
 }
 
@@ -96,6 +139,7 @@ static void anim_done_push(lv_anim_t *a)
         lv_obj_add_flag(s_roots[h], LV_OBJ_FLAG_HIDDEN);
         root_rest(s_roots[h]);
     }
+    ui_np_title_scroll(ui_screen_backlight_on());
     scrim_off();
 }
 
@@ -112,9 +156,10 @@ static void screen_refresh_entry(int to)
     else if (to == SCR_UPNEXT) upnext_refresh();   /* the live queue, read on every entry */
     else if (to == SCR_DATETIME) datetime_refresh();   /* starts from the current time on every entry */
     else if (to == SCR_NPHUB) nphub_refresh();   /* book-aware hub (Chapters for audiobooks) */
+    else if (to == SCR_NOWPLAYING) ui_np_enter();
     else if (to == SCR_SAVER) saver_show_sync();
     else if (to == SCR_PLVIEW) plview_refresh();   /* fresh song list every entry (no stale tap positions) */
-    else if (to == SCR_LIBRARY) library_refresh(); /* pick up playlists created (NP New Playlist) or imported
+    else if (to == SCR_LIBRARY) library_enter(); /* pick up playlists created (NP New Playlist) or imported
                                                     * (Settings) elsewhere, without needing a restart */
     else if (to == SCR_USAGE) usage_refresh();
 }
@@ -134,6 +179,8 @@ static void transition(int from, int to, int dir)
     screen_refresh_entry(to);
 
     kit_pass(nw);   /* the active theme styles anything new on the incoming screen (no-op for Default) */
+    mclock_sync(ui_screen_backlight_on()); /* set the incoming colon before its root becomes visible */
+    kit_cursor_sync(ui_screen_backlight_on());
 
     /* Cancel any in-flight animation on BOTH screens + reset their offset up front, so a
      * stale anim_done_hide from a prior fast transition can't fire later and hide the new
@@ -198,11 +245,12 @@ static void transition(int from, int to, int dir)
     /* ---- UNIFIED push/pop - ONE motion language for the whole UI ----------------------------
      * The top screen SLIDES horizontally over a STATIC screen beneath (a blit - the only smooth
      * motion on this GPU-less renderer; scale/zoom resamples and stutters). Leading-edge hairline
-     * + a subtle depth scrim on the covered screen. Only ONE screen moves, so the heavy scene
-     * underneath (NP arc / Home's blurred art) is never re-rendered mid-slide. Expo-out easing;
+     * + a subtle depth scrim on the covered screen. Only ONE screen moves; the changing scrim
+     * still redraws the scene beneath. Expo-out easing;
      * exit faster than entrance. Forward: new screen in from the right. Back: current out to the
      * right, revealing the previous. */
     if (dir > 0) {                                  /* FORWARD: `nw` slides in over static `od` */
+        s_scrim_panel = nw;
         if (od) { lv_obj_set_x(od, 0); lv_obj_clear_flag(od, LV_OBJ_FLAG_HIDDEN); }
         if (s_scrim && od) {                        /* dim the covered screen: recedes into depth */
             lv_obj_set_style_opa(s_scrim, LV_OPA_TRANSP, 0);
@@ -216,6 +264,7 @@ static void transition(int from, int to, int dir)
         s_push_hide = (od && from != to) ? from : -1;   /* hide the covered screen when the slide ends */
         anim_page_slide(nw, SCR_W, 0, PUSH_MS, anim_done_push);
     } else {                                        /* BACK: `od` slides out, revealing static `nw` */
+        s_scrim_panel = od;
         lv_obj_set_x(nw, 0);
         lv_obj_clear_flag(nw, LV_OBJ_FLAG_HIDDEN);
         if (s_scrim) {                              /* revealed screen lifts out of depth */
@@ -233,6 +282,7 @@ static void transition(int from, int to, int dir)
             lv_obj_move_foreground(nw);
         }
     }
+    ui_np_title_scroll(ui_screen_backlight_on());
 }
 
 void screen_show(int which)
@@ -603,6 +653,7 @@ void screens_init(void)
     lv_obj_set_style_opa(s_scrim, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(s_scrim, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_scrim, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_scrim, scrim_clip, LV_EVENT_DRAW_MAIN_BEGIN, NULL);
 
     home_create(s_roots[SCR_HOME]);
     weather_app_create(s_roots[SCR_WEATHER]);

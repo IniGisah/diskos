@@ -1,0 +1,23 @@
+# Windows x64, CPython 3.12.10 (the interpreter the qualified build uses; >=3.11,<3.15 supported).
+# Install with --require-hashes --only-binary=:all: (see WINDOWS_FROZEN_DEPENDENCIES.md).
+# Every hash checked against wheels downloaded from PyPI on Windows x64 (CPython 3.12.10), 2026-10-09.
+# Closure matches pip's resolution of PyInstaller 6.16.0 on that box (newer altgraph/packaging/
+# setuptools/hooks-contrib exist; these pins are deliberate).
+# pyinstaller-6.16.0-py3-none-win_amd64.whl
+PyInstaller==6.16.0 --hash=sha256:bc10eb1a787f99fea613509f55b902fbd2d8b73ff5f51ff245ea29a481d97d41
+# pyinstaller_hooks_contrib-2025.9-py3-none-any.whl
+pyinstaller-hooks-contrib==2025.9 --hash=sha256:ccbfaa49399ef6b18486a165810155e5a8d4c59b41f20dc5da81af7482aaf038
+# altgraph-0.17.4-py2.py3-none-any.whl
+altgraph==0.17.4 --hash=sha256:642743b4750de17e655e6711601b077bc6598dbfa3ba5fa2b2a35ce12b508dff
+# packaging-25.0-py3-none-any.whl
+packaging==25.0 --hash=sha256:29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484
+# setuptools-80.9.0-py3-none-any.whl
+setuptools==80.9.0 --hash=sha256:062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922
+# pefile-2023.2.7-py3-none-any.whl (downloaded from PyPI on the Windows test box 2026-10-09)
+pefile==2023.2.7 --hash=sha256:da185cd2af68c08a6cd4481f7325ed600a88f6a813bad9dea07ab3ef73d8d8d6
+# pywin32_ctypes-0.2.3-py3-none-any.whl (downloaded from PyPI on the Windows test box 2026-10-09)
+pywin32-ctypes==0.2.3 --hash=sha256:8a1513379d709975552d202d942d9837758905c8d01eb82b8bcc30918929e7b8
+# pyusb-1.3.1-py3-none-any.whl (also hashed from cached wheel bytes)
+pyusb==1.3.1 --hash=sha256:bf9b754557af4717fe80c2b07cc2b923a9151f5c08d17bdb5345dac09d6a0430
+# pycryptodome-3.23.0-cp37-abi3-win_amd64.whl (not free-threaded Python)
+pycryptodome==3.23.0 --hash=sha256:c75b52aacc6c0c260f204cbdd834f76edc9fb0d8e0da9fbf8352ef58202564e2

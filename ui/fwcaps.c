@@ -73,6 +73,7 @@ int fw_custom_peq_writable(void){ int v = fw_os_ver(); return v == 209 || v == 2
  * instead of its keepalive restarting Wi-Fi straight away (wifi.c radio reconciliation). */
 int fw_has_radio_boot_arbitration(void){ return fw_os_ver() == 257; }
 int fw_fav_play_by_love_id(void){ return fw_os_ver() == 257; }
+int fw_power_key_driveable(void){ return fw_os_ver() == 257; }
 /* 0648 = set ARTIST_CLASS_TYPE (Artist / Album Artist grouping) on every supported player: resolved tag -> dispatch
  * entry -> handler with tools/fw_tag_handler.py (V2.57 0x4f1ed0, V2.40 0x4e8c68, V2.28 0x4da3bc: all
  * player_handle_set_artist_class_type; V2.09 the same table slot, thunk 0x4127b0, RE_CATALOGUE). Unknown: never. */

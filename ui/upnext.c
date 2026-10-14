@@ -17,7 +17,7 @@
 #define UN_SHOW   200                  /* rows shown (earlier + current + upcoming); rest summarised in footer */
 #define UN_FIRST  12                   /* min rows built at once */
 #define UN_RETRY  8                    /* 1 s retries while the queue is being rebuilt */
-static lv_obj_t   *g_un_list;
+static lv_obj_t   *g_un_list, *g_un_title;
 static lv_timer_t *g_un_fill, *g_un_watch;
 static mdb_qrow_t  g_un_rows[UN_SHOW + 1];
 static int         g_un_n, g_un_fill_i, g_un_more, g_un_retries, g_un_retry;   /* g_un_retry: last read was transient */
@@ -34,7 +34,7 @@ static void un_fmt_dur(int ms, char *out, size_t n){
     long long t = ((long long)ms + 500) / 1000; snprintf(out, n, "%lld:%02lld", t / 60, t % 60);   /* no int overflow near INT32_MAX */
 }
 
-static void un_note(const char *msg){
+static lv_obj_t *un_note(const char *msg){
     lv_obj_t *l = lv_label_create(g_un_list);
     lv_label_set_text(l, msg);
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
@@ -42,6 +42,11 @@ static void un_note(const char *msg){
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(l, TC(TEXT_MUTED), 0);
     lv_obj_set_style_text_font(l, TF(UI_14), 0);
+    return l;
+}
+
+static void un_empty(const char *msg){
+    theme_kit()->empty_state(KIT_EMPTY_UPNEXT, un_note(msg));
 }
 
 /* The list must still describe what is playing: same track (identity epoch), same queue row (an unknown pos_id on
@@ -51,6 +56,16 @@ static int un_still_current(void){
     track_state_t st; ipc_get_state(&st);
     if(!st.have_track || st.path_seq != g_un_seq || strcmp(st.path, g_un_path) != 0) return 0;
     return st.pos_id == g_un_pos && ui_play_mode_now() == g_un_mode;
+}
+
+/* Only the current label follows live metadata; queue order and scroll stay intact. */
+static void un_update_title(const track_state_t *st){
+    if(!g_un_title) return;
+    const char *text = "";
+    if(st->have_track && st->path_seq == g_un_seq && st->pos_id == g_un_pos &&
+       !strcmp(st->path, g_un_path) && !strcmp(st->path, g_un_rows[0].path))
+        text = st->title_ready ? (st->title[0] ? st->title : "Untitled") : "";
+    if(strcmp(lv_label_get_text(g_un_title), text)) lv_label_set_text(g_un_title, text);
 }
 
 static void un_row_cb(lv_event_t *e){
@@ -81,7 +96,10 @@ static void un_add_row(int i){
     ui_on(r, un_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i, "upnext.un_row", UI_CORE);
 
     lv_obj_t *t = lv_label_create(r);                           /* title (may be non-Latin) */
-    lv_label_set_text(t, q->title[0] ? q->title : "Untitled");
+    if(cur){
+        g_un_title = t;
+        track_state_t st; ipc_get_state(&st); un_update_title(&st);
+    } else lv_label_set_text(t, q->title[0] ? q->title : "Untitled");
     lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(t, 14, 6); lv_obj_set_size(t, 186, 21);
     lv_obj_set_style_text_font(t, TF(USER_16), 0);
@@ -92,7 +110,7 @@ static void un_add_row(int i){
     lv_label_set_long_mode(s, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(s, 14, 28); lv_obj_set_size(s, 186, 17);
     lv_obj_set_style_text_font(s, cur ? TF(UI_14) : TF(USER_14), 0);
-    lv_obj_set_style_text_color(s, (cur ? TC(STATUS_INFO) : TC(TEXT_MUTED)), 0);
+    lv_obj_set_style_text_color(s, (cur ? (!strcmp(theme_kit()->id, "terminal") ? TC(ACCENT_PRIMARY) : TC(STATUS_INFO)) : TC(TEXT_MUTED)), 0);
 
     int dur_ms = q->dur_ms;
     if(cur && (dur_ms <= 0 || dur_ms >= 86400000)){
@@ -107,6 +125,7 @@ static void un_add_row(int i){
         lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_RIGHT, 0);
         lv_obj_set_style_text_font(d, TF(UI_12), 0);
         lv_obj_set_style_text_color(d, played ? TC(TEXT_DISABLED) : TC(TEXT_MUTED), 0);
+        kit_row_value(r, t, s, d, KIT_VALUE_DURATION);
     }
 }
 
@@ -144,6 +163,7 @@ static void un_mode_caption(int mode){
 static void un_rebuild(void){
     if(!g_un_list) return;
     un_fill_stop();
+    g_un_title = NULL;
     lv_obj_clean(g_un_list);
     lv_obj_scroll_to_y(g_un_list, 0, LV_ANIM_OFF);
     g_un_n = 0; g_un_cur_idx = 0; g_un_more = 0; g_un_path[0] = 0; g_un_pos = 0; g_un_retry = 0; g_un_mode = -1;
@@ -152,18 +172,18 @@ static void un_rebuild(void){
     g_un_pos = st.pos_id;                                        /* what the list was read against, even when empty, */
     int mode = ui_play_mode_now();                               /* so the watcher only rebuilds on a real change   */
     g_un_mode = mode;
-    if(!st.have_track || !st.path[0]){ un_note("Nothing playing"); return; }
-    if(mdb_is_book_path(st.path)){ un_note("Audiobooks play one book at a time - use Chapters"); return; }
+    if(!st.have_track || !st.path[0]){ un_empty("Nothing playing"); return; }
+    if(mdb_is_book_path(st.path)){ un_empty("Audiobooks play one book at a time - use Chapters"); return; }
     snprintf(g_un_path, sizeof g_un_path, "%s", st.path);
     int cur_idx = 0;
     int n = mode < 0 ? MDB_QUEUE_NOTFOUND : mdb_queue(mode == 1, st.pos_id, st.path, g_un_rows, UN_SHOW + 1, &cur_idx, &g_un_more);
     if(n == MDB_QUEUE_NOTFOUND || n == MDB_QUEUE_BUSY){           /* transient: the watch timer retries */
         g_un_retry = 1;
-        un_note(g_un_retries < UN_RETRY ? "Queue updating..." : "The queue isn't available right now");
+        un_empty(g_un_retries < UN_RETRY ? "Queue updating..." : "The queue isn't available right now");
         return;
     }
-    if(n == MDB_QUEUE_ERROR){ un_note("Couldn't read the queue"); return; }
-    if(n == MDB_QUEUE_EMPTY){ un_note("The queue is empty"); return; }
+    if(n == MDB_QUEUE_ERROR){ un_empty("Couldn't read the queue"); return; }
+    if(n == MDB_QUEUE_EMPTY){ un_empty("The queue is empty"); return; }
     g_un_retries = 0;
     g_un_n = n;
     g_un_cur_idx = cur_idx;
@@ -190,6 +210,7 @@ static void un_watch_cb(lv_timer_t *t){
     /* a new track, a new queue row for the same file (CUE), a pos_id that became known, or a new play mode */
     track_state_t st; ipc_get_state(&st);
     if(st.path_seq != g_un_seq || st.pos_id != g_un_pos || ui_play_mode_now() != g_un_mode){ g_un_retries = 0; un_rebuild(); }
+    else un_update_title(&st);
 }
 
 void upnext_create(lv_obj_t *root){

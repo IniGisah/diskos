@@ -14,9 +14,9 @@ NAND writer during a flash.
 
 ## Local modifications for diskOS
 
-- Larger USB transfer chunks and a longer command timeout, so the ~90-minute on-device NAND
-  writer stage does not time out.
-- Built fully statically for portability - see [`build/build-usbboot-static.sh`](../../build/build-usbboot-static.sh).
+- Bulk transfers use chunks up to 4 MiB with a 600,000 ms overall deadline. Vendor
+  controls default to 1,000 ms per attempt; `USBBOOT_TIMEOUT` overrides that timeout.
+- The Linux x86_64 package uses a fully static build for portability - see [`build/build-usbboot-pinned.sh`](../../build/build-usbboot-pinned.sh).
 
 ## Building
 
@@ -24,9 +24,13 @@ NAND writer during a flash.
 make                     # dynamic build (needs libusb-1.0 dev headers)
 ```
 
-For the portable static binary the installer ships, use
-[`build/build-usbboot-static.sh`](../../build/build-usbboot-static.sh) instead, which pins the
-libusb source and links it statically.
+For the Linux x86_64 release binary, use
+[`build/build-usbboot-pinned.sh`](../../build/build-usbboot-pinned.sh).
+It takes `--image-id FILE --out DIR --epoch N`, builds offline in a frozen
+rootless Podman image, and uses the shipped libusb 1.0.27 source archive with
+a SHA-256 check. It produces `usbboot` and `usbboot.manifest`; release staging
+requires both in `vendor/linux-x86_64/`. Prepare the build image with
+[`build/prepare-usbboot-env.sh`](../../build/prepare-usbboot-env.sh).
 
 ## Note
 

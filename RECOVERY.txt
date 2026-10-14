@@ -1,0 +1,70 @@
+diskOS Windows recovery
+Extract the whole ZIP before opening diskos-installer.exe. Keep _internal and
+all sidecars together. Use diskos-installer-cli.exe for terminal commands.
+UNKNOWN, timeout, app closed or USB lost after writing may have started:
+Leave the Disc powered and connected for at least 25 minutes after the error.
+Keep the computer awake. Do not retry or disconnect during this wait: the Disc
+may still be writing by itself. Then power-cycle it. If it will not boot, power
+it off, hold Volume Down and connect USB for mask-ROM (the screen stays black).
+Use Restore stock, or the Linux installer with the same matching stock backup.
+Restore the complete image; never resume at a guessed block or bypass a refusal.
+Recovery is not guaranteed for every unit or failure.
+Keep logs and the entire state folder: normally %LOCALAPPDATA%\diskos-installer,
+or DISKOS_INSTALLER_HOME if set. Preserve stock\gNNNN\stock.bin, stock.sha256 and
+stock.json, including uncommitted generations. stock\current.json selects the
+committed backup; older installs may use stock\stock.bin and its checksum.
+E141 (no saved stock image) or E145 (damaged backup record): preserve the state
+folder and restore using the official FiiO firmware ZIP matching the Disc's
+existing kernel and recovery firmware:
+  diskos-installer-cli.exe restore-stock --firmware "C:\path\to\matching-firmware.zip"
+The installer rebuilds stock and checks the Disc's firmware base before writing.
+Do not substitute a different version or bypass a refusal. If you cannot
+establish the matching version, keep the logs and get help.
+Other errors (the UNKNOWN instructions above always take priority):
+- App will not start, missing DLL, E102/E104/E105/E117/E123: check the download
+  hash and extract the complete matching release into a new folder. Keep logs.
+  For SmartScreen/Defender blocks, record the warning and get help; do not
+  disable protection or download individual replacement DLLs.
+- E101: use the flash-enabled release on native x64 Windows. A disabled build
+  cannot be enabled with an environment variable. Use Linux if unsupported.
+- E103: a bundled tool could not start. Use an executable filesystem, supply
+  the required libraries, or rebuild the matching tools, then retry.
+- E110: before writing starts, power off, hold Volume Down, connect a data USB
+  cable directly to the PC. E111: unplug other Ingenic/mask-ROM devices.
+- E112/E113/E114/E115: check the exact Disc's driver with Setup Windows driver,
+  then repeat the USB check. Do not change drivers for unrelated devices.
+- E118: administrator approval was cancelled; retry driver setup when ready.
+  E119: ask an administrator to approve the helper with their credentials.
+- E126: driver/device changed or setup failed; inspect the displayed Windows
+  error, reconnect before writing and repeat setup/check. E127: unfamiliar
+  driver; get help before replacing it. E128: driver installed but USB access
+  failed; repeat the check with one Disc and keep the diagnostics if it fails.
+- E116: keep the PC awake, check Windows power settings, then retry preflight.
+- E120/E121/E122/E124/E125/E140/E143/E144: supply the matching official firmware
+  ZIP and rebuild; do not pad/truncate an image or force an unknown base.
+- E142: preserve state and logs; check folder access/free space and the displayed
+  reason. Never edit a damaged backup or move the only copy to retry.
+- E2xx: image build/firmware refused. Check free space and the official firmware
+  download, keep the log and get help if it repeats; do not bypass validation.
+- E301/E302/E303/E310/E321, UNKNOWN or an uncertain writer start: wait 25 minutes
+  as above. E304: process could not start; keep the log and check the package.
+- E320: the base gate refused before writing. Read the full reason and use the
+  matching action below; E320 can report any of these F-code conditions.
+- F202 (firmware mismatch): for install, apply FiiO's full update for the image's
+  firmware base, let it finish and boot once, then retry. For restore, use stock
+  firmware matching the Disc's existing kernel and recovery. If the version is
+  unknown, preserve logs and get help. Never bypass the gate.
+- F201/F203 (missing/damaged plan or image in memory differs from the plan):
+  keep logs, verify the complete package and rebuild the image from matching
+  official firmware. Start again from fresh mask-ROM; get help if it repeats.
+  Never edit the plan, pad/truncate the image or bypass the gate.
+- F204 (NAND not at power-on state): unplug the Disc, turn it fully off, then
+  hold Volume Down and connect USB to enter fresh mask-ROM before retrying.
+  E320 with this NAND-state reason requires the same power-off action.
+- F205/F206/F207/F208 (base pages/markers unreadable or no good blocks),
+  F209/F210/F211 (kernel/recovery missing or component exceeds its partition):
+  preserve state and logs and get help. Changing the selected firmware does
+  not repair these partitions. Never bypass the gate or force a write.
+- E311/F1xx: writer failed or gave an unexpected result. Keep logs and restore
+  the complete matching stock image; follow the wait above if completion is
+  uncertain. For any other error, keep its full message and logs and get help.

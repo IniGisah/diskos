@@ -13,12 +13,15 @@ Built with **LVGL 9.2.2** (software renderer) on a static-musl mipsel toolchain.
 > forked and kept open. Bundled third-party components keep their own licenses (see [License](#license)).
 
 ## Hardware target
-- **Display:** `/dev/fb0`, 360x360, 32bpp XRGB8888, triple-buffered pan-flip; panel mounted 180 degrees
-  (reverse-copied in the flush callback, `fb_pan.c`).
+- **Display:** `/dev/fb0`, 360x360, 32bpp XRGB8888; partial redraws into the active page
+  of a three-page framebuffer; panel mounted 180 degrees
+  (default flush rotation in `fb_pan.c`; Screen Rotation can change it).
 - **Touch:** `cst816t` capacitive controller on `/dev/input/event1` (multitouch evdev), calibrated
   for the 180-degree panel. Physical keys on `/dev/input/event0`.
 - **IPC:** POSIX message queues `/ui` (state/metadata player->UI) and `/player` (commands UI->player);
-  ASCII framing `TAG(4hex)+LEN(4hex)+VALUE`, values often JSON.
+  ASCII frames start with `TAG(4)+TOTAL_LEN(4hex)`; length includes the header.
+  Most commands add `VALUE1(4hex)` and optional payload, which can be JSON.
+  Some commands add another value field; `02020008` has no value field.
 - **Library:** on-device SQLite `song.db` (bundled SQLite amalgamation, compiled in-process).
 
 ## Source layout
@@ -29,7 +32,7 @@ Built with **LVGL 9.2.2** (software renderer) on a static-musl mipsel toolchain.
 | Library / browse | `home.c`, `library.c`, `musicdb.c`, `search.c`, `playlistview.c`, `scanner.c` |
 | Settings / features | `settings.c`, `eqcustom.c`, `quicksettings.c`, `modes.c`, `kbinput.c`, `colorpick.c`, `toast.c`, `apps.c`, `debug_ui.c`, `fwcaps.c` |
 | Connectivity | `wifi.c`, `bt.c`, `weather.c`, `lyrics.c`, `lastfm.c` / `lastfm_ui.c` |
-| Bundled third-party | `sqlite3.c` (public domain), `jsmn.h` (MIT), `md5.c` (public domain), `font_*.c` (generated glyph data) |
+| Bundled third-party | `third_party/freetype-2.13.3/` (FTL), `sqlite3.c` (public domain), `jsmn.h` (MIT), `md5.c` (public domain), `font_*.c` (generated glyph data) |
 | Dev/diagnostic tools | `fbshot.c`, and other small on-device helpers (not part of the shipped UI) |
 
 ## Build
@@ -40,8 +43,8 @@ Requires:
   below. Generic prebuilt mipsel toolchains (e.g. musl.cc) target the older MIPS-I / FP32 ABI: the result runs, but
   the Disc's kernel then emulates every floating-point instruction in software, which is much slower.
 - **LVGL 9.2.2** - **vendored in `./lvgl`** (MIT). It is *lightly customized* (a merged Source Han
-  Sans + Font Awesome CJK font, plus font/TJPG tweaks), so an upstream v9.2.2 clone will **not**
-  build this tree - use the vendored copy that ships here.
+  Sans + Font Awesome CJK font, plus font/TJPG tweaks), so use the vendored copy to retain these
+  customizations.
 
 ```sh
 # toolchain on PATH as mipsel-linux-musl-gcc, LVGL at ./lvgl:
@@ -61,10 +64,8 @@ LVGL  := /path/to/lvgl
 
 ## Build in Docker (recommended)
 
-The container builds the cross compiler recipe used for the released binary (musl-cross-make at a pinned
-commit, which checks every source download against its own hashes), so you don't have to set one up. The source
-and the recipe are provided; a byte-identical rebuild of the released `mq_ui` from a clean checkout has not yet
-been verified:
+The container builds the cross compiler from musl-cross-make at a pinned commit, with
+source-download hashes from that recipe. It also builds FreeType from the in-tree source:
 
 ```sh
 docker build -t diskos-ui-builder .                                  # from this ui/ directory
@@ -78,12 +79,10 @@ The first `docker build` compiles GCC, so it takes a while; later UI builds reus
 
 ## Troubleshooting
 
-- **`musl` / SQLite `fcntl64` errors:** this is a **toolchain mismatch**, not a flag problem. The
-  bundled `sqlite3.c` compiles cleanly against the pinned musl mipsel GCC 11.2.0 (verified with and
-  without `_GNU_SOURCE` / `_FILE_OFFSET_BITS=64`). If your cross-compiler errors on `fcntl64`, it's a
-  different/mixed toolchain - use the Docker builder above, which pins the working one. (Note the
-  Makefile compiles `sqlite3.c` with a **dedicated rule** that omits `_GNU_SOURCE`; keep that if you
-  build by hand.)
+- **`musl` / SQLite `fcntl64` errors:** check the toolchain and compile flags. The
+  SQLite rule uses separate flags without `_GNU_SOURCE`. If your cross-compiler errors on
+  `fcntl64`, check that it uses the pinned musl headers and libraries, or use the Docker
+  builder. Preserve the dedicated SQLite rule when building by hand.
 - **`Makefile:NN: *** missing separator`:** a recipe line (the command under a rule) must start with a
   real **Tab**, not spaces - an editor or a copy-paste turned the leading Tab into spaces. Re-indent
   that line with a single Tab.
@@ -97,7 +96,13 @@ The installer keeps the stock `mq_player` audio engine; only the UI is replaced.
 - **This UI:** GPL-3.0-or-later - [`COPYING`](COPYING). (c) diskOS contributors.
 - **LVGL 9.2.2** (vendored in `lvgl/`): MIT - [`licenses/LICENSE-LVGL-MIT.txt`](licenses/LICENSE-LVGL-MIT.txt).
   Enabled LVGL-bundled helpers: **TJpgDec** (JPEG decode, BSD-style (c) ChaN) and **qrcodegen**
-  (QR codes, MIT (c) Project Nayuki) - texts in the repo `licenses/` (`LICENSE-TJpgDec.txt`, `MIT-qrcodegen.txt`).
+  (QR codes, MIT (c) Project Nayuki) - texts in the repository
+  [`../licenses/LICENSE-TJpgDec.txt`](../licenses/LICENSE-TJpgDec.txt) and
+  [`../licenses/MIT-qrcodegen.txt`](../licenses/MIT-qrcodegen.txt).
+- **FreeType 2.13.3:** FreeType License (FTL) -
+  [`third_party/freetype-2.13.3/docs/FTL.TXT`](third_party/freetype-2.13.3/docs/FTL.TXT).
+  This UI is based in part on the work of the FreeType Team. FreeType renders the stock
+  `/usr/project/config/fonts/SourceHanSans-Regular.ttc` for CJK fallback.
 - **SQLite amalgamation** (`sqlite3.c/.h`): public domain.
 - **jsmn** (`jsmn.h`): MIT (Serge Zaitsev).
 - **md5, RFC 1321** (`md5.c`): public domain (Alexander Peslyak).
@@ -110,6 +115,7 @@ The installer keeps the stock `mq_player` audio engine; only the UI is replaced.
     because the licence reserves the name "Plex" - [`licenses/OFL-1.1-IBMPlexMono.txt`](licenses/OFL-1.1-IBMPlexMono.txt)
   - **Doto** (weight 700, square dots) - "something" theme titles and date (`font_dot_*.c`), converted as `diskos_dot` - [`licenses/OFL-1.1-Doto.txt`](licenses/OFL-1.1-Doto.txt)
   - **Inter** (SemiBold) - hi-fi theme text (`font_hifi_*.c`) - [`licenses/OFL-1.1-Inter.txt`](licenses/OFL-1.1-Inter.txt)
+  - **Archivo** (expanded, SemiBold / Light) - the diskOS wordmark on the boot splash (`font_brand_*.c`) - [`licenses/OFL-1.1-Archivo.txt`](licenses/OFL-1.1-Archivo.txt)
   - **DSEG7 Classic** (Bold) - hi-fi theme clock and time counters (`font_hifi_*.c`), converted without the name (Reserved Font Name "DSEG") - [`licenses/OFL-1.1-DSEG.txt`](licenses/OFL-1.1-DSEG.txt)
   - **JetBrains Mono** (Medium / ExtraBold) - terminal theme text and clock (`font_term_*.c`) - [`licenses/OFL-1.1-JetBrainsMono.txt`](licenses/OFL-1.1-JetBrainsMono.txt)
   - **Space Grotesk** (Medium / Bold) - bauhaus theme text, titles and clock (`font_bauh_*.c`) - [`licenses/OFL-1.1-SpaceGrotesk.txt`](licenses/OFL-1.1-SpaceGrotesk.txt)

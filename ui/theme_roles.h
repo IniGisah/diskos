@@ -87,25 +87,14 @@ typedef enum {
     THEME_CLR_FIXED_QR_LIGHT,
     THEME_CLR_FIXED_DEBUG_TOUCH,      /* developer touch-debug dot */
     THEME_CLR_FIXED_SPLASH_BG,        /* boot splash identity (SPLASH_3, last: the wordmark, edge light, the click) */
-    THEME_CLR_FIXED_SPLASH_RING,      /* the Disc window's bezel */
-    THEME_CLR_FIXED_SPLASH_1,         /* the CD face: top / bottom */
-    THEME_CLR_FIXED_SPLASH_2,
-    THEME_CLR_FIXED_SPLASH_WELL,      /* the Disc window, empty */
-    THEME_CLR_FIXED_SPLASH_SPINDLE,   /* its spindle */
+    THEME_CLR_FIXED_SPLASH_SPINDLE,   /* the CD rim */
     THEME_CLR_FIXED_SPLASH_HUB_LINE,  /* the CD hub rings */
     THEME_CLR_FIXED_SPLASH_HOLE,      /* the CD centre hole */
-    THEME_CLR_FIXED_SPLASH_MARK,      /* the marks that show the CD turning */
     THEME_CLR_FIXED_SPLASH_BAND_1,    /* the light a CD throws, hub to rim */
     THEME_CLR_FIXED_SPLASH_BAND_2,
     THEME_CLR_FIXED_SPLASH_BAND_3,
     THEME_CLR_FIXED_SPLASH_BAND_4,
     THEME_CLR_FIXED_SPLASH_BAND_5,
-    THEME_CLR_FIXED_SPLASH_BLACK_HI,  /* the drawn Disc body, per Disc Colour: top / bottom of its sheen */
-    THEME_CLR_FIXED_SPLASH_BLACK_LO,
-    THEME_CLR_FIXED_SPLASH_TURQ_HI,
-    THEME_CLR_FIXED_SPLASH_TURQ_LO,
-    THEME_CLR_FIXED_SPLASH_PINK_HI,
-    THEME_CLR_FIXED_SPLASH_PINK_LO,
     THEME_CLR_FIXED_SPLASH_3,
     THEME_CLR_COUNT
 } theme_color_role_t;

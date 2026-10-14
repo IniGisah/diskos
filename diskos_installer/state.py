@@ -49,6 +49,11 @@ def _state_base():
     env = os.environ.get("DISKOS_INSTALLER_HOME")
     if env:
         return env
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA")
+        if not local or not os.path.isabs(local):
+            raise errors.PreflightError("LOCALAPPDATA must name an absolute per-user directory", code="E142")
+        return os.path.join(local, APP)
     if sys.platform == "darwin":
         return os.path.expanduser(f"~/Library/Application Support/{APP}")
     xdg = os.environ.get("XDG_DATA_HOME")

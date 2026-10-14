@@ -1,8 +1,6 @@
 # Security policy
 
-diskOS is an **unsupported beta** that flashes firmware over a device's mask-ROM USB mode. Because
-a defect here can brick a device or write to the wrong hardware, security and safety reports are
-taken seriously.
+Report security and device-safety vulnerabilities privately using the process below.
 
 ## Reporting a vulnerability
 
@@ -25,8 +23,8 @@ MAC addresses, and network credentials.
 - **Wrong-device / wrong-partition writes** - anything that could let the flasher erase or write a
   device it should have refused, or write outside the intended rootfs region.
 - **Host privilege issues** - the installer is designed to run as your **normal (non-root) user**
-  (USB access via the bundled udev rule); it should not need `sudo`. Path-traversal, symlink-follow,
-  arbitrary-delete, or predictable-temp-file issues matter.
+  (Linux USB access uses the bundled udev rule; Windows driver setup asks for administrator approval).
+  Path-traversal, symlink-follow, arbitrary-delete, or predictable-temp-file issues matter.
 - **Unauthenticated input** - the installer extracts a squashfs and decrypts a firmware package;
   report anything that lets crafted input escape the work directory or run code.
 - **Bricking-class bugs** - a report that a specific sequence leaves a device unrecoverable.
@@ -41,10 +39,10 @@ While it is on, it grants **root access over the network**.
 - **Password storage:** while Debug Mode is on, the current password is also stored in **plaintext** at
   `/usr/data/sshd/current_pw` (mode 0600, root-only) so the UI can redisplay it after a restart;
   disabling Debug Mode deletes it. A reboot while still enabled can leave a stale copy - the SSH
-  overlay is dropped on reboot so that password no longer authenticates until re-enabled. It is only
-  as protected as root/physical access to the device.
+  overlay is dropped on reboot so that password no longer authenticates until re-enabled.
+  Root or physical access can expose the stored password.
 - **SSH server:** Dropbear **2022.83**, which predates the CVE-2023-48795 "Terrapin" Strict-KEX
-  mitigation (update planned); exposure is limited by Debug Mode being opt-in and short-lived.
+  mitigation. Use Debug Mode only for short sessions on a trusted network and turn it off when finished.
 - **Serial:** the local USB-serial root shell exists only on **dev** builds and is passwordless-root by
   design (physical-USB access only); **public builds have no serial shell**. Report only if it is
   reachable without physical access.

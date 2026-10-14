@@ -37,9 +37,10 @@ static int g_loaded = 0;
 
 static int g_save_err = 0;   /* sticky until cfg_take_save_error() reads it */
 static int g_renamed = 0;    /* the last rewrite() got past rename(): the file HAS changed even if a later step failed */
-static int g_dirty = 0;      /* the in-memory set differs from the on-disk file: a save is pending
-                              * (a deferred batch) or FAILED. Guards the unchanged-value shortcut so a
-                              * failed persist is retried instead of masked by "value already equals v". */
+static int g_dirty = 1;      /* the in-memory set differs from the on-disk file: a save is pending
+                              * (a deferred batch) or FAILED, or nothing is loaded yet. Guards the unchanged-value
+                              * shortcut and rewrite()'s clean skip so a failed persist is retried instead of
+                              * masked by "value already equals v". */
 
 /* Atomic multi-key batch (e.g. Last.fm credentials): cfg_begin() snapshots the whole store, deferred
  * sets mutate it, cfg_commit() rewrites ONLY if every set succeeded, else it rolls the store back to
@@ -64,6 +65,7 @@ static cfg_entry_t *find(const char *key){
 static int rewrite(void){
     if(g_load_failed){ g_save_err = 1; return -1; }   /* never persist an unloaded/partial config over a good file */
     g_renamed = 0;
+    if(!g_dirty) return 0;   /* the file already holds exactly this set, durably: nothing to write */
     char tmp[64];
     snprintf(tmp, sizeof tmp, "%s.tmp", CFG_PATH);
     FILE *f = fopen(tmp, "w");
@@ -252,7 +254,7 @@ int cfg_remove_if(int (*match)(const char *key)){
             g_n = 0;
             FILE *f = fopen(CFG_PATH, "r");
             if(f){ if(cfg_parse_stream(f) < 0) g_load_failed = 1; fclose(f); } else g_load_failed = 1;
-            g_dirty = 0;
+            g_dirty = 1;   /* the rename is not yet durable: the next save retries it */
             return -2;
         }
         memcpy(g_cfg, g_snap, (size_t)old_n * sizeof g_cfg[0]);

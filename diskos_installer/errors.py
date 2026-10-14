@@ -47,7 +47,7 @@ class FlashError(DiskOSError):
     code = "E300"
 
 
-# Device-writer result codes (from my_write6.c dbg[16]) → stable F-codes for the user. 0xDEAD0007.. are base-gate
+# Device-writer result codes (from my_write6.c dbg[16]) -> stable F-codes for the user. 0xDEAD0007.. are base-gate
 # refusals: the writer stopped before unlocking or erasing anything (see basegate.GATE_CODES).
 DEVICE_RESULT_CODES = {
     0x600DF10C: ("F001", "SUCCESS"),
@@ -70,7 +70,7 @@ DEVICE_RESULT_CODES = {
     0xDEAD0012: ("F211", "REFUSED base component longer than its partition (nothing written)"),
 }
 
-# For a result that is UNKNOWN after the writer was started: it may still be running on the Disc by itself.
+# For a result that is UNKNOWN after the writer may have started: it may still be running on the Disc by itself.
 WAIT_THEN_RECOVER = ("The Disc may still be writing by itself: leave it connected and powered for at least 25 "
                      "minutes, then power-cycle it. If it does not boot, it is normally recoverable via mask-ROM "
                      "(hold Volume-Down while plugging in USB) - re-flash your saved stock image or diskOS.")

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
+#include "wifi.h"
 #include "theme.h"
 #include "theme_kit.h"
 #include "config.h"
@@ -11,6 +12,16 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <sys/prctl.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <arpa/inet.h>
 
 /* Wi-Fi settings (SCR_WIFI) + a details screen (SCR_WIFI_INFO).
  * Radio on/off reuses the stock /usr/bin/wifi_up.sh / wifi_down.sh (rfkill +
@@ -19,7 +30,7 @@
  * to /usr/data/wpa_supplicant.conf (update_config=1), so it persists.
  * Round-screen-aware: the top corners stay clear (only back chevron + centred
  * title); the on/off switch + scan button share one row in the wide centre
- * band.  The list itself carries state (connected ✓ row / "Wi-Fi is off" /
+ * band.  The list itself carries state (connected checkmark row / "Wi-Fi is off" /
  * "Scanning" / "No networks") so there is no redundant status line.
  * NB: connecting to a DIFFERENT AP drops the laptop deploy link - recover over
  * serial if needed. */
@@ -37,6 +48,10 @@ static char g_cur_ssid[64];       /* currently-connected SSID (to mark the list)
 static lv_obj_t *g_info_list;     /* details screen */
 
 static void start_scan(void);     /* fwd */
+static void wifi_lease_retry_reset(void);
+static void scan_fill(void);
+static void wifi_info_refresh(void);
+extern int ui_screen_backlight_on(void);
 
 /* The refresh glyph INSIDE the "Scanning" message spins while a scan runs. It lives
  * in g_list, so it must be stopped before g_list is cleaned (else the anim references
@@ -53,35 +68,40 @@ static void scan_stop(void){
 /* Run cmd and return ALL of its output (malloc'd, NUL-terminated; caller frees), read to EOF, capped at
  * `max` bytes (a bigger output is cut there, which the row parser treats as a partial last row). */
 static char *run_cap_all(const char *cmd, size_t max){
-    FILE *p = popen(cmd, "r");
-    if(!p) return NULL;
-    size_t cap = 4096, n = 0; char *b = malloc(cap);
-    if(!b){ pclose(p); return NULL; }
-    for(;;){
-        if(n + 1 >= cap){
-            if(cap >= max) break;
-            size_t nc = cap * 2 > max ? max : cap * 2; char *t = realloc(b, nc);
-            if(!t) break;
-            b = t; cap = nc;
-        }
-        size_t r = fread(b + n, 1, cap - 1 - n, p);
-        if(r == 0) break;
-        n += r;
-    }
-    b[n] = 0;
-    pclose(p);
+    char *b = malloc(max); if(!b) return NULL;
+    ui_run_cap_bounded(cmd, b, (int)max, 2000);
     return b;
 }
 static int run_cap(const char *cmd, char *out, int cap){
-    out[0] = 0;
-    FILE *p = popen(cmd, "r");
-    if(!p){ fprintf(stderr,"wifi run_cap popen failed: %s (%s)\n", cmd, strerror(errno)); return 0; }
-    int n = fread(out, 1, cap-1, p);
-    if(n < 0) n = 0;
-    out[n] = 0;
-    pclose(p);
-    return n;
+    return ui_run_cap_bounded(cmd, out, cap, 1000);
 }
+
+static int wifi_dhcp_absent(void);
+
+/* Radio-up stays asynchronous. Its children belong to stock, not our probe group. */
+static int wifi_shell(const char *cmd){
+    static pid_t launch;
+    if(launch > 0){
+        if(waitpid(launch, NULL, WNOHANG) != 0) launch = 0;
+    }
+    if(strstr(cmd, "wifi_up.sh")){
+        /* With a surviving client, restore only the supplicant. Never run the
+         * stock script here: it starts another DHCP client unconditionally. */
+        int absent = wifi_dhcp_absent();
+        if(absent < 0) return -1;
+        if(!absent) return wifi_shell("rfkill unblock wifi; ifconfig wlan0 up; "
+            "wpa_supplicant -B -i wlan0 -c /usr/data/wpa_supplicant.conf");
+        if(launch > 0) return -1;
+        launch = fork();
+        if(launch == 0){ execl("/bin/sh", "sh", "-c", ". /usr/bin/wifi_up.sh; wait", (char *)NULL); _exit(127); }
+        return launch < 0 ? -1 : 0;
+    }
+    char bounded[1024], out[64];
+    snprintf(bounded, sizeof bounded, "%s; printf '\nRC=%%d\n' \"$?\"", cmd);
+    ui_run_cap_bounded(bounded, out, sizeof out, 2000);
+    return strstr(out, "\nRC=0\n") ? 0 : -1;
+}
+#define system wifi_shell
 
 /* wpa_cli prints SSIDs (scan_results, list_networks, status) printf-encoded: \\ \" \n \r \t \e and \xNN
  * for every non-printable / non-ASCII byte. Decode to the real bytes into out[cap]. Returns the byte
@@ -127,6 +147,7 @@ static int wifi_ssid_field_eq(const char *fld, int flen, const char *ssid){
     return n >= 0 && (size_t)n == strlen(ssid) && memcmp(d, ssid, (size_t)n) == 0;
 }
 
+static int wifi_lease_ready(const char *status);
 static int wifi_status(char *ssid, int scap, char *ip, int icap){
     (void)scap; (void)icap;
     ssid[0] = 0; ip[0] = 0;
@@ -142,7 +163,7 @@ static int wifi_status(char *ssid, int scap, char *ip, int icap){
         else if(!strncmp(l, "ip_address=", 11)){ sscanf(l+11, "%31[^\n]", ip); }
         l = strchr(l, '\n'); if(l) l++;
     }
-    return connected;
+    return connected && wifi_lease_ready(buf);
 }
 
 static int wifi_radio_on(void){
@@ -167,8 +188,8 @@ static int wpa_ready(void){
  * g_sanitize_pending set until a live, responsive supplicant can be sanitized. */
 static int wifi_sanitize_savenets(void){
     if(!wpa_ready()) return 0;                            /* supplicant not (yet) accepting wpa_cli */
-    system(WCLI "set update_config 1 >/dev/null 2>&1");   /* else save_config silently fails */
-    system(WCLI "enable_network all >/dev/null 2>&1");    /* any known net can auto-join */
+    system("" WCLI "set update_config 1 >/dev/null 2>&1");   /* else save_config silently fails */
+    system("" WCLI "enable_network all >/dev/null 2>&1");    /* any known net can auto-join */
     char buf[4096];
     run_cap(WCLI "list_networks 2>/dev/null", buf, sizeof buf);
     char *l = strchr(buf, '\n'); if(l) l++;               /* skip header row */
@@ -176,12 +197,12 @@ static int wifi_sanitize_savenets(void){
         int nid;
         if(sscanf(l, "%d", &nid) == 1){
             char c[96];
-            snprintf(c, sizeof c, WCLI "set_network %d frequency 0 >/dev/null 2>&1", nid);
+            snprintf(c, sizeof c, "" WCLI "set_network %d frequency 0 >/dev/null 2>&1", nid);
             system(c);                                     /* clear stale channel lock */
         }
         l = strchr(l, '\n'); if(l) l++;
     }
-    system(WCLI "save_config >/dev/null 2>&1");
+    system("" WCLI "save_config >/dev/null 2>&1");
     return 1;
 }
 
@@ -239,7 +260,7 @@ static int read_saved_radios(int *wifi, int *bt){
     }
     return 0;
 }
-/* Wi-Fi rfkill soft state: 1 blocked, 0 unblocked, -1 unknown (no wlan switch / unreadable). */
+/* Wi-Fi rfkill state: 1 blocked, 0 unblocked, -1 unknown. */
 static int wifi_rfkill_blocked(void){
     for(int i = 0; i < 12; i++){
         char p[64]; snprintf(p, sizeof p, "/sys/class/rfkill/rfkill%d/type", i);
@@ -249,7 +270,10 @@ static int wifi_rfkill_blocked(void){
         snprintf(p, sizeof p, "/sys/class/rfkill/rfkill%d/soft", i);
         f = fopen(p, "r"); if(!f) return -1;
         int soft = -1; if(fscanf(f, "%d", &soft) != 1) soft = -1; fclose(f);
-        return (soft == 0 || soft == 1) ? soft : -1;
+        snprintf(p, sizeof p, "/sys/class/rfkill/rfkill%d/hard", i);
+        f = fopen(p, "r"); if(!f) return -1;
+        int hard = -1; if(fscanf(f, "%d", &hard) != 1) hard = -1; fclose(f);
+        return soft == 1 || hard == 1 ? 1 : (soft == 0 && hard == 0 ? 0 : -1);
     }
     return -1;
 }
@@ -269,13 +293,25 @@ static void wifi_reconcile_poll(void){
     if(!fw_has_radio_boot_arbitration()){ g_reco_hold = 0; return; }
     unsigned gen = ipc_generation(), rx = ipc_rx_frames();
     uint32_t now = lv_tick_get();
+    int first_generation = 0;
     if(gen != g_reco_gen){                          /* new player generation: arm */
+        first_generation = (g_reco_gen == 0xFFFFFFFFu);
         g_reco_gen = gen; g_reco_hold = 1; g_reco_rx0 = rx; g_reco_epoch0 = g_intent_epoch;
         g_reco_armed_at = now; g_reco_seen_rx = 0; g_reco_probe_at = now - 1000; g_reco_eval_at = now - RECO_PROBE_MS;
     }
     if(!g_reco_hold) return;
     if(g_intent_epoch != g_reco_epoch0){ g_reco_hold = 0; return; }        /* the user chose: their choice wins */
     if(cfg_get_int("wifi_on", 1) == 0){ g_reco_hold = 0; return; }         /* Wi-Fi intent already off: nothing to undo */
+    if(first_generation){
+        int dbw, dbb;
+        /* Stock arbitrates from saved SYSCONFIG state: BT_STATUS=0 means it cannot turn Wi-Fi off at boot.
+         * Only use this shortcut on UI start; Bluetooth state may change before a later player restart. */
+        if(read_saved_radios(&dbw, &dbb) && dbb == 0){
+            g_reco_hold = 0;
+            fprintf(stderr, "radio reconcile (gen %u): saved Bluetooth off, released boot hold\n", gen);
+            return;
+        }
+    }
     if(!g_reco_seen_rx){
         if(rx == g_reco_rx0){
             if(now - g_reco_armed_at >= RECO_GIVEUP_MS){ g_reco_hold = 0; return; }   /* silent player: unchanged */
@@ -304,14 +340,309 @@ static void wifi_reconcile_poll(void){
     if(now - g_reco_first_rx_at >= RECO_WINDOW_MS) g_reco_hold = 0;       /* no conflict appeared: release unchanged */
 }
 
+/* Stock owns DHCP. Only signal a uniquely identified process. */
+struct wifi_proc { int pid; unsigned long long start; };
+struct wifi_obs { struct wifi_proc wpa, dhcp; int id, ip, idle, sockets, allowed; char ssid[64]; };
+static struct {
+    struct wifi_obs net; unsigned epoch, intent, player; uint32_t since;
+    int phase, seen_empty, release_evidence, released, resume;
+} g_lease;
+enum { LEASE_NONE, LEASE_RELEASE, LEASE_ACQUIRE, LEASE_READY, LEASE_FAILED };
+static char g_lease_dir[64];
+static long g_lease_offset;
+static pid_t g_lease_helper;
+static uint32_t g_lease_check, g_lease_retry_ms = 100;
+static int g_lease_settled;   /* a lease step has seen offline, ready or failed */
+
+static int wifi_proc_stat(int pid, struct wifi_proc *p, int *parent){
+    char path[64], buf[1024]; snprintf(path, sizeof path, "/proc/%d/stat", pid);
+    FILE *f = fopen(path, "r"); if(!f) return 0;
+    char *r = fgets(buf, sizeof buf, f); fclose(f);
+    char *q = r ? strrchr(buf, ')') : NULL; if(!q) return 0;
+    char *save, *t = strtok_r(q + 2, " ", &save); unsigned long long start = 0;
+    for(int field = 3; t && field <= 22; field++, t = strtok_r(NULL, " ", &save)){
+        if(field == 4) *parent = atoi(t);
+        if(field == 22) start = strtoull(t, NULL, 10);
+    }
+    p->pid = pid; p->start = start; return start != 0;
+}
+static int wifi_proc_match(int pid, const char *name){
+    char path[64], buf[2048]; snprintf(path, sizeof path, "/proc/%d/cmdline", pid);
+    FILE *f = fopen(path, "r"); if(!f) return errno == ENOENT ? 0 : -1;
+    size_t n = fread(buf, 1, sizeof buf - 1, f); int err = ferror(f); fclose(f); buf[n] = 0;
+    if(err || n == sizeof buf - 1) return -1;
+    if(!n) return 0;
+    const char *first = strrchr(buf, '/'); first = first ? first + 1 : buf;
+    int app = 0, iface = 0;
+    for(size_t i = 0; i < n; ){
+        const char *arg = buf + i, *base = strrchr(arg, '/'); base = base ? base + 1 : arg;
+        if((i == 0 || (i == strlen(buf) + 1 && !strcmp(first, "busybox"))) && !strcmp(base, name)) app = 1;
+        if(!strcmp(arg, "-iwlan0")) iface = 1;
+        if(!strcmp(arg, "-i") && i + strlen(arg) + 1 < n && !strcmp(arg + strlen(arg) + 1, "wlan0")) iface = 1;
+        i += strlen(arg) + 1;
+    }
+    return app && iface;
+}
+static int wifi_proc_find(const char *name, struct wifi_proc *p){
+    DIR *d = opendir("/proc"); if(!d) return 0;
+    struct dirent *e; int count = 0, parent; struct wifi_proc found = {0};
+    while((e = readdir(d))){
+        int pid = atoi(e->d_name); if(pid <= 0) continue;
+        int match = wifi_proc_match(pid, name);
+        if(match < 0){ count += 2; continue; }
+        if(!match) continue;
+        count++;
+        if(wifi_proc_stat(pid, &found, &parent)) *p = found; else count += 2;
+    }
+    closedir(d); if(count != 1) memset(p, 0, sizeof *p); return count == 1;
+}
+/* Fail closed on unreadable proc data; multiple clients also forbid startup. */
+static int wifi_dhcp_absent(void){
+    DIR *d = opendir("/proc"); if(!d) return -1;
+    struct dirent *e; int absent = 1;
+    while((e = readdir(d))){
+        int pid = atoi(e->d_name); if(pid <= 0) continue;
+        int match = wifi_proc_match(pid, "udhcpc");
+        if(match < 0) absent = -1;
+        else if(match){ absent = 0; break; }
+    }
+    closedir(d); return absent;
+}
+static int wifi_proc_eq(struct wifi_proc a, struct wifi_proc b){ return a.pid && a.pid == b.pid && a.start == b.start; }
+static int wifi_lease_signal_context(int sig);
+static int wifi_dhcp_signal(struct wifi_proc expected, int sig){
+    struct wifi_proc current = {0};
+    return wifi_lease_signal_context(sig) && wifi_proc_find("udhcpc", &current) && wifi_proc_eq(expected, current) && kill(current.pid, sig) == 0;
+}
+/* udhcpc waits for its script. A live child or unreadable proc data blocks the barrier. */
+static int wifi_dhcp_idle(struct wifi_proc p, int *sockets){
+    char path[64], link[128]; int idle = 1; *sockets = 0;
+    DIR *d = opendir("/proc"); if(!d) return 0;
+    struct dirent *e; struct wifi_proc child; int parent;
+    while((e = readdir(d))){
+        int pid = atoi(e->d_name);
+        if(pid > 0 && (!wifi_proc_stat(pid, &child, &parent) || parent == p.pid)) idle = 0;
+    }
+    closedir(d); snprintf(path, sizeof path, "/proc/%d/fd", p.pid);
+    d = opendir(path); if(!d) return 0;
+    while((e = readdir(d))){
+        if(e->d_name[0] == '.') continue;
+        char fd[128]; snprintf(fd, sizeof fd, "%s/%.32s", path, e->d_name);
+        ssize_t n = readlink(fd, link, sizeof link - 1); if(n < 0){ idle = 0; continue; }
+        link[n] = 0; if(!strncmp(link, "socket:[", 8)) (*sockets)++;
+    }
+    closedir(d); return idle;
+}
+static int wifi_ipv4(void){
+    int fd = socket(AF_INET, SOCK_DGRAM, 0); if(fd < 0) return -1;
+    struct ifreq req; memset(&req, 0, sizeof req); strcpy(req.ifr_name, "wlan0");
+    int flags = ioctl(fd, SIOCGIFFLAGS, &req);
+    int up = flags == 0 && (req.ifr_flags & IFF_UP);
+    int rc = ioctl(fd, SIOCGIFADDR, &req), err = errno; close(fd);
+    if(!up) return -1;
+    if(rc < 0) return err == EADDRNOTAVAIL ? 0 : -1;
+    return ((struct sockaddr_in *)&req.ifr_addr)->sin_addr.s_addr != 0;
+}
+static void wifi_lease_observe(struct wifi_obs *o, const char *status){
+    memset(o, 0, sizeof *o); o->id = -1; o->ip = wifi_ipv4();
+    wifi_proc_find("wpa_supplicant", &o->wpa); wifi_proc_find("udhcpc", &o->dhcp);
+    for(const char *l = status; l && *l; ){
+        if(!strncmp(l, "id=", 3)) o->id = atoi(l + 3);
+        if(!strncmp(l, "ssid=", 5)){
+            const char *end = strchr(l + 5, '\n');
+            if(wifi_ssid_decode(l + 5, end ? end - l - 5 : strlen(l + 5), o->ssid, sizeof o->ssid) < 0) o->ssid[0] = 0;
+        }
+        l = strchr(l, '\n'); if(l) l++;
+    }
+    o->allowed = !g_reco_hold && cfg_get_int("wifi_on", 1) && wifi_rfkill_blocked() == 0 &&
+        o->wpa.pid && o->dhcp.pid && o->ip >= 0 && o->id >= 0 && o->ssid[0] &&
+        (strstr(status, "\nwpa_state=COMPLETED\n") || !strncmp(status, "wpa_state=COMPLETED\n", 20));
+    if(o->dhcp.pid) o->idle = wifi_dhcp_idle(o->dhcp, &o->sockets);
+}
+static int wifi_lease_matches(const struct wifi_obs *o){
+    return wifi_proc_eq(o->wpa, g_lease.net.wpa) && wifi_proc_eq(o->dhcp, g_lease.net.dhcp) &&
+        o->id == g_lease.net.id && !strcmp(o->ssid, g_lease.net.ssid) &&
+        g_lease.intent == g_intent_epoch && g_lease.player == ipc_generation();
+}
+static int wifi_lease_signal_context(int sig){
+    char status[2048]; run_cap(WCLI "status 2>/dev/null", status, sizeof status);
+    struct wifi_obs o; wifi_lease_observe(&o, status);
+    if(!o.allowed || !wifi_lease_matches(&o)) return 0;
+    if(sig == SIGUSR2) g_lease.release_evidence |= o.ip == 1 || o.sockets || !o.idle;
+    return sig != SIGUSR1 || (o.ip == 0 && o.idle && !o.sockets);
+}
+/* This step never starts DHCP or raises wlan0. Failure stays uncertified. */
+static void wifi_lease_advance(const struct wifi_obs *o, uint32_t now){
+    int same_owner = wifi_proc_eq(o->dhcp, g_lease.net.dhcp);
+    if(o->dhcp.pid && !same_owner) g_lease.released = g_lease.release_evidence = 0;
+    /* A release belongs to the DHCP process, even across disconnects or profiles.
+     * Acquisition consumes it; only the unchanged transaction may resume. */
+    if(same_owner && g_lease.release_evidence &&
+       (g_lease.phase == LEASE_RELEASE || g_lease.phase == LEASE_FAILED) &&
+       now != g_lease.since && o->ip == 0 && o->idle && !o->sockets)
+        g_lease.released = 1;
+    if(o->ip != 0 || !o->idle || o->sockets) g_lease.released = 0;
+    if(!o->allowed){
+        if(o->ip == 0 && !g_lease.epoch) g_lease.seen_empty = 1;
+        if(g_lease.phase == LEASE_RELEASE || g_lease.phase == LEASE_ACQUIRE){
+            g_lease.resume = g_lease.phase; g_lease.phase = LEASE_FAILED;
+        }
+        if(g_lease.epoch && o->dhcp.pid && !same_owner) g_lease.phase = LEASE_NONE;
+        return;
+    }
+    if(g_lease.phase == LEASE_FAILED && g_lease.resume == LEASE_ACQUIRE &&
+       wifi_lease_matches(o) && now - g_lease.since <= 30000){
+        g_lease.phase = LEASE_ACQUIRE; g_lease.resume = LEASE_NONE;
+    }
+    if(!wifi_lease_matches(o) || g_lease.phase == LEASE_NONE ||
+       (g_lease.phase == LEASE_FAILED && now - g_lease.since >= 1000)){
+        int first = !g_lease.epoch && g_lease.seen_empty && o->ip == 0;
+        g_lease.net = *o; g_lease.intent = g_intent_epoch; g_lease.player = ipc_generation();
+        g_lease.epoch++; g_lease.since = now; g_lease.seen_empty = first; g_lease.resume = LEASE_NONE;
+        if(first) g_lease.phase = LEASE_ACQUIRE;
+        else if(g_lease.released){
+            g_lease.seen_empty = 1;
+            g_lease.phase = wifi_dhcp_signal(o->dhcp, SIGUSR1) ? LEASE_ACQUIRE : LEASE_FAILED;
+            if(g_lease.phase == LEASE_ACQUIRE) g_lease.released = g_lease.release_evidence = 0;
+        } else {
+            g_lease.release_evidence |= o->ip == 1 || o->sockets || !o->idle;
+            g_lease.phase = wifi_dhcp_signal(o->dhcp, SIGUSR2) ? LEASE_RELEASE : LEASE_FAILED;
+        }
+        return;
+    }
+    if(g_lease.phase == LEASE_READY){ if(!o->ip) g_lease.phase = LEASE_FAILED; return; }
+    if(now - g_lease.since > 30000){ g_lease.phase = LEASE_FAILED; return; }
+    if(g_lease.phase == LEASE_RELEASE){
+        if(o->ip == 1 || o->sockets || !o->idle) g_lease.release_evidence = 1;
+        if(g_lease.released){
+            g_lease.seen_empty = 1; g_lease.since = now;
+            g_lease.phase = wifi_dhcp_signal(o->dhcp, SIGUSR1) ? LEASE_ACQUIRE : LEASE_FAILED;
+            if(g_lease.phase == LEASE_ACQUIRE) g_lease.released = g_lease.release_evidence = 0;
+        }
+    } else if(g_lease.phase == LEASE_ACQUIRE && g_lease.seen_empty && o->ip == 1 && o->idle)
+        g_lease.phase = LEASE_READY;
+}
+static int wifi_lease_ready(const char *status){
+    if(g_lease.phase != LEASE_READY) return 0;
+    struct wifi_obs o; wifi_lease_observe(&o, status);
+    return o.allowed && o.ip == 1 && o.idle && wifi_lease_matches(&o);
+}
+/* The action helper only records events, so a late helper can never signal DHCP. */
+static void wifi_lease_events(void){
+    if(g_lease_helper && waitpid(g_lease_helper, NULL, WNOHANG) == 0) return;
+    g_lease_helper = 0;
+    if(!g_lease_dir[0]){
+        strcpy(g_lease_dir, "/tmp/diskos-wifi-XXXXXX");
+        if(!mkdtemp(g_lease_dir)){ g_lease_dir[0] = 0; return; }
+        char path[96]; snprintf(path, sizeof path, "%s/action", g_lease_dir);
+        FILE *f = fopen(path, "w"); if(!f) return;
+        fprintf(f, "#!/bin/sh\nprintf '%%s %%s\\n' \"$$\" \"$2\" >> %s/event\n", g_lease_dir);
+        fclose(f); if(chmod(path, 0700)) return;
+    }
+    char path[96]; snprintf(path, sizeof path, "%s/action", g_lease_dir);
+    pid_t owner = getpid(); g_lease_helper = fork();
+    if(g_lease_helper == 0){
+        if(prctl(PR_SET_PDEATHSIG, SIGTERM) || getppid() != owner) _exit(127);
+        int fd = open("/dev/null", O_RDWR);
+        if(fd >= 0){ dup2(fd, 0); dup2(fd, 1); dup2(fd, 2); if(fd > 2) close(fd); }
+        execl("/usr/sbin/wpa_cli", "wpa_cli", "-i", "wlan0", "-a", path, (char *)NULL); _exit(127);
+    }
+    if(g_lease_helper < 0) g_lease_helper = 0;
+}
+/* Failed leases back off, except an acquisition still resumable in its window. */
+static int wifi_lease_slow(void){
+    return g_lease.phase == LEASE_FAILED && !g_conn_timer && !g_scan_timer &&
+        !(g_lease.resume == LEASE_ACQUIRE && lv_tick_elaps(g_lease.since) <= 30000);
+}
+static void wifi_lease_step(void){
+    static unsigned intent, player;
+    static int want_prev = -1, lit_prev, screen_prev = -1;
+    static uint32_t input_prev;
+    int want_now = cfg_get_int("wifi_on", 1), lit = ui_screen_backlight_on(), screen = screen_current();
+    unsigned gen = ipc_generation();
+    /* Last input tick, read against one unchanged tick so it is exact. */
+    uint32_t tick, idle;
+    do { tick = lv_tick_get(); idle = lv_display_get_inactive_time(NULL); } while(lv_tick_get() != tick);
+    uint32_t input = tick - idle;
+    if(intent != g_intent_epoch || player != gen || want_prev != want_now ||
+       (lit && !lit_prev) || screen_prev != screen || input != input_prev)
+        wifi_lease_retry_reset();
+    intent = g_intent_epoch; player = gen; want_prev = want_now;
+    lit_prev = lit; screen_prev = screen; input_prev = input;
+    if(!wifi_lease_slow()) g_lease_retry_ms = 100;
+    else if(lv_tick_elaps(g_lease_check) < g_lease_retry_ms) return;
+    g_lease_check = lv_tick_get();
+    if(!cfg_get_int("wifi_on", 1)) {
+        g_lease.phase = LEASE_FAILED; g_lease.resume = LEASE_NONE;
+        if(g_lease_helper > 0){
+            if(waitpid(g_lease_helper, NULL, WNOHANG) == 0) kill(g_lease_helper, SIGTERM);
+            else g_lease_helper = 0;
+        }
+        if(screen_current() == SCR_WIFI_INFO) wifi_info_refresh();
+        g_lease_settled = 1;
+        return;
+    }
+    wifi_lease_events();
+    char status[2048];
+    run_cap(WCLI "status 2>/dev/null", status, sizeof status);
+    struct wifi_obs o; wifi_lease_observe(&o, status); wifi_lease_advance(&o, lv_tick_get());
+    g_lease.net.allowed = o.allowed && o.ip == 1 && o.idle;
+    if(!o.allowed || g_lease.phase == LEASE_READY || g_lease.phase == LEASE_FAILED) g_lease_settled = 1;
+    if(wifi_lease_slow()){
+        g_lease_retry_ms *= 2;
+        if(g_lease_retry_ms > 4000) g_lease_retry_ms = 4000;
+    } else g_lease_retry_ms = 100;
+    if(ui_screen_backlight_on()){
+        const char *cur = o.allowed && g_lease.phase == LEASE_READY ? o.ssid : "";
+        if(screen_current() == SCR_WIFI && !g_scan_timer && strcmp(cur, g_cur_ssid)) scan_fill();
+        if(screen_current() == SCR_WIFI_INFO) wifi_info_refresh();
+    }
+}
+
+/* Only failed leases back off; recovery cues make the next step due. */
+static void wifi_lease_retry_reset(void){
+    g_lease_retry_ms = 100; g_lease_check = lv_tick_get() - 100;
+}
+
+/* Append-only records preserve order. A partial final line is retried next loop. */
+static int wifi_lease_consume(void){
+    if(!g_lease_dir[0]) return 0;
+    char path[96], event[128]; snprintf(path, sizeof path, "%s/event", g_lease_dir);
+    FILE *f = fopen(path, "r"); if(!f) return 0;
+    if(fseek(f, g_lease_offset, SEEK_SET)){ fclose(f); return 0; }
+    int consumed = 0;
+    while(fgets(event, sizeof event, f)){
+        if(!strchr(event, '\n')) break;
+        g_lease_offset = ftell(f);
+        if(strstr(event, "DISCONNECTED")){
+            g_lease.net.allowed = 0;
+            if(g_lease.phase == LEASE_RELEASE || g_lease.phase == LEASE_ACQUIRE){
+                g_lease.resume = g_lease.phase; g_lease.phase = LEASE_FAILED;
+            }
+        } else if(!strstr(event, "CONNECTED")) continue;
+        consumed = 1;
+        wifi_lease_retry_reset();
+        wifi_lease_step();
+    }
+    fclose(f); return consumed;
+}
+
 void wifi_supervise(void){
     wifi_reconcile_poll();
     if(g_reco_hold) return;                         /* stock's radio decision is still being read: stay passive */
+    static uint32_t lease_check;
+    int event = wifi_lease_consume();
+    if(!event && lv_tick_elaps(lease_check) >= 100 &&
+       (g_lease.phase == LEASE_RELEASE || g_lease.phase == LEASE_ACQUIRE ||
+        g_lease.phase == LEASE_FAILED)){
+        lease_check = lv_tick_get(); wifi_lease_step();
+    }
     static uint32_t last_check = 0;
     static int      first = 1;
     if(!first && lv_tick_elaps(last_check) < 5000) return;   /* check ~every 5s */
     first = 0; last_check = lv_tick_get();
 
+    wifi_lease_step();
     int up   = wifi_radio_on();
     int want = cfg_get_int("wifi_on", 1);
 
@@ -328,6 +659,15 @@ void wifi_supervise(void){
     } else if(up && !want){                 /* should be off but a late wifi_up won -> enforce off */
         system("/usr/bin/wifi_down.sh >/dev/null 2>&1");
     }
+}
+
+/* UI-thread snapshot of the lease observations: 1 connected, 0 offline, -1 not known yet
+ * (radio decision pending, or no lease step has settled since start). */
+int wifi_connectivity(void){
+    if(!cfg_get_int("wifi_on", 1)) return 0;
+    if(g_reco_hold || !g_lease_settled) return -1;
+    return g_lease.net.allowed && g_lease.phase == LEASE_READY &&
+           g_lease.intent == g_intent_epoch && g_lease.player == ipc_generation();
 }
 
 /* centred grey placeholder shown in the list area for non-network states */
@@ -467,20 +807,18 @@ static void conn_fail(const char *why){
 static void conn_poll_cb(lv_timer_t *t){
     (void)t;
     char ss[64], ip[32];
-    /* require COMPLETED + an IP + the associated SSID == the one we asked for, so a
-     * stale old-AP "COMPLETED" (with the previous IP) during an AP switch can't be
-     * mistaken for success. */
-    if(wifi_status(ss, sizeof ss, ip, sizeof ip) && ip[0] && !strcmp(ss, g_conn_ssid)){
+    /* Association and witnessed DHCP must belong to this selected profile. */
+    if(wifi_status(ss, sizeof ss, ip, sizeof ip) && ip[0] && g_lease.net.id == g_conn_id && !strcmp(ss, g_conn_ssid)){
         lv_timer_del(g_conn_timer); g_conn_timer = NULL;
         snprintf(g_cur_ssid, sizeof g_cur_ssid, "%s", g_conn_ssid);
         if(wifi_sanitize_savenets()) g_sanitize_pending = 0;   /* re-enable all + persist (supplicant is up here) */
         ui_toast("Connected");
-        start_scan();                        /* refresh list so the joined net gets its ✓ */
+        start_scan();                        /* refresh list so the joined net gets its checkmark */
         return;
     }
     char nl[2048]; run_cap(WCLI "list_networks 2>/dev/null", nl, sizeof nl);
     if(wifi_net_temp_disabled(nl, g_conn_id)){ conn_fail("Couldn't connect - check the password"); return; }
-    if(lv_tick_elaps(g_conn_start) > 15000)   /* gave it 15s to associate + DHCP */
+    if(lv_tick_elaps(g_conn_start) > 75000)   /* association plus two 30s DHCP stages */
         conn_fail("Couldn't connect");
 }
 
@@ -526,6 +864,7 @@ static const char *wifi_apply_net(int id, const char *ssid, const char *key){
 
 /* ---- connect ------------------------------------------------------------ */
 static void wifi_connect(const char *ssid, const char *key){
+    wifi_lease_retry_reset();
     char buf[2048];
     if(key && key[0] && !wifi_psk_len_ok(key)){ ui_toast("Password must be 8 to 63 characters"); return; }
     int id = -1;
@@ -560,11 +899,11 @@ static void wifi_connect(const char *ssid, const char *key){
         }
         id = (int)nid;
     }
+    g_intent_epoch++;                         /* selection invalidates any earlier transaction */
     const char *why = wifi_apply_net(id, ssid, key);
     if(why){ ui_toast(why); return; }
     if(g_conn_timer){ lv_timer_del(g_conn_timer); g_conn_timer = NULL; }
-    if(system(WCLI "save_config >/dev/null 2>&1")) fprintf(stderr, "wifi connect: save_config failed\n");   /* non-fatal: connection still works unsaved */
-    system("/sbin/udhcpc -i wlan0 -n -q >/dev/null 2>&1 &");   /* backgrounded; outcome via conn_poll_cb */
+    if(system("" WCLI "save_config >/dev/null 2>&1")) fprintf(stderr, "wifi connect: save_config failed\n");   /* non-fatal: connection still works unsaved */
     /* don't claim success yet - poll for the real outcome (assoc + DHCP). */
     snprintf(g_conn_ssid, sizeof g_conn_ssid, "%s", ssid);
     g_conn_id = id;
@@ -640,6 +979,7 @@ static char g_info_ssid[64];   /* the exact SSID shown on the details screen (re
  * exact ssid field - NOT sscanf "%[^\t]" after a "\t", which would swallow a leading space so " Home"
  * and "Home" collide and Forget could delete the wrong network. */
 static int wifi_remove_ssid(const char *ssid){
+    wifi_lease_retry_reset();
     if(!wpa_ready() || !ssid || !ssid[0]) return 0;
     char buf[4096]; run_cap(WCLI "list_networks 2>/dev/null", buf, sizeof buf);
     char *l = strchr(buf, '\n'); if(l) l++;               /* skip the header row */
@@ -673,15 +1013,21 @@ static void wifi_forget_cb(lv_event_t *e){
     ui_toast(wifi_remove_ssid(g_info_ssid) ? "Network forgotten" : "Couldn't forget network");
     wifi_open();   /* back to the list + fresh scan */
 }
-void wifi_info_open(void){
+static void wifi_info_refresh(void){
     if(!g_info_list) return;
     lv_obj_clean(g_info_list);
+    if(!cfg_get_int("wifi_on", 1)){
+        g_info_ssid[0] = 0;
+        info_row("Network", ""); info_row("IP Address", "");
+        return;
+    }
     char ssid[64], ip[32], buf[2048], val[64], gw[32];
-    wifi_status(ssid, sizeof ssid, ip, sizeof ip);
+    int ready = wifi_status(ssid, sizeof ssid, ip, sizeof ip);
+    if(!ready) ip[0] = 0;
     snprintf(g_info_ssid, sizeof g_info_ssid, "%s", ssid);   /* retain for Forget (don't re-read on click) */
     info_row("Network", ssid);
     info_row("IP Address", ip);
-    if(get_gateway(gw, sizeof gw)) info_row("Router", gw);
+    if(ready && get_gateway(gw, sizeof gw)) info_row("Router", gw);
     run_cap(WCLI "signal_poll 2>/dev/null", buf, sizeof buf);
     char *p = strstr(buf, "RSSI=");
     if(p){ int r; if(sscanf(p+5, "%d", &r)==1){ snprintf(val,sizeof val,"%d dBm", r); info_row("Signal", val);} }
@@ -693,8 +1039,8 @@ void wifi_info_open(void){
     p = strstr(buf, "bssid=");
     if(p && sscanf(p+6, "%63[^\n]", val)==1){ info_row("BSSID", val); }   /* check sscanf: val was read uninitialized on no-match */
     info_action_row("Forget This Network", wifi_forget_cb);   /* C05: remove the saved network */
-    screen_show(SCR_WIFI_INFO);
 }
+void wifi_info_open(void){ wifi_lease_retry_reset(); wifi_info_refresh(); screen_show(SCR_WIFI_INFO); }
 
 /* ---- scan list ---------------------------------------------------------- */
 static void row_free_cb(lv_event_t *e){ free(lv_obj_get_user_data(lv_event_get_target(e))); }
@@ -898,10 +1244,11 @@ static void scan_timer_cb(lv_timer_t *t){
     if(g_scan_timer){ lv_timer_del(g_scan_timer); g_scan_timer = NULL; }
 }
 static void start_scan(void){
+    wifi_lease_retry_reset();
     if(!wifi_radio_on()){ list_msg("Wi-Fi is off"); return; }
     /* wpa_cli returns non-zero when it can't reach the control socket / issue the scan; surface
      * that honestly instead of letting scan_fill() report a false "No networks found". */
-    if(system(WCLI "scan >/dev/null 2>&1") != 0){ list_msg("Couldn't scan Wi-Fi"); return; }
+    if(system("" WCLI "scan >/dev/null 2>&1") != 0){ list_msg("Couldn't scan Wi-Fi"); return; }
     list_msg_scanning();
     if(g_scan_timer) lv_timer_del(g_scan_timer);
     g_scan_timer = lv_timer_create(scan_timer_cb, 2500, NULL);
@@ -928,6 +1275,7 @@ static void radio_on_poll_cb(lv_timer_t *t){
 }
 static void sw_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_VALUE_CHANGED) return;
+    wifi_lease_retry_reset();
     int on = lv_obj_has_state(g_sw, LV_STATE_CHECKED);
     g_intent_epoch++;                            /* an explicit choice: ends any radio reconciliation hold */
     if(on){
@@ -944,6 +1292,7 @@ static void sw_cb(lv_event_t *e){
         if(g_radio_timer){ lv_timer_del(g_radio_timer); g_radio_timer = NULL; }
         if(g_scan_timer){ lv_timer_del(g_scan_timer); g_scan_timer = NULL; }  /* cancel a pending scan, else scan_fill overwrites "Wi-Fi is off" with stale networks */
         if(g_conn_timer){ lv_timer_del(g_conn_timer); g_conn_timer = NULL; }
+        wifi_lease_step();
         system("/usr/bin/wifi_down.sh >/dev/null 2>&1");
         list_msg("Wi-Fi is off");
     }
@@ -963,6 +1312,7 @@ int wifi_toggle(void){
         if(g_radio_timer){ lv_timer_del(g_radio_timer); g_radio_timer = NULL; }
         if(g_scan_timer){ lv_timer_del(g_scan_timer); g_scan_timer = NULL; }  /* cancel any pending radio/scan work on the open Wi-Fi screen */
         if(g_conn_timer){ lv_timer_del(g_conn_timer); g_conn_timer = NULL; }
+        wifi_lease_step();
         system("/usr/bin/wifi_down.sh >/dev/null 2>&1");
     }
     /* keep the Wi-Fi screen's switch in sync so it reflects reality when opened later */
@@ -1031,6 +1381,7 @@ void wifi_create(lv_obj_t *root){
 
 /* called from settings when the Wi-Fi row is tapped */
 void wifi_open(void){
+    wifi_lease_retry_reset();
     if(g_sw){
         if(wifi_radio_on()) lv_obj_add_state(g_sw, LV_STATE_CHECKED);
         else                lv_obj_clear_state(g_sw, LV_STATE_CHECKED);

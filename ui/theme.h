@@ -62,7 +62,10 @@ enum { THEME_PLAIN_HOME = 1, THEME_PLAIN_LIBRARY = 2, THEME_PLAIN_NOWPLAYING = 4
 struct theme_kit;
 typedef struct theme_def {
     const char *name;                         /* the preset name (theme_presets.inc) */
-    const lv_font_t *font[THEME_FONT_COUNT];  /* per font role; NULL = Default's font for that role */
+    struct {
+        const lv_font_t *face;                /* NULL = Default's font for that role */
+        uint8_t px;                           /* generated pixel size of face */
+    } font[THEME_FONT_COUNT];
     unsigned traits;                          /* 1 << theme_trait_t */
     theme_texture_t texture;
     theme_case_t title_case;                  /* screen titles */
@@ -75,7 +78,7 @@ int         theme_screen_plain(unsigned which);   /* 1 = this screen is plain ca
 const lv_font_t *theme_font_substitute(const lv_font_t *f);   /* Default face -> the theme's (NULL = keep) */           /* the active theme's definition, NULL for Default / custom */
 const theme_def_t *theme_def_find(const char *name);   /* theme_defs.c */
 void        theme_list_row(lv_obj_t *row);         /* call after a list row is filled: flat style + accent chevrons */
-char       *theme_lower(char *dst, int cap, const char *src);   /* as theme_upper, A-Z lower-cased */
+char       *theme_lower(char *dst, int cap, const char *src);   /* as theme_upper, lower-cased */
 void        theme_case_text(lv_obj_t *label, const char *text);   /* text in the theme's case (not a title form) */
 const lv_font_t *theme_font_smaller(const lv_font_t *f);   /* the theme's next smaller text face, NULL = none */
 const lv_font_t *theme_title_smaller(const lv_font_t *f);   /* a title's next smaller face (HEADER_SM first), NULL = none */
@@ -83,8 +86,9 @@ extern const char theme_title_tag;   /* user_data of a header title sized by tit
 /* set on a screen title that stepped down from the header face to fit: still a title to the theme kit */
 #define THEME_TITLE_STEPPED LV_OBJ_FLAG_USER_3
 void        theme_title_text(lv_obj_t *label, const char *text);   /* set a screen title (upper case if dot titles) */
-/* copy src into dst (cap bytes incl. NUL) with ASCII a-z upper-cased; every other byte (UTF-8 accents, CJK) is kept,
- * and truncation never splits a multi-byte character. Returns dst. */
+/* copy src into dst (cap bytes incl. NUL) upper-cased: ASCII, Latin-1, Latin Extended-A and Cyrillic letters (same
+ * length in both cases); every other character (CJK, symbols) is kept, and truncation never splits a multi-byte
+ * character. Returns dst. */
 char       *theme_upper(char *dst, int cap, const char *src);
 void        theme_screen_bg(lv_obj_t *root);       /* a screen root's background: canvas, plus the dot grid if any */
 void        theme_screen_solid(lv_obj_t *root);    /* this screen is plain canvas even in a dot-grid theme */

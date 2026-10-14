@@ -36,10 +36,10 @@ FW_BUSYBOX_MD5 = {'209': 'e6b2bb328e1c08238878991c0aae062d', '228': 'c1af60e81ce
                   '240': '5d8a5e60ee7d40002fe70f43228596cb', '257': '8651f07f6387df9f10a22a73f0f9450f'}
 if FW_BASE not in FW_BUSYBOX_MD5:
     raise SystemExit(f'FAIL unknown DISKOS_FW_BASE={FW_BASE!r}')
-FW = Path(os.environ.get('DISKOS_FW_ROOT') or os.environ.get('DISKOS_V240_ROOT')
-         or app.parents[1] / 'scratch' / 'fixtures' / ('v' + FW_BASE))   # tools/make-fixtures.sh
+_fw_location = os.environ.get('DISKOS_FW_ROOT') or os.environ.get('DISKOS_V240_ROOT')
+FW = Path(_fw_location) if _fw_location else None
 QEMU = shutil.which('qemu-mipsel-static')
-_fw_ok = bool(QEMU) and (FW / 'bin' / 'busybox').is_file() \
+_fw_ok = FW is not None and bool(QEMU) and (FW / 'bin' / 'busybox').is_file() \
     and hashlib.md5((FW / 'bin' / 'busybox').read_bytes()).hexdigest() == FW_BUSYBOX_MD5[FW_BASE]
 if os.environ.get('DISKOS_REQUIRE_FW') == '1' and not _fw_ok:
     raise SystemExit(f'FAIL firmware ash required (DISKOS_REQUIRE_FW=1) but qemu or the pinned V{FW_BASE} rootfs is missing at {FW}')
@@ -86,7 +86,7 @@ with tempfile.TemporaryDirectory(prefix='diskos-bootsel-') as t:
         shells[f'v{FW_BASE}-ash'] = [QEMU, '-L', str(FW), str(FW / 'bin' / 'busybox'), 'sh', str(helper)]
     else:
         fwbin = None
-        print('NOTE firmware ash unavailable: comparing against the host shell only')
+        print('SKIP firmware ash: set DISKOS_FW_ROOT (or DISKOS_V240_ROOT) to the pinned rootfs and provide qemu-mipsel-static; comparing against the host shell only')
 
     def c_says(path):
         out = subprocess.run([str(exe), 'read', str(path)], capture_output=True, timeout=5, check=True).stdout

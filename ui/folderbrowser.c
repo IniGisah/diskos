@@ -16,6 +16,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <dirent.h>
+#include <pthread.h>
 #include <sys/stat.h>
 
 /* File/folder browser (SCR_FOLDER).
@@ -62,6 +63,7 @@ static char        g_dir[FB_MAXPATH];
 static fb_entry_t *g_ent;                  /* grown on demand up to FB_MAX_ENTRIES */
 static char       *g_first;                /* first letter per entry for fast scrolling */
 static int         g_nent, g_ent_cap, g_first_cap;
+static int         g_opened;
 static lv_obj_t   *g_list;
 static lv_obj_t   *g_title;
 static lv_obj_t   *g_az_btn;
@@ -92,7 +94,8 @@ static int fb_is_audio(const char *name){
         /* the scanner's other formats (stock V2.57's list): a file Files shows must be one the scanner indexes */
         || fb_has_ext(name, ".aac") || fb_has_ext(name, ".ogg") || fb_has_ext(name, ".ape")
         || fb_has_ext(name, ".aif") || fb_has_ext(name, ".aiff") || fb_has_ext(name, ".wma")
-        || fb_has_ext(name, ".dsf") || fb_has_ext(name, ".dff") || fb_has_ext(name, ".dts");
+        || fb_has_ext(name, ".dsf") || fb_has_ext(name, ".dff") || fb_has_ext(name, ".dts")
+        || fb_has_ext(name, ".opus") || fb_has_ext(name, ".oga");
 }
 
 /* folders first, then files; case-insensitive within each group. */
@@ -102,16 +105,39 @@ static int fb_cmp(const void *a, const void *b){
     return strcasecmp(x->name, y->name);
 }
 
-/* Scan g_dir into g_ent[]. Guards against unstat-able junk and over-long paths
- * the same way scanner.c walk() does: a failed lstat on one entry skips that
- * entry, it never aborts the listing. */
 static void fb_fill_stop(void){ if(g_fb_fill){ lv_timer_del(g_fb_fill); g_fb_fill = NULL; } }
 
-static void fb_scan_leased(void){
-    fb_fill_stop();                        /* a rescan invalidates any in-flight incremental render */
-    g_nent = 0;
-    DIR *d = opendir(g_dir);
-    if(!d) return;
+/* Single worker, latest request wins; the UI timer owns all widgets. */
+typedef struct {
+    fb_entry_t *ent;
+    int nent, cap, opened, cancelled;
+    unsigned gen;
+} fb_result_t;
+static pthread_mutex_t g_fb_mu = PTHREAD_MUTEX_INITIALIZER;
+static unsigned g_fb_gen;
+static int g_fb_running, g_fb_requested, g_fb_ready, g_fb_waiting;
+static int g_fb_error_shown;
+static char g_fb_path[FB_MAXPATH];
+static fb_result_t g_fb_res;
+static lv_timer_t *g_fb_poll;
+
+static int fb_current(unsigned gen){
+    pthread_mutex_lock(&g_fb_mu);
+    int ok = gen == g_fb_gen && g_fb_requested;
+    pthread_mutex_unlock(&g_fb_mu);
+    return ok && sd_io_allowed();
+}
+
+/* Two passes and the original comparator preserve admission and ordering. */
+static void fb_scan_leased(const char *dir, fb_result_t *res){
+    DIR *d = opendir(dir);
+    if(!d){
+        if(fb_current(res->gen)){
+            d = opendir(dir); res->opened = d != NULL;
+            if(d) closedir(d);
+        }
+        return;
+    }
     struct dirent *e;
     /* Two passes so a user's folders are NEVER dropped by the entry cap in a huge directory:
      * pass 0 admits every subdirectory, pass 1 fills the remaining budget with audio files.
@@ -121,16 +147,16 @@ static void fb_scan_leased(void){
      * it (exfat does) and fall back to lstat only on DT_UNKNOWN, so the extra pass adds no stat()
      * cost on the normal path. */
     for(int pass = 0; pass < 2; pass++){
-        for(errno = 0; (e = readdir(d)); errno = 0){
+        for(errno = 0; fb_current(res->gen) && (e = readdir(d)); errno = 0){
             const char *nm = e->d_name;
             if(nm[0] == '.' && (nm[1] == 0 || (nm[1] == '.' && nm[2] == 0))) continue;  /* skip . and .. */
-            if(g_nent >= FB_MAX_ENTRIES) break;
-            if(g_nent >= g_ent_cap){                          /* grow the entry array as needed */
-                int nc = g_ent_cap ? g_ent_cap * 2 : 128;
+            if(res->nent >= FB_MAX_ENTRIES) break;
+            if(res->nent >= res->cap){                          /* grow the entry array as needed */
+                int nc = res->cap ? res->cap * 2 : 128;
                 if(nc > FB_MAX_ENTRIES) nc = FB_MAX_ENTRIES;
-                fb_entry_t *ne = realloc(g_ent, (size_t)nc * sizeof *g_ent);
+                fb_entry_t *ne = realloc(res->ent, (size_t)nc * sizeof *res->ent);
                 if(!ne) break;                                /* OOM: keep what we have, never crash */
-                g_ent = ne; g_ent_cap = nc;
+                res->ent = ne; res->cap = nc;
             }
 
             int is_dir;
@@ -138,7 +164,7 @@ static void fb_scan_leased(void){
             else if(e->d_type == DT_REG) is_dir = 0;
             else {                                            /* DT_UNKNOWN/other: stat to classify */
                 char path[FB_MAXPATH];
-                int pn = snprintf(path, sizeof path, "%s/%s", g_dir, nm);
+                int pn = snprintf(path, sizeof path, "%s/%s", dir, nm);
                 if(pn <= 0 || pn >= (int)sizeof path) continue;   /* path too long - skip */
                 struct stat st;
                 if(lstat(path, &st) != 0) continue;           /* orphaned / unreadable - skip (never fatal) */
@@ -152,22 +178,101 @@ static void fb_scan_leased(void){
                 if(fb_has_ext(nm, ".cue")) kind = FB_K_CUE;
                 else if(fb_has_ext(nm, ".iso")){
                     char ip[FB_MAXPATH];
-                    int pn = snprintf(ip, sizeof ip, "%s/%s", g_dir, nm);
+                    int pn = snprintf(ip, sizeof ip, "%s/%s", dir, nm);
                     if(pn <= 0 || pn >= (int)sizeof ip || mdb_subtrack_count(ip, 1) <= 0) continue;
                     kind = FB_K_ISO;
                 } else continue;
             }
 
-            fb_entry_t *slot = &g_ent[g_nent];
+            fb_entry_t *slot = &res->ent[res->nent];
             snprintf(slot->name, sizeof slot->name, "%s", nm);
             slot->is_dir = is_dir;
             slot->kind = kind;
-            g_nent++;
+            res->nent++;
         }
         if(pass == 0) rewinddir(d);
     }
     closedir(d);
-    if(g_nent > 1) qsort(g_ent, g_nent, sizeof g_ent[0], fb_cmp);
+    res->opened = 1;
+    if(res->nent == 0 && fb_current(res->gen)){
+        d = opendir(dir);
+        res->opened = d != NULL;
+        if(d) closedir(d);
+    }
+    if(!fb_current(res->gen)){ res->cancelled = 1; return; }
+    if(res->nent > 1) qsort(res->ent, res->nent, sizeof res->ent[0], fb_cmp);
+}
+
+static void *fb_worker(void *arg){
+    (void)arg;
+    for(;;){
+        char dir[FB_MAXPATH];
+        fb_result_t res = {0};
+        pthread_mutex_lock(&g_fb_mu);
+        if(!g_fb_requested){
+            g_fb_running = 0;
+            pthread_mutex_unlock(&g_fb_mu);
+            return NULL;
+        }
+        res.gen = g_fb_gen;
+        snprintf(dir, sizeof dir, "%s", g_fb_path);
+        pthread_mutex_unlock(&g_fb_mu);
+        if(sd_io_begin()){
+            fb_scan_leased(dir, &res);
+            sd_io_end();
+        }
+        pthread_mutex_lock(&g_fb_mu);
+        if(res.gen == g_fb_gen && g_fb_requested){
+            g_fb_res = res;
+            g_fb_ready = 1;
+            g_fb_running = 0;
+            pthread_mutex_unlock(&g_fb_mu);
+            return NULL;
+        }
+        pthread_mutex_unlock(&g_fb_mu);
+        free(res.ent);
+    }
+}
+
+static const char *fb_basename(const char *p);
+static void fb_rebuild(void);
+static void fb_scan(void);
+static void fb_poll_cb(lv_timer_t *t){
+    /* Admission alone misses a pulled card, so a visible poll also asks for a lease: a result
+     * is only taken while the medium stayed local, and a card that returns needs a fresh scan. */
+    int visible = screen_current() == SCR_FOLDER;
+    int admitted = visible && sd_io_begin();
+    if(admitted) sd_io_end();
+    if(!admitted){
+        pthread_mutex_lock(&g_fb_mu);
+        if(g_fb_requested){ g_fb_gen++; g_fb_requested = 0; }
+        free(g_fb_res.ent); memset(&g_fb_res, 0, sizeof g_fb_res); g_fb_ready = 0;
+        pthread_mutex_unlock(&g_fb_mu);
+        fb_fill_stop();
+        /* hidden: just drop the scan; visible: show the error once */
+        if(visible && !g_fb_error_shown){
+            free(g_ent); g_ent = NULL; g_nent = 0; g_opened = 0;
+            fb_rebuild(); g_fb_error_shown = 1;
+        }
+        g_fb_waiting = 1;
+        lv_timer_set_period(t, 200);
+        return;
+    }
+    if(g_fb_waiting){ fb_scan(); return; }
+    fb_result_t res = {0}; int ready = 0;
+    pthread_mutex_lock(&g_fb_mu);
+    if(g_fb_ready && g_fb_res.gen == g_fb_gen){
+        res = g_fb_res; memset(&g_fb_res, 0, sizeof g_fb_res);
+        ready = 1; g_fb_ready = 0; g_fb_requested = 0;
+    }
+    pthread_mutex_unlock(&g_fb_mu);
+    if(!ready) return;
+    if(res.cancelled){
+        free(res.ent); g_opened = 0; fb_rebuild(); g_fb_waiting = 1; g_fb_error_shown = 1;
+        lv_timer_set_period(t, 200);
+        return;
+    }
+    free(g_ent); g_ent = res.ent; g_nent = res.nent; g_opened = res.opened;
     if(g_nent > g_first_cap){
         char *nf = realloc(g_first, (size_t)g_nent);
         if(nf){ g_first = nf; g_first_cap = g_nent; }
@@ -175,12 +280,38 @@ static void fb_scan_leased(void){
     if(g_first){
         for(int i = 0; i < g_nent; i++) g_first[i] = first_letter(g_ent[i].name);
     }
+    fb_rebuild();
+    lv_timer_del(t); g_fb_poll = NULL;
 }
 
 static void fb_scan(void){
-    if(!sd_io_begin()){ fb_fill_stop(); g_nent = 0; return; }
-    fb_scan_leased();
-    sd_io_end();
+    fb_fill_stop();
+    free(g_ent); g_ent = NULL; g_nent = 0;
+    if(g_list) lv_obj_clean(g_list);   /* blank while loading, as before */
+    if(g_title) theme_title_text(g_title, strcmp(g_dir, FB_ROOT) == 0 ? "Files" : fb_basename(g_dir));
+    pthread_mutex_lock(&g_fb_mu);
+    g_fb_gen++;
+    free(g_fb_res.ent); memset(&g_fb_res, 0, sizeof g_fb_res); g_fb_ready = 0;
+    snprintf(g_fb_path, sizeof g_fb_path, "%s", g_dir);
+    g_fb_requested = 1;
+    int start = !g_fb_running;
+    if(start) g_fb_running = 1;
+    pthread_mutex_unlock(&g_fb_mu);
+    g_fb_waiting = 0;
+    g_fb_error_shown = 0;
+    if(!g_fb_poll) g_fb_poll = lv_timer_create(fb_poll_cb, 16, NULL);
+    else lv_timer_set_period(g_fb_poll, 16);
+    if(start){
+        pthread_t th;
+        if(pthread_create(&th, NULL, fb_worker, NULL) == 0) pthread_detach(th);
+        else {
+            pthread_mutex_lock(&g_fb_mu);
+            g_fb_running = 0; g_fb_requested = 0;
+            pthread_mutex_unlock(&g_fb_mu);
+            g_opened = 0; fb_rebuild();
+            lv_timer_del(g_fb_poll); g_fb_poll = NULL;
+        }
+    }
 }
 static const char *fb_basename(const char *p){
     const char *s = strrchr(p, '/');
@@ -208,6 +339,7 @@ static void fb_add_row(int i){
         lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_ext_click_area(r, 2);
         ui_on(r, fb_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i, "folderbrowser.fb_row", UI_CORE);
+        kit_row_layout(r, KIT_ROW_ICON);
 
         lv_obj_t *ic = lv_label_create(r);
         lv_label_set_text(ic, en->is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_AUDIO);
@@ -235,8 +367,13 @@ static void fb_add_row(int i){
 
 static void fb_fill_cb(lv_timer_t *t){
     (void)t;
+    if(screen_current() != SCR_FOLDER) return;
+    uint32_t start = lv_tick_get();
     int end = g_fb_i + 40; if(end > g_nent) end = g_nent;   /* render in batches so scrolling stays responsive */
-    for(; g_fb_i < end; g_fb_i++) fb_add_row(g_fb_i);
+    while(g_fb_i < end){
+        fb_add_row(g_fb_i++);
+        if(lv_tick_elaps(start) >= 4) break;
+    }
     if(g_fb_i >= g_nent) fb_fill_stop();
 }
 
@@ -380,15 +517,10 @@ static void fb_rebuild(void){
     /* opendir failed at scan time -> either no SD or an unreadable dir. */
     if(g_nent == 0){
         fb_az_show(0);
-        int lease = sd_io_begin();
-        DIR *probe = lease ? opendir(g_dir) : NULL;
-        if(!probe){
-            if(lease) sd_io_end();
+        if(!g_opened){
             fb_empty_label(strcmp(g_dir, FB_ROOT) == 0 ? "No SD card" : "Can't open folder");
             return;
         }
-        closedir(probe);
-        sd_io_end();
         fb_empty_label("Empty folder");
         return;
     }
@@ -454,7 +586,6 @@ static void fb_descend(const char *name){
     if(n <= 0 || n >= (int)sizeof next){ ui_toast("Path too long"); return; }
     snprintf(g_dir, sizeof g_dir, "%s", next);
     fb_scan();
-    fb_rebuild();
 }
 
 /* Go up one level. At the SD root, leave the screen (the header chevron is the
@@ -469,7 +600,6 @@ static void fb_ascend(void){
         *slash = 0;
     }
     fb_scan();
-    fb_rebuild();
 }
 
 int folderbrowser_back(void){
@@ -663,6 +793,5 @@ void folderbrowser_create(lv_obj_t *root){
 void folderbrowser_open(void){
     snprintf(g_dir, sizeof g_dir, "%s", FB_ROOT);   /* always (re)enter at the SD root */
     fb_scan();
-    fb_rebuild();
     screen_show(SCR_FOLDER);
 }

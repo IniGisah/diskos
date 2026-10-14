@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -65,6 +66,34 @@ static int mq_identity(mqd_t q, dev_t *dev, ino_t *ino){
 }
 
 /* ---- helpers ---- */
+static char g_stock_title[IPC_TITLE_CAPACITY];
+static int g_title_frozen, g_title_stock;
+static uint64_t g_title_revision;
+/* Strict unsigned raw identifiers, including zero; display pos_id is separate. */
+static int raw_id(const char *js, const jsmntok_t *t, uint64_t *out){
+    uint64_t n=0;
+    if(t->type!=JSMN_PRIMITIVE || t->end==t->start) return 0;
+    for(int i=t->start;i<t->end;i++){
+        unsigned d=(unsigned)(js[i]-'0');
+        if(d>9 || n>(UINT64_MAX-d)/10) return 0;
+        n=n*10+d;
+    }
+    *out=n; return 1;
+}
+static int kind_bool(const char *js, const jsmntok_t *t, int *out){
+    int n=t->end-t->start;
+    if(t->type!=JSMN_PRIMITIVE) return 0;
+    if(n==4 && !memcmp(js+t->start,"true",4)){ *out=1; return 1; }
+    if(n==5 && !memcmp(js+t->start,"false",5)){ *out=0; return 1; }
+    return 0;
+}
+static int title_pending(const char *path, const char *title){
+    const char *base=strrchr(path,'/'); base=base ? base+1 : path;
+    const char *ext=strrchr(base,'.');
+    return path[0]=='/' && ext && (!strcasecmp(ext,".opus") ||
+        !strcasecmp(ext,".oga") || !strcasecmp(ext,".ogg")) &&
+        (!title[0] || !strcmp(base,title));
+}
 static int tok_eq(const char*js, jsmntok_t*t, const char*s){
     int n=t->end-t->start;
     return t->type==JSMN_STRING && (int)strlen(s)==n && strncmp(js+t->start,s,n)==0;
@@ -112,36 +141,200 @@ static int unescape(const char*s,int n,char*dst,int dstsz){
 
 /* Zero the current-track fields. Caller must hold g_mu. */
 static void clear_track(void){
+    if(g_state.player_confirmed) g_state.playback_token++;
+    g_state.player_confirmed=0; g_state.provisional=0; g_state.title_ready=0;
+    g_state.song_id_valid=g_state.pos_id_valid=0;
+    g_state.is_cue_valid=g_state.is_sacd_valid=0;
+    g_state.song_id_raw=g_state.pos_id_raw=0;
+    g_title_frozen=g_title_stock=0; g_stock_title[0]=0;
     g_state.have_track=0;
     g_state.title[0]=0; g_state.artist[0]=0; g_state.album[0]=0; g_state.path[0]=0;
     g_state.duration_ms=0; g_state.position_ms=0; g_state.pos_id=0;
     g_state.sample_rate=0; g_state.is_dsd=0;
 }
 
+/* Stock snprintf metadata can be RAW text or transport-escaped strings.
+ * Verified mq_player format VAs: V2.09 0x64f3bc/0x650200/0x65057c/0x66006c,
+ * V2.28 0x6bb2b4, V2.40 0x6ccfc8, V2.57 0x6d7c78 (call 0x4d87b4).
+ * Normalize before JSON decoding; refuse duplicate boundaries rather than guess. */
+static int stock_a2_space(char c){ return c==' ' || c=='\t' || c=='\r' || c=='\n'; }
+/* Whitespace between fields is present in the older firmware formats. */
+static int stock_a2_match(const char *src, int len, int at, const char *pattern){
+    for(int i=0;pattern[i];i++){
+        if(at>=len || src[at++]!=pattern[i]) return -1;
+        if(pattern[i]==',') while(at<len && stock_a2_space(src[at])) at++;
+    }
+    return at;
+}
+static int stock_a2_scalar(const char *src, int n, int boolean){
+    if(boolean) return (n==4 && !memcmp(src,"true",4)) || (n==5 && !memcmp(src,"false",5));
+    int i=(n>0 && src[0]=='-') ? 1 : 0;
+    if(i==n || (src[i]=='0' && n-i>1)) return 0;
+    for(;i<n;i++) if(src[i]<'0' || src[i]>'9') return 0;
+    return 1;
+}
+/* jsmn tokenizes primitives without validating their JSON type. Validate every
+ * suffix field here, including the closing brace and exact end of input. */
+static int stock_a2_suffix(const char *src, int len, int at){
+    static const char *keys[]={"love","playerflag","state","playing_num","work_mode"};
+    for(int k=0;k<5;k++){
+        char head[32]; snprintf(head,sizeof head,",\"%s\":",keys[k]);
+        at=stock_a2_match(src,len,at,head);
+        if(at<0) return 0;
+        int start=at;
+        if(k>=3){
+            if(at>=len || src[at++]!='"') return 0;
+            while(at<len && src[at]!='"'){
+                if((unsigned char)src[at]<32 || src[at]=='\\') return 0;
+                at++;
+            }
+            if(at>=len) return 0;
+            at++;
+        } else {
+            while(at<len && src[at]!=',' && src[at]!='}') at++;
+            if(!stock_a2_scalar(src+start,at-start,k==0)) return 0;
+        }
+    }
+    return at<len && src[at]=='}' && at+1==len;
+}
+static int stock_a2_append(char *out, int *used, int cap, const char *s, int n){
+    if(n<0 || n>=cap-*used) return 0;
+    memcpy(out+*used,s,n); *used+=n; out[*used]=0; return 1;
+}
+/* The leading path slash distinguishes raw, one-layer and two-layer paths. */
+static int stock_a2_depth(const char *s, int n){
+    int i=0;
+    while(i<n && s[i]=='\\') i++;
+    if(i==0) return 0;   /* raw path bytes stay unchanged */
+    if(i>=n || s[i]!='/') return -1;
+    return i==1 ? 1 : i==3 ? 2 : -1;
+}
+/* Decode only stock's slash, quote and backslash escapes, then protect the real
+ * bytes for the two JSON decoders. Unknown escapes are never interpreted. */
+static int stock_a2_string(const char *s, int n, int depth, int path,
+                           char *out, int *used, int cap){
+    int unit=1<<depth, bytes=0;
+    for(int i=0;i<n;){
+        unsigned char c=(unsigned char)s[i++];
+        int slashes=0;
+        if(c=='\\'){
+            slashes=1;
+            while(i<n && s[i]=='\\'){ slashes++; i++; }
+            int tail=slashes%unit;
+            if(depth && i<n && (s[i]=='/' || s[i]=='"') && tail==unit-1){
+                slashes/=unit; c=(unsigned char)s[i++];
+            } else {
+                if(depth && tail && path) return 0;
+                if(!tail) slashes/=unit;
+                c=0;   /* leave the following byte for the next iteration */
+            }
+        }
+        bytes+=slashes+(c!=0);
+        if(path==1 && bytes>(int)sizeof g_state.path-4) return 0;
+        while(slashes--){
+            if(!stock_a2_append(out,used,cap,"\\\\\\\\",4)) return 0;
+        }
+        if(c=='"'){
+            if(!stock_a2_append(out,used,cap,"\\\\\\\"",4)) return 0;
+        } else if(c && c<32){
+            char esc[8]; int en=snprintf(esc,sizeof esc,"\\\\u%04x",c);
+            if(!stock_a2_append(out,used,cap,esc,en)) return 0;
+        } else if(c && !stock_a2_append(out,used,cap,(const char *)&c,1)) return 0;
+    }
+    return 1;
+}
+static int stock_a2_normalize(const char *src, int len, char *out, int cap){
+    static const char *keys[]={"id","pos_id","song_name","song_duration_time",
+        "song_file_path","song_sample_rate","song_encoding_rate","song_bit_rate",
+        "song_artist_name","song_album_name","song_style_name","song_track",
+        "song_channel","is_sacd","is_cue","is_dsd","is_m3u","m3u_file_path"};
+    /* 0 = integer, 1 = raw string, 2 = boolean. */
+    static const unsigned char types[]={0,0,1,0,1,0,0,0,1,1,1,0,0,2,2,2,2,1};
+    const char *prefix="{\"song\":\"{";
+    int used=0, at=(int)strlen(prefix), starts[18], ends[18], count=0, depth=0;
+    if(len<at || memcmp(src,prefix,at)) return 0;
+    for(int k=0;k<18;k++){
+        char head[64], boundary[64];
+        snprintf(head,sizeof head,"%s\\\"%s\\\":%s",k ? "," : "",keys[k],types[k]==1 ? "\\\"" : "");
+        int next=stock_a2_match(src,len,at,head);
+        if(next<0) return 0;
+        at=next;
+        /* V2.09 ends immediately after is_dsd; newer layouts carry m3u. */
+        int last=(k==17 || (k==15 &&
+            (stock_a2_match(src,len,at,"true}\"")>=0 ||
+             stock_a2_match(src,len,at,"false}\"")>=0)));
+        int bn;
+        if(last) bn=snprintf(boundary,sizeof boundary,"%s}\"",types[k]==1 ? "\\\"" : "");
+        else bn=snprintf(boundary,sizeof boundary,"%s,\\\"%s\\\":",types[k]==1 ? "\\\"" : "",keys[k+1]);
+        int end=-1;
+        for(int i=at;i+bn<=len;i++){
+            if(stock_a2_match(src,len,i,boundary)>=0){
+                if(end>=0) return 0;   /* ambiguous raw data: refuse to invent an identity */
+                end=i;
+            }
+        }
+        if(end<0) return 0;
+        if(types[k]==1){
+            starts[count]=at; ends[count++]=end;
+            if(k==4){
+                depth=stock_a2_depth(src+at,end-at);
+                if(depth<0) return 0;
+            }
+            at=end+2;
+        } else {
+            int n=end-at;
+            if(!stock_a2_scalar(src+at,n,types[k]==2)) return 0;
+            at=end;
+        }
+        if(last) break;
+    }
+    if(stock_a2_match(src,len,at,"}\"")<0 || !stock_a2_suffix(src,len,at+2)) return 0;
+    int copied=0;
+    for(int k=0;k<count;k++){
+        if(!stock_a2_append(out,&used,cap,src+copied,starts[k]-copied) ||
+           !stock_a2_string(src+starts[k],ends[k]-starts[k],k==1 ? depth : 0,k==1,
+                            out,&used,cap)) return 0;
+        copied=ends[k];
+    }
+    if(!stock_a2_append(out,&used,cap,src+copied,len-copied)) return 0;
+    return used;
+}
+
 static void parse_a2(const char*payload,int len){
-    jsmn_parser p; jsmntok_t tk[256];
+    jsmn_parser p; jsmntok_t tk[64];
+    static char repaired[8192], song[8192];
+    jsmntok_t st[96]; int nt, n2=0, v;
+    /* An id-first song object identifies the stock layout. A recognized but
+     * malformed/ambiguous frame must never fall through to permissive JSON. */
+    const char *stock_head="{\"song\":\"{\\\"id\\\":";
+    int head_len=(int)strlen(stock_head);
+    if(len>=head_len && !memcmp(payload,stock_head,head_len)){
+        int normalized=stock_a2_normalize(payload,len,repaired,sizeof repaired);
+        if(!normalized) return;
+        payload=repaired; len=normalized;
+    }
     jsmn_init(&p);
-    int nt=jsmn_parse(&p,payload,len,tk,256);
-    if(nt<1){
-        FILE *f = fopen("/usr/data/ipc_err.log", "a");
-        if(f){ fprintf(f, "parse_a2 outer jsmn_parse failed nt=%d len=%d\n%.*s\n", nt, len, len, payload); fclose(f); }
-        return;
+    nt=jsmn_parse(&p,payload,len,tk,64);
+    v=nt>0 ? find_val(payload,tk,nt,"song") : -1;
+    if(v>=0 && tk[v].type==JSMN_STRING && (tk[v].end-tk[v].start)>2){
+        int decoded=unescape(payload+tk[v].start,tk[v].end-tk[v].start,song,sizeof song);
+        jsmn_parser p2; jsmn_init(&p2);
+        n2=decoded>=0 ? jsmn_parse(&p2,song,decoded,st,96) : -1;
+    }
+    if(nt<1 || n2<0) return;
+    /* A truncated title cannot be used as eligibility evidence. Reject before publication. */
+    if(n2>0){
+        char title[sizeof g_state.title]; int sv=find_val(song,st,n2,"song_name");
+        if(sv>=0 && unescape(song+st[sv].start,st[sv].end-st[sv].start,title,sizeof title)<0) return;
     }
     pthread_mutex_lock(&g_mu);
     char oldpath[256]; snprintf(oldpath, sizeof oldpath, "%s", g_state.path);   /* detect a track-identity change */
-    int v;
     v=find_val(payload,tk,nt,"state");        if(v>=0) g_state.state=(int)tok_long(payload,&tk[v]);
     v=find_val(payload,tk,nt,"playing_num");  if(v>=0) copy_tok(payload,&tk[v],g_state.playing_num,sizeof g_state.playing_num);
     v=find_val(payload,tk,nt,"work_mode");    if(v>=0) copy_tok(payload,&tk[v],g_state.work_mode,sizeof g_state.work_mode);
     v=find_val(payload,tk,nt,"love");         if(v>=0) g_state.is_favorite=tok_bool(payload,&tk[v]);
     v=find_val(payload,tk,nt,"song");
     if(v>=0 && tk[v].type==JSMN_STRING && (tk[v].end-tk[v].start)>2){
-        static char song[8192];   /* match the 8192 /player queue: a long escaped CJK/path song
-                                    * JSON must not truncate here (truncation -> jsmn parse fail ->
-                                    * track not updated -> the previous track stays on screen) */
-        unescape(payload+tk[v].start, tk[v].end-tk[v].start, song, sizeof song);
-        jsmn_parser p2; jsmntok_t st[512]; jsmn_init(&p2);
-        int n2=jsmn_parse(&p2,song,strlen(song),st,512);
         if(n2>0){
             /* Parse into TEMP state and publish only when the song carries a complete IDENTITY (a valid
              * path). song_name alone must NOT make it a "track": an omitted song_file_path would otherwise
@@ -150,7 +343,12 @@ static void parse_a2(const char*payload,int len){
              * string: the inner song JSON still carries \/ \" \uXXXX after the outer unescape. */
             char t_title[sizeof g_state.title]={0}, t_artist[sizeof g_state.artist]={0};
             char t_album[sizeof g_state.album]={0}, t_path[sizeof g_state.path]={0};
-            long t_dur=-1, t_pos=-1; int t_sr=-1, t_dsd=-1, have_path=0, sv;
+            long t_dur=-1; int t_sr=-1, t_dsd=-1, have_path=0, sv;
+            uint64_t song_id=0, pos_id=0; int sid_ok=0, pid_ok=0, cue=0, sacd=0, cue_ok=0, sacd_ok=0;
+            sv=find_val(song,st,n2,"id"); if(sv>=0) sid_ok=raw_id(song,&st[sv],&song_id);
+            sv=find_val(song,st,n2,"pos_id"); if(sv>=0) pid_ok=raw_id(song,&st[sv],&pos_id);
+            sv=find_val(song,st,n2,"is_cue"); if(sv>=0) cue_ok=kind_bool(song,&st[sv],&cue);
+            sv=find_val(song,st,n2,"is_sacd"); if(sv>=0) sacd_ok=kind_bool(song,&st[sv],&sacd);
             sv=find_val(song,st,n2,"song_name");          if(sv>=0) unescape(song+st[sv].start, st[sv].end-st[sv].start, t_title,  sizeof t_title);
             sv=find_val(song,st,n2,"song_artist_name");   if(sv>=0) unescape(song+st[sv].start, st[sv].end-st[sv].start, t_artist, sizeof t_artist);
             sv=find_val(song,st,n2,"song_album_name");    if(sv>=0) unescape(song+st[sv].start, st[sv].end-st[sv].start, t_album,  sizeof t_album);
@@ -160,16 +358,36 @@ static void parse_a2(const char*payload,int len){
             sv=find_val(song,st,n2,"song_duration_time"); if(sv>=0) t_dur=tok_long(song,&st[sv]);
             sv=find_val(song,st,n2,"song_sample_rate");   if(sv>=0) t_sr=(int)tok_long(song,&st[sv]);
             sv=find_val(song,st,n2,"is_dsd");             if(sv>=0) t_dsd=tok_bool(song,&st[sv]);
-            sv=find_val(song,st,n2,"pos_id");             if(sv>=0) t_pos=tok_long(song,&st[sv]);
             if(have_path){                 /* complete identity -> publish the whole track atomically */
+                int changed=!g_state.player_confirmed || strcmp(g_state.path,t_path) ||
+                    g_state.song_id_valid!=(unsigned)sid_ok || g_state.pos_id_valid!=(unsigned)pid_ok ||
+                    g_state.song_id_raw!=song_id || g_state.pos_id_raw!=pos_id;
+                if(changed){
+                    g_state.playback_token++; g_title_frozen=g_title_stock=0;
+                    /* The previous position does not belong to this identity. */
+                    g_state.position_ms=0; g_state.pos_seq=0;
+                }
+                g_state.player_confirmed=1; g_state.provisional=0;
+                g_state.song_id_raw=song_id; g_state.pos_id_raw=pos_id;
+                g_state.song_id_valid=sid_ok; g_state.pos_id_valid=pid_ok;
+                if(strcmp(g_stock_title,t_title) || g_state.is_cue!=cue || g_state.is_sacd!=sacd ||
+                   g_state.is_cue_valid!=(unsigned)cue_ok || g_state.is_sacd_valid!=(unsigned)sacd_ok)
+                    g_title_revision++;
+                g_state.is_cue=cue; g_state.is_sacd=sacd;
+                g_state.is_cue_valid=cue_ok; g_state.is_sacd_valid=sacd_ok;
+                strcpy(g_stock_title,t_title);
                 snprintf(g_state.path,   sizeof g_state.path,   "%s", t_path);
-                snprintf(g_state.title,  sizeof g_state.title,  "%s", t_title);
+                if(!g_title_frozen){
+                    strcpy(g_state.title,t_title);
+                    if(!title_pending(t_path,t_title) || (cue_ok && cue) || (sacd_ok && sacd)) g_title_stock=1;
+                    g_state.title_ready=g_title_stock;
+                }
                 snprintf(g_state.artist, sizeof g_state.artist, "%s", t_artist);
                 snprintf(g_state.album,  sizeof g_state.album,  "%s", t_album);
                 if(t_dur>=0) g_state.duration_ms=t_dur;
                 if(t_sr>=0)  g_state.sample_rate=t_sr;
                 if(t_dsd>=0) g_state.is_dsd=t_dsd;
-                g_state.pos_id = (t_pos>0 && t_pos<=0x7FFFFFFF) ? (int)t_pos : 0;   /* per track: never carried over from the previous one */
+                g_state.pos_id = (pid_ok && pos_id>0 && pos_id<=0x7FFFFFFF) ? (int)pos_id : 0;   /* per track: never carried over from the previous one */
                 g_state.have_track=1;
             } else {
                 /* a present song with NO usable path can't establish identity -> clear rather than bind new
@@ -208,8 +426,25 @@ static int all_hex(const char*s,int n){
     return 1;
 }
 
+/* the player's screen sleep/wake ("aa23000C0000" / "...0001", echo_sys_control.c V2.57) and power-off ("aa03"):
+ * counters so the main loop sees every event (the latest value wins between its polls) */
+static unsigned g_scr_seq, g_aa03_seq; static int g_scr_on = -1;
+/* Called under g_recov_mu: frame state belongs only to this queue generation. */
+static void screen_new_generation(void){
+    g_generation++; g_scr_on = -1; g_scr_seq = g_aa03_seq = 0;
+}
 static void parse_frame(const char*buf,int n){
     if(n<8) return;
+    if(buf[0]=='a'&&buf[1]=='a'&&buf[2]=='2'&&buf[3]=='3' && n>=12){
+        char h[5]={buf[8],buf[9],buf[10],buf[11],0};
+        if(!all_hex(h,4)) return;
+        pthread_mutex_lock(&g_recov_mu); g_scr_on=(int)strtol(h,0,16)!=0; g_scr_seq++; pthread_mutex_unlock(&g_recov_mu);
+        return;
+    }
+    if(buf[0]=='a'&&buf[1]=='a'&&buf[2]=='0'&&buf[3]=='3'){
+        pthread_mutex_lock(&g_recov_mu); g_aa03_seq++; pthread_mutex_unlock(&g_recov_mu);
+        return;
+    }
     if(buf[0]==97 && buf[1]==49){ /* "a1<type2><len4><payload>" position, e.g. a1030010 + 8-hex ms */
         if(n<8) return;
         char lh[5]={buf[4],buf[5],buf[6],buf[7],0};
@@ -296,8 +531,14 @@ static int rx_do_reopen(void){
     g_rx = nw;                              /* g_rx is RX-thread-only; publish the fresh descriptor */
     dev_t d=0; ino_t io=0; mq_identity(nw, &d, &io);
     pthread_mutex_lock(&g_recov_mu);
-    g_rx_dev = d; g_rx_ino = io; g_rx_ready = 1; g_reconnected = 1; g_player_mode = -1; g_tip_event = 0; g_generation++;  /* new player gen */
+    g_rx_dev = d; g_rx_ino = io; g_rx_ready = 1; g_reconnected = 1; g_player_mode = -1; g_tip_event = 0; screen_new_generation();
+    unsigned generation=g_generation;
     pthread_mutex_unlock(&g_recov_mu);
+    pthread_mutex_lock(&g_mu);
+    int had_path=g_state.path[0]!=0;
+    clear_track(); g_state.playback_token++; g_state.player_generation=generation; g_state.seq++;
+    if(had_path) g_state.path_seq=g_state.seq;
+    pthread_mutex_unlock(&g_mu);
     if(old!=(mqd_t)-1 && old!=nw) mq_close(old);   /* open-before-close, but NEVER close a descriptor number
                                                     * the new mq_open reused (EBADF path: the old fd was dead,
                                                     * so its number can come back as nw - closing it kills the
@@ -410,6 +651,12 @@ int ipc_player_mode(void){
 }
 /* Player generation: bumps on each /ui reattach (player restart). The v2.40 work-mode one-shot uses this
  * to re-arm after a restart (send the init once per generation). */
+void ipc_screen_snapshot(int *on, unsigned *scr_seq, unsigned *poweroff_seq, unsigned *generation){
+    pthread_mutex_lock(&g_recov_mu);
+    if(on) *on=g_scr_on; if(scr_seq) *scr_seq=g_scr_seq; if(poweroff_seq) *poweroff_seq=g_aa03_seq;
+    if(generation) *generation=g_generation;
+    pthread_mutex_unlock(&g_recov_mu);
+}
 unsigned ipc_generation(void){
     pthread_mutex_lock(&g_recov_mu); unsigned r=g_generation; pthread_mutex_unlock(&g_recov_mu);
     return r;
@@ -424,6 +671,26 @@ int ipc_tip_event(unsigned *seq){
 }
 void ipc_get_state(track_state_t*out){
     pthread_mutex_lock(&g_mu); *out=g_state; pthread_mutex_unlock(&g_mu);
+}
+void ipc_get_title_event(ipc_title_event *out){
+    pthread_mutex_lock(&g_mu);
+    out->state=g_state; strcpy(out->player_title,g_stock_title); out->evidence_revision=g_title_revision;
+    pthread_mutex_unlock(&g_mu);
+}
+int ipc_publish_title(ipc_title_event *event, const char *title, int freeze){
+    pthread_mutex_lock(&g_mu);
+    int accepted=g_state.player_confirmed && g_state.playback_token==event->state.playback_token &&
+        g_title_revision==event->evidence_revision;
+    if(accepted){
+        /* Change presentation only: retain newer position, volume and metadata. */
+        snprintf(g_state.title,sizeof g_state.title,"%s",freeze ? title : g_stock_title);
+        g_title_frozen=freeze; g_title_stock=!freeze; g_state.title_ready=1; g_state.seq++;
+    } else {
+        event->state=g_state; strcpy(event->player_title,g_stock_title);
+        event->evidence_revision=g_title_revision;
+    }
+    pthread_mutex_unlock(&g_mu);
+    return accepted;
 }
 /* Seed the track fields at startup (from the DB resume state) so the UI shows
  * the current song before the player sends its first a2 frame.  Guarded: a real
@@ -441,6 +708,7 @@ void ipc_seed_state(const track_state_t *s){
         g_state.state       = s->state;
         g_state.is_favorite = s->is_favorite;
         g_state.have_track  = 1;
+        g_state.provisional = 1; g_state.player_confirmed = 0; g_state.title_ready = 0;
         g_state.seq++;
     }
     pthread_mutex_unlock(&g_mu);
@@ -495,7 +763,13 @@ static int ipc_send_internal(const char*frame, int quiet){
     return -1;
 }
 /* user-action send: a real failure raises the toast flag. */
-int ipc_send_cmd(const char*frame){ return ipc_send_internal(frame, 0); }
+static unsigned g_transport_seq; /* main-thread sends and recovery only */
+unsigned ipc_transport_seq(void){ return g_transport_seq; }
+int ipc_send_cmd(const char*frame){
+    if(!strncmp(frame,"0100",4) || !strncmp(frame,"0103",4) || !strncmp(frame,"0201",4))
+        g_transport_seq++; /* cancel recovery even if the transport send fails */
+    return ipc_send_internal(frame, 0);
+}
 /* background send (state-sync / health probe): silent, never toasts. */
 int ipc_send_probe(const char*frame){ return ipc_send_internal(frame, 1); }
 /* 1 once the /ui receive queue is open (i.e. ipc_start() succeeded). */
@@ -504,3 +778,14 @@ int ipc_is_ready(void){
 }
 /* 1 (and clears) if a command send failed since the last call - UI surfaces a toast. */
 int ipc_take_send_error(void){ int e=g_send_err; g_send_err=0; return e; }
+
+/* Separate mailbox: scanner never enters the controller or holds IPC's state lock. */
+static pthread_mutex_t g_library_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_library_epoch;
+void ipc_note_library_commit(void){
+    pthread_mutex_lock(&g_library_mu); g_library_epoch++; pthread_mutex_unlock(&g_library_mu);
+}
+uint64_t ipc_library_epoch(void){
+    pthread_mutex_lock(&g_library_mu); uint64_t epoch=g_library_epoch; pthread_mutex_unlock(&g_library_mu);
+    return epoch;
+}

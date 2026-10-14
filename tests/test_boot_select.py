@@ -12,7 +12,7 @@ without a wrapper resolve through the host PATH, and -L is a loader prefix, not 
 BusyBox is checked against the full md5 of the known V2.40 build.
 
 The probe's own supervision (deadline, kill, parent death, late results) is tested directly in
-native-ui/ipodos-native/tests/boot_probe_test.py. Not established here: physical GPIO timing, how long Vol-Up
+ui/tests/boot_probe_test.py. Not established here: physical GPIO timing, how long Vol-Up
 must be held, /usr/data mount timing on a real boot, and uninterruptible NAND stalls.
 """
 import errno
@@ -21,6 +21,7 @@ import os
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -31,16 +32,15 @@ S96 = PAYLOAD / 'S96diskos_select'
 S97 = PAYLOAD / 'S97diskos_install'
 # the stock firmware whose shell runs S96/S97: DISKOS_FW_BASE (default V2.40) and its extracted rootfs
 FW_BASE = os.environ.get('DISKOS_FW_BASE', '240')
-FW_ROOT = Path(os.environ.get('DISKOS_FW_ROOT') or os.environ.get('DISKOS_V240_ROOT')
-               or Path(__file__).resolve().parents[2] / 'scratch' / 'fixtures' / ('v' + FW_BASE))
+_fw_location = os.environ.get('DISKOS_FW_ROOT') or os.environ.get('DISKOS_V240_ROOT')
+FW_ROOT = Path(_fw_location) if _fw_location else None
 QEMU = shutil.which('qemu-mipsel-static')
 RELEASED = 0xF6EFE127     # live V2.40 read, all keys released (bit 13 high)
 HELD = 0xF6EFC127         # the same with bit 13 low = Vol-Up held
 FW_BUSYBOX_MD5 = {'209': 'e6b2bb328e1c08238878991c0aae062d', '228': 'c1af60e81cea22b040b957c00404de9e',
                   '240': '5d8a5e60ee7d40002fe70f43228596cb', '257': '8651f07f6387df9f10a22a73f0f9450f'}
 FW_APPLETS = ('mkdir', 'rm', 'mv', 'cat')
-_SRC = Path(__file__).resolve().parents[2] / 'native-ui' / 'ipodos-native' / 'tools' / 'diskos_bootprobe.c'
-PROBE_SRC = _SRC if _SRC.is_file() else Path(__file__).resolve().parents[1] / 'ui' / 'tools' / 'diskos_bootprobe.c'
+PROBE_SRC = Path(__file__).resolve().parents[1] / 'ui' / 'tools' / 'diskos_bootprobe.c'
 _HOST_PROBE = None
 
 
@@ -61,12 +61,21 @@ def _host_only_mount():
     path that exists under the prefix; the probe itself runs without -L, but keep one fixture for both)."""
     for line in Path('/proc/mounts').read_text().splitlines():
         m = line.split()[1]
-        if m != '/' and not (FW_ROOT / m.lstrip('/')).exists() and os.path.ismount(m):
-            return m
+        if m != '/' and (FW_ROOT is None or not (FW_ROOT / m.lstrip('/')).exists()) and os.path.ismount(m):
+            # Container credential mounts can share their parent's device. The real probe
+            # requires a directory whose stat device differs from its parent (or root inode).
+            try:
+                st, parent = os.stat(m), os.stat(m + '/..')
+            except OSError:
+                continue
+            if st.st_dev != parent.st_dev or st.st_ino == parent.st_ino:
+                return m
     raise RuntimeError('no host-only mountpoint found for the userdata-mounted fixture')
 
 
 def _have_fw_ash():
+    if FW_ROOT is None:
+        return False
     bb = FW_ROOT / 'bin' / 'busybox'
     return (bool(QEMU) and bb.is_file()
             and hashlib.md5(bb.read_bytes()).hexdigest() == FW_BUSYBOX_MD5.get(FW_BASE))
@@ -131,6 +140,26 @@ class _Env:
                 w = self.bin / applet
                 w.write_text(f'#!/bin/sh\nexec {QEMU} -L {FW_ROOT} {FW_ROOT}/bin/busybox {applet} "$@"\n')
                 w.chmod(0o755)
+        else:
+            # S96 uses plain mkdir, without -p. Keep the lock exclusive even on
+            # hosts whose mkdir accepts a directory created by a competing call.
+            w = self.bin / 'mkdir'
+            w.write_text(f'#!{sys.executable}\n' + '''import os
+import sys
+
+paths = sys.argv[1:]
+if not paths or any(path.startswith('-') for path in paths):
+    sys.exit(2)
+status = 0
+for path in paths:
+    try:
+        os.mkdir(path)
+    except OSError as error:
+        print(f'mkdir: {path}: {error}', file=sys.stderr)
+        status = 1
+sys.exit(status)
+''')
+            w.chmod(0o755)
         self.script = self.tmp / 'S96diskos_select'
         self.script.write_text(text)
         self.script.chmod(0o755)
@@ -317,15 +346,31 @@ class _Base:
         self.assertFalse((e.tmp / 'no-such-dir').exists())
 
 
+@unittest.skipUnless(os.name != 'nt' and os.access('/bin/sh', os.X_OK)
+                     and Path('/proc/mounts').is_file(), 'needs POSIX /bin/sh and Linux /proc')
+@unittest.skipUnless(shutil.which(os.environ.get('CC', 'cc')), 'needs a host C compiler (CC or cc)')
 class HostShellSelectTests(_Base, unittest.TestCase):
     SHELL = 'host'
 
+    def test_host_mkdir_refuses_existing_directory(self):
+        e = self.make()
+        directory = e.tmp / 'lock'
+        command = ['mkdir', str(directory)]
+        first = subprocess.run(command, env=e.env, capture_output=True, text=True)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertTrue(directory.is_dir())
+        second = subprocess.run(command, env=e.env, capture_output=True, text=True)
+        self.assertNotEqual(second.returncode, 0, 'mkdir accepted an existing directory')
 
-@unittest.skipUnless(_have_fw_ash(), 'needs qemu-mipsel-static and the selected stock rootfs with its pinned BusyBox')
+
+@unittest.skipUnless(_have_fw_ash(), 'Set DISKOS_FW_ROOT (or DISKOS_V240_ROOT) to the selected stock rootfs; needs qemu-mipsel-static and pinned BusyBox')
+@unittest.skipUnless(os.name != 'nt' and os.access('/bin/sh', os.X_OK)
+                     and Path('/proc/mounts').is_file(), 'needs POSIX /bin/sh and Linux /proc')
 class FirmwareAshSelectTests(_Base, unittest.TestCase):
     SHELL = 'ash'
 
 
+@unittest.skipUnless(os.name != 'nt' and os.access('/bin/sh', os.X_OK), 'needs POSIX /bin/sh and FIFO support')
 class InstallHookHonoursRecordTests(unittest.TestCase):
     """S97 does NAND work only on a positive "diskos" record; everything else exits without starting it."""
 

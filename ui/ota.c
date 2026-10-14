@@ -216,6 +216,9 @@ int ota_wifi_down(const ota_paths_t *p){
 }
 
 /* ---------------------------------------------------------------- small file helpers */
+/* /tmp/.diskos_run grows GOOD_* and PREV_* lines while a good build exists (S97 write_run, about 540 bytes at most);
+ * the launcher accepts up to 1023 bytes (diskos_launch.c), so the UI reads it with the same limit. */
+enum { OTA_RUN_MAX = 1024 };
 static int read_file(const char *path, char *buf, size_t n){          /* regular non-symlink file, NUL-terminated; length or -1 */
     struct stat st;
     if(lstat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0 || (size_t)st.st_size >= n) return -1;
@@ -226,6 +229,45 @@ static int read_file(const char *path, char *buf, size_t n){          /* regular
     if(r < 0) return -1;
     buf[r] = 0;
     return (int)r;
+}
+/* Decision predicate from installer/payload/S97diskos_install:318-326:
+ * [ -f marker ] && [ ! -L marker ]; value=$(head -n 1 marker); compare value.
+ * V2.57 BusyBox head stops at the first LF (or EOF); ash drops NUL bytes and
+ * strips the final LF from command substitution. Every other byte, including CR,
+ * is significant. Later lines and the total file size do not matter to boot.
+ * The single intentional divergence from boot: examine at most 64 KiB total,
+ * including NULs; reaching the cap before LF/EOF returns no valid decision so
+ * a corrupt/hostile file cannot make the UI thread scan without bound. This
+ * may re-ask the user; diskOS never writes such files. Compare retained bytes
+ * without allocation; an extra/mismatched byte cannot be undone. The host
+ * parity table runs real boot expressions and marks capped cases divergent. */
+#define OTA_DECISION_READ_CAP (64 * 1024)
+static int boot_marker_matches(const char *path, const char *expected){
+    struct stat st;
+    if(lstat(path, &st) != 0 || !S_ISREG(st.st_mode)) return 0;
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if(fd < 0) return 0;
+    if(fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)){ close(fd); return 0; }
+    unsigned char buf[4096];
+    size_t examined = 0, used = 0, len = strlen(expected);
+    int match = 0;
+    while(examined < OTA_DECISION_READ_CAP){
+        size_t remaining = OTA_DECISION_READ_CAP - examined;
+        ssize_t r = read(fd, buf, remaining < sizeof buf ? remaining : sizeof buf);
+        if(r < 0 && errno == EINTR) continue;
+        /* Boot compares head's emitted output even if head reports a read error. */
+        if(r <= 0){ match = used == len; break; }
+        examined += (size_t)r;
+        for(ssize_t i = 0; i < r; i++){
+            if(buf[i] == '\n'){ match = used == len; goto done; }
+            if(buf[i] == 0) continue;
+            if(used == len || buf[i] != (unsigned char)expected[used]) goto done;
+            used++;
+        }
+    }
+done:
+    close(fd);
+    return match;
 }
 static int read_at(int dfd, const char *name, char *buf, size_t n){   /* same, relative to a directory fd (no path re-resolution) */
     int fd = openat(dfd, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
@@ -239,6 +281,7 @@ static int read_at(int dfd, const char *name, char *buf, size_t n){   /* same, r
     return (int)r;
 }
 static int all_digits(const char *s, size_t max){ size_t l = strlen(s); if(!l || l > max) return 0; for(; *s; s++) if(!isdigit((unsigned char)*s)) return 0; return 1; }
+static int hex64(const char *s){ if(strlen(s) != 64) return 0; for(int i = 0; i < 64; i++) if(!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) return 0; return 1; }
 static void rm_at(int dfd, const char *name, int depth){                /* unlinkat; recurse into real directories only (never follows links) */
     struct stat st;
     if(fstatat(dfd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) return;
@@ -417,6 +460,19 @@ static int fin(int ufd, int ifd, int rc){                                  /* fa
     return rc;
 }
 
+/* updates/rejected: the mq_ui SHA256 of each build the boot script rolled back, one per line (it keeps the last 8).
+ * Boot refuses to try those again, so staging one would only download it for nothing. */
+static int sha_rejected(int ufd, const char *sha){
+    char r[1024];
+    if(read_at(ufd, "rejected", r, sizeof r) < 0) return 0;
+    size_t n = strlen(sha);
+    for(char *s = r, *e; *s; s = *e ? e + 1 : e){
+        if(!(e = strchr(s, '\n'))) e = s + strlen(s);
+        if((size_t)(e - s) == n && memcmp(s, sha, n) == 0) return 1;
+    }
+    return 0;
+}
+
 int ota_stage(const ota_paths_t *p, const char *running, const char *tag, ota_prog_t *pg){
     char kep[16], uep[16], path[300];
     atomic_store(&pg->done, 0); atomic_store(&pg->total, 0); atomic_store(&pg->phase, 1); pg->need_free = 0; pg->version[0] = 0;
@@ -453,6 +509,8 @@ int ota_stage(const ota_paths_t *p, const char *running, const char *tag, ota_pr
         if(i == OTA_UI_IDX){
             char mt[8192 + 1], sz[16];                                         /* the manifest is downloaded but NOT trusted yet: size only bounds work */
             if(read_at(ifd, OTA_FILES[OTA_MANIFEST_IDX].local, mt, sizeof mt) < 0 || sys_kv(mt, "size", sz, sizeof sz) != 0 || !all_digits(sz, 9)) return fin(ufd, ifd, OTA_E_BAD);
+            char msha[72];                                                     /* a build rolled back here before: refuse before the big download */
+            if(sys_kv(mt, "sha256", msha, sizeof msha) == 0 && hex64(msha) && sha_rejected(ufd, msha)) return fin(ufd, ifd, OTA_E_REJECTED);
             ui_size = atoll(sz);
             if(ui_size <= 0 || ui_size > OTA_MAX_UI) return fin(ufd, ifd, OTA_E_BAD);
             int64_t need = 2 * ui_size + OTA_MARGIN;                            /* boot copies pending/mq_ui next to the live one */
@@ -534,11 +592,10 @@ int ota_pending(const ota_paths_t *p, char *ver, size_t n){
     return 1;
 }
 
-static int hex64(const char *s){ if(strlen(s) != 64) return 0; for(int i = 0; i < 64; i++) if(!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) return 0; return 1; }
 /* Trial boot = the launcher's intent (/tmp/.diskos_run) AND its statement of what it really started (/tmp/.diskos_launched)
  * both say BUILD=trial with the same 64-hex SHA256. No hashing here (cheap enough for the UI thread). */
 int ota_trial_version(const ota_paths_t *p, char *ver, size_t n){
-    char t[256], u[256], b1[16], b2[16], s1[80], s2[80];
+    char t[OTA_RUN_MAX], u[256], b1[16], b2[16], s1[80], s2[80];
     if(read_file(p->run_file, t, sizeof t) <= 0 || read_file(p->launched_file, u, sizeof u) <= 0) return 0;
     if(sys_kv(t, "BUILD", b1, sizeof b1) != 0 || strcmp(b1, "trial") != 0) return 0;
     if(sys_kv(u, "BUILD", b2, sizeof b2) != 0 || strcmp(b2, "trial") != 0) return 0;
@@ -550,11 +607,27 @@ int ota_trial_version(const ota_paths_t *p, char *ver, size_t n){
 /* the strict form: as above, and the executable that is RUNNING hashes to that SHA256 (a fallback/flashed UI never vouches
  * for a trial it did not run, even with identical-looking run files). Fills sha. */
 static int trial_is_me(const ota_paths_t *p, char sha[80]){
-    char t[256], self[65];
+    char t[OTA_RUN_MAX], self[65];
     if(!ota_trial_version(p, NULL, 0)) return 0;
     if(read_file(p->run_file, t, sizeof t) <= 0 || sys_kv(t, "SHA256", sha, 80) != 0) return 0;
     if(sha256_file(p->self_exe, self) != 0 || strcmp(self, sha) != 0) return 0;
     return 1;
+}
+/* A saved choice counts only for this running trial. Avoid hashing when neither marker matches. */
+int ota_trial_decided(const ota_paths_t *p){
+    char path[300], t[OTA_RUN_MAX], sha[80], running_sha[80], expected[sizeof "SHA256=" + 64];
+    if(!ota_trial_version(p, NULL, 0) || read_file(p->run_file, t, sizeof t) <= 0 ||
+       sys_kv(t, "SHA256", sha, sizeof sha) != 0 || !hex64(sha)) return 0;
+    int len = snprintf(expected, sizeof expected, "SHA256=%s", sha);
+    if(len < 0 || (size_t)len >= sizeof expected) return 0;
+    const char *names[] = { "healthy", "revert" };
+    for(size_t i = 0; i < sizeof names / sizeof names[0]; i++){
+        len = snprintf(path, sizeof path, "%s/%s", p->updates, names[i]);
+        if(len < 0 || (size_t)len >= sizeof path) continue;
+        if(boot_marker_matches(path, expected))
+            return trial_is_me(p, running_sha) && strcmp(running_sha, sha) == 0;
+    }
+    return 0;
 }
 int ota_pcm_running(const ota_paths_t *p){
     glob_t g; int found = 0;
@@ -611,6 +684,7 @@ const char *ota_err_text(int code){
     case OTA_E_SIG: return "Update rejected - not signed by diskOS";
     case OTA_E_OLDER: return "Update refused - older than what you have";
     case OTA_E_BAD: return "Update rejected - the download is damaged";
+    case OTA_E_REJECTED: return "Update refused - this version was rolled back on this device";
     default: return "Couldn't save the update. Try again.";
     }
 }

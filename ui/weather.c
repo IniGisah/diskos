@@ -4,6 +4,7 @@
 #include "theme.h"
 #include "theme_kit.h"
 #include "config.h"
+#include "wifi.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -40,6 +41,10 @@ static uint32_t g_last = 0;  /* tick of last fetch start           (main thread 
 static int g_wfail = 0;      /* last fetch returned no usable data (guarded) */
 static int g_wgen = 0;       /* bumps when the location changes    (main thread only) */
 static int g_wjobgen = 0;    /* g_wgen the in-flight fetch serves  (main thread only) */
+static int g_wwant = 0;      /* refresh asked, not started yet     (main thread only) */
+static int g_wjobnet = 0;    /* connectivity the in-flight fetch saw (main thread only) */
+static uint32_t g_wback = 0; /* connected retry wait, 0 = no failure yet (main thread only) */
+static int g_wskip = 0;      /* offline fetch: weather_poll publishes its failure (main thread only) */
 
 /* percent-encode into a URL-safe AND shell-safe form (only [A-Za-z0-9-_.~] + %XX),
  * so g_loc can never break out of the single-quoted wget command. */
@@ -62,11 +67,11 @@ static void *weather_thread(void *arg)
     int fail = 1;    /* result of this fetch, published under the lock at the end */
     char result[160] = {0};   /* built here; copied into g_wbuf UNDER the lock at publish (no torn reads) */
     char line[256] = {0};
-    char cmd[320];   /* fits "wget ... 'http://wttr.in/<g_loc≤141>?format=...' ..." */
+    char cmd[320];   /* fits "wget ... 'https://wttr.in/<g_loc<=141>?format=...' ..." */
     if (g_loc[0])
-        snprintf(cmd, sizeof cmd, "wget -qO- -T 8 'http://wttr.in/%s?format=%%t~%%C~%%l' 2>/dev/null", g_loc);
+        snprintf(cmd, sizeof cmd, "wget -qO- -T 8 'https://wttr.in/%s?format=%%t~%%C~%%l' 2>/dev/null", g_loc);
     else
-        snprintf(cmd, sizeof cmd, "wget -qO- -T 8 'http://wttr.in/?format=%%t~%%C~%%l' 2>/dev/null");
+        snprintf(cmd, sizeof cmd, "wget -qO- -T 8 'https://wttr.in/?format=%%t~%%C~%%l' 2>/dev/null");
     FILE *f = popen(cmd, "r");
     if (f) { if (!fgets(line, sizeof line, f)) line[0] = 0; pclose(f); }
     else fprintf(stderr, "weather popen failed: %s\n", strerror(errno));
@@ -115,20 +120,26 @@ static void *weather_thread(void *arg)
     return NULL;
 }
 
-void weather_fetch_async(void)
+/* Start a fetch when connectivity is known and the slot is free. A result not yet
+ * applied keeps the slot: weather_poll applies it first, then starts. */
+static void weather_start(int net)
 {
+    if (net < 0) return;         /* not known yet: weather_poll asks again once it is */
     int go = 0;
     pthread_mutex_lock(&g_wx_mu);
-    if (!g_inflight) { g_inflight = 1; g_wready = 0; go = 1; }   /* claim slot + drop any stale unconsumed result */
+    if (!g_inflight && !g_wready) { g_inflight = 1; go = 1; }   /* claim slot */
     pthread_mutex_unlock(&g_wx_mu);
     if (!go) return;
+    g_wwant = 0;
     g_wjobgen = g_wgen;   /* this fetch serves the current location generation */
+    g_wjobnet = net;
     /* read the configured location on the main thread (cfg is not thread-safe);
      * percent-encode it so it's URL-safe AND can't break out of the single-quoted
      * wget command. Empty => wttr.in auto-geolocates by IP. Set before pthread_create,
      * whose barrier publishes it to the worker. */
     wx_urlenc(cfg_get_str("weather_loc", ""), g_loc, sizeof g_loc);
     g_last = lv_tick_get();
+    if (!net) { g_wskip = 1; return; }   /* offline: fails on the next poll as wget would, no worker */
     pthread_t th;
     if (pthread_create(&th, NULL, weather_thread, NULL) == 0) pthread_detach(th);
     else {   /* no worker -> publish a failure so the app shows "unavailable", not a stuck "Fetching..." */
@@ -138,22 +149,49 @@ void weather_fetch_async(void)
     }
 }
 
+/* Asked refresh: starts now, or stays pending until weather_poll can start it. */
+void weather_fetch_async(void)
+{
+    g_wwant = 1;
+    weather_start(wifi_connectivity());
+}
+
 /* Main-thread tick: apply a finished fetch, and retry every 20s until the first
- * success (covers WiFi coming up after boot), then refresh every 10 min. */
+ * success (connected failures back off to 10 min), then refresh every 10 min.
+ * Asked refreshes (location change, stale result, reconnect, Settings on) never
+ * wait for that backoff. Offline fetches fail without a worker. */
 static void weather_app_refresh(void);   /* fwd */
 
 /* Enable/disable passive weather (home + screensaver display + the background fetch). Called from
  * Settings. Off = no wget, no display (battery); on = force a refetch on the next poll. */
 void weather_set_enabled(int on)
 {
-    if (on) { g_last = 0; }
+    if (on) {
+        g_wwant = 1; g_wback = 0;
+        pthread_mutex_lock(&g_wx_mu);
+        home_set_weather(g_have ? g_wbuf : "Weather unavailable");
+        pthread_mutex_unlock(&g_wx_mu);
+    }
     else    { home_set_weather(""); saver_set_weather(""); }
 }
 
 void weather_poll(lv_timer_t *t)
 {
     (void)t;
-    if (!cfg_get_int("weather_on", 1)) {
+    static int known = -1;            /* last known connectivity */
+    int net = wifi_connectivity();
+    int on = cfg_get_int("weather_on", 1);
+    int reconnect = net > 0 && known == 0;
+    if (net >= 0) known = net;
+    if (on && reconnect) { g_wback = 0; g_wwant = 1; }   /* becoming connected fetches at once */
+    if (on && g_wwant) weather_start(net);   /* asked earlier, while unknown or busy */
+    if (g_wskip) {                    /* publish the offline fetch's failure as the worker would */
+        g_wskip = 0;
+        pthread_mutex_lock(&g_wx_mu);
+        g_inflight = 0; g_wfail = 1; g_wready = 1;
+        pthread_mutex_unlock(&g_wx_mu);
+    }
+    if (!on) {
         /* weather off -> no fetch, no display. But DRAIN any in-flight worker result so a fetch that
          * completes while disabled can't flash a stale reading the instant it's re-enabled. */
         pthread_mutex_lock(&g_wx_mu);
@@ -169,19 +207,25 @@ void weather_poll(lv_timer_t *t)
     if (ready) {
         if (g_wjobgen != g_wgen) {
             /* result is for a since-changed location -> discard + refetch the current one now */
-            g_last = 0;
+            g_wwant = 1;
         } else if (!fail) {        /* keep last-good on failure; only update on success.
                                     * g_wbuf safe here: worker set g_inflight=0 under the same
                                     * lock and the next fetch only starts below, after this use. */
             g_have = 1;
+            g_wback = 0;
             home_set_weather(g_wbuf);
             saver_set_weather(g_wbuf);
+        } else if (g_wjobnet > 0 && !g_have) {   /* connected failure: 20s, doubling to 10 min */
+            g_wback = g_wback ? g_wback * 2 : 20000u;
+            if (g_wback > 600000u) g_wback = 600000u;
         }
         weather_app_refresh();     /* shows data, or "Weather unavailable" if none yet */
     }
-    uint32_t now = lv_tick_get();
-    uint32_t interval = g_have ? 600000u : 20000u;
-    if (!inflight && (now - g_last) > interval) weather_fetch_async();
+    /* Keep the glance-to-editor path even before the first usable response.
+     * A stale reading still wins after a transient failure; the saver stays quiet. */
+    if (!g_have) home_set_weather("Weather unavailable");
+    uint32_t interval = g_have ? 600000u : net > 0 && g_wback ? g_wback : 20000u;
+    if (!inflight && (g_wwant || lv_tick_get() - g_last > interval)) weather_start(net);
 }
 
 /* ---- Weather app: set the location used for home + screensaver weather ---- */
@@ -213,10 +257,11 @@ void weather_app_open(void) { weather_app_refresh(); screen_show(SCR_WEATHER); }
 
 static void loc_done(const char *text)
 {
-    cfg_set_str("weather_loc", text ? text : "");
+    if(!text) return;           /* Cancel: change nothing */
+    cfg_set_str("weather_loc", text);   /* empty Save clears to Auto */
     g_wgen++;                   /* invalidate any in-flight fetch for the old location */
     g_have = 0;                 /* force a fresh fetch + show "Fetching" */
-    g_last = 0;
+    g_wback = 0;                /* the new location starts its own retry backoff */
     weather_fetch_async();
     weather_app_refresh();
 }
@@ -228,11 +273,7 @@ static void set_loc_cb(lv_event_t *e)
 static void auto_loc_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    cfg_set_str("weather_loc", "");
-    g_wgen++;                   /* invalidate any in-flight fetch for the old location */
-    g_have = 0; g_last = 0;
-    weather_fetch_async();
-    weather_app_refresh();
+    loc_done("");
 }
 
 static lv_obj_t *wapp_btn(lv_obj_t *root, int y, const char *label, lv_event_cb_t cb)

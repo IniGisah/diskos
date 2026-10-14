@@ -1,0 +1,24 @@
+--- a/squashfs-tools/endian_compat.h
++++ b/squashfs-tools/endian_compat.h
+@@ -26 +26 @@
+-#ifndef linux
++#if !defined(linux) && !defined(__CYGWIN__)
+--- a/squashfs-tools/mksquashfs.c
++++ b/squashfs-tools/mksquashfs.c
+@@ -52 +52 @@
+-#ifdef __linux__
++#if defined(__linux__) || defined(__CYGWIN__)
+@@ -5252 +5252 @@
+-#ifdef __linux__
++#if defined(__linux__) || defined(__CYGWIN__)
+@@ -5997 +5997 @@
+-#ifdef __linux__
++#if defined(__linux__) || defined(__CYGWIN__)
+--- a/squashfs-tools/unsquashfs.c
++++ b/squashfs-tools/unsquashfs.c
+@@ -35 +35 @@
+-#ifdef __linux__
++#if defined(__linux__) || defined(__CYGWIN__)
+@@ -2770 +2770 @@
+-#ifdef __linux__
++#if defined(__linux__) || defined(__CYGWIN__)

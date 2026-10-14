@@ -45,7 +45,7 @@ static lv_obj_t *g_row[N_MODES];     /* per-row button (for the selected highlig
  * 0666 payloads are the player's out modes (mq_player_257 set_out_device 0x47bf24): 6 local analog, 4 SPDIF_TX, 3
  * USB_HOST. The player's 0666 handler (0x4f1294) closes the player and re-inits the output; 0657 8 then sets
  * LOCALPLAYER again, so a 0666 not followed by 0657 8 leaves NO_WORK_MODE (dead player). Stock sends no pause;
- * diskOS does (0666 into a live stream killed mq_player, scratch/device-runs/sacd-hang-0929): a switch is pause ->
+ * diskOS does (0666 into a live stream killed mq_player): a switch is pause ->
  * PCM proven quiet for OUT_QUIET_MS -> route -> work mode -> resume. Leaving USB audio always uses the full sequence
  * (0642 0 drops the host request). USB_HOST needs the USB DAC card (else the player uses a silent USB_HOST_NULL
  * sink, 0x47c040), so diskOS re-checks it right before the frames and refuses instead.

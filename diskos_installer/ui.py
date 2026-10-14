@@ -9,6 +9,56 @@ import time
 _TTY = sys.stdout.isatty()
 
 
+_ASCII_SYMBOLS = {
+    "\u25b6": ">", "\u2713": "OK", "\u2717": "X",
+    "\u2588": "#", "\u00b7": ".",
+    **dict.fromkeys("\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f", "*"),
+}
+
+
+def output_text(text, encoding):
+    """Keep encodable text; validate readable fallbacks against the target codec."""
+    encoding = encoding or "ascii"
+    try:
+        text.encode(encoding)
+        return text
+    except LookupError:
+        return output_text(text, "ascii")
+    except UnicodeEncodeError:
+        def fallback(char):
+            try:
+                char.encode(encoding)
+                return char
+            except UnicodeEncodeError:
+                replacement = _ASCII_SYMBOLS.get(char, char.encode("ascii", "backslashreplace").decode("ascii"))
+                # Even ASCII can be absent from a codec (for example, cp864's %).
+                return replacement.encode(encoding, "replace").decode(encoding)
+        return "".join(fallback(char) for char in text)
+
+
+class SafeOutput:
+    """Text stream proxy, also used by argparse and input's prompt output."""
+
+    def __init__(self, stream):
+        self.stream = stream
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+    def write(self, text):
+        rendered = output_text(text, getattr(self.stream, "encoding", None))
+        try:
+            self.stream.write(rendered)
+        except UnicodeEncodeError as exc:
+            # Some stream adapters report a different encoding from their writer.
+            self.stream.write(output_text(text, exc.encoding))
+        return len(text)
+
+
+def _print(text, stream=None):
+    print(text, file=SafeOutput(stream if stream is not None else sys.stdout), flush=True)
+
+
 def _c(code, s):
     return f"\033[{code}m{s}\033[0m" if _TTY else s
 
@@ -26,23 +76,23 @@ def _t():
 
 
 def info(msg):
-    print(f"{dim(_t())} {msg}", flush=True)
+    _print(f"{dim(_t())} {msg}")
 
 
 def step(msg):
-    print(f"\n{cyan('▶')} {bold(msg)}", flush=True)
+    _print(f"\n{cyan(chr(0x25b6))} {bold(msg)}")
 
 
 def ok(msg):
-    print(f"{green('✓')} {msg}", flush=True)
+    _print(f"{green(chr(0x2713))} {msg}")
 
 
 def warn(msg):
-    print(f"{yellow('!')} {msg}", flush=True)
+    _print(f"{yellow('!')} {msg}")
 
 
 def err(msg):
-    print(f"{red('✗')} {msg}", file=sys.stderr, flush=True)
+    _print(f"{red(chr(0x2717))} {msg}", sys.stderr)
 
 
 def fmt_dur(secs):
@@ -73,13 +123,13 @@ class Bar:
         eta = (elapsed / frac - elapsed) if frac > 0.02 else 0
         if _TTY:
             fill = int(self.width * frac)
-            bar = "█" * fill + "·" * (self.width - fill)
+            bar = "\u2588" * fill + "\u00b7" * (self.width - fill)
             line = (f"\r  {self.label} {cyan(bar)} {int(frac*100):3d}%"
                     f"  {dim(fmt_dur(elapsed))}"
-                    + (f" · ETA {fmt_dur(eta)}" if eta > 0 else "")
+                    + (f" \u00b7 ETA {fmt_dur(eta)}" if eta > 0 else "")
                     + (f"  {note}" if note else ""))
             pad = max(0, self.last_len - len(line))
-            sys.stdout.write(line + " " * pad)
+            SafeOutput(sys.stdout).write(line + " " * pad)
             sys.stdout.flush()
             self.last_len = len(line)
         else:
@@ -87,8 +137,7 @@ class Bar:
             pct = int(frac * 100)
             if pct in (0, 25, 50, 75, 100) and pct != getattr(self, "_last_pct", -1):
                 self._last_pct = pct
-                print(f"  {self.label}: {pct}% ({fmt_dur(elapsed)}){(' ' + note) if note else ''}",
-                      flush=True)
+                _print(f"  {self.label}: {pct}% ({fmt_dur(elapsed)}){(' ' + note) if note else ''}")
 
     def done(self, note=""):
         self.update(self.total, note)
@@ -102,7 +151,7 @@ class Heartbeat:
     (the ~15 min mask-ROM flash). Shows elapsed time + a spinner and a fixed
     'do not disconnect' reminder. Call tick() periodically; stop() to finish."""
 
-    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    FRAMES = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
 
     def __init__(self, label, expect_secs=None, reminder="do NOT disconnect the device"):
         self.label = label
@@ -121,17 +170,17 @@ class Heartbeat:
             if self.expect:
                 approx = f" / ~{fmt_dur(self.expect)}"
             line = (f"\r  {cyan(spin)} {self.label}  {dim(fmt_dur(elapsed) + approx)}"
-                    f"  {yellow('· ' + self.reminder)}"
+                    f"  {yellow(chr(0xb7) + ' ' + self.reminder)}"
                     + (f"  {note}" if note else ""))
             pad = max(0, self.last_len - len(line))
-            sys.stdout.write(line + " " * pad)
+            SafeOutput(sys.stdout).write(line + " " * pad)
             sys.stdout.flush()
             self.last_len = len(line)
         else:
             # non-TTY: a line every ~30s so a log shows liveness without spamming
             if int(elapsed) % 30 == 0 and int(elapsed) != getattr(self, "_last_log", -1):
                 self._last_log = int(elapsed)
-                print(f"  {self.label}: {fmt_dur(elapsed)} elapsed ({self.reminder})", flush=True)
+                _print(f"  {self.label}: {fmt_dur(elapsed)} elapsed ({self.reminder})")
 
     def stop(self):
         if _TTY:
@@ -145,7 +194,8 @@ def confirm(prompt, default=False):
         return default
     d = "Y/n" if default else "y/N"
     try:
-        ans = input(f"{yellow('?')} {prompt} [{d}] ").strip().lower()
+        _print_prompt = output_text(f"{yellow('?')} {prompt} [{d}] ", getattr(sys.stdout, "encoding", None))
+        ans = input(_print_prompt).strip().lower()
     except EOFError:
         return default
     if not ans:

@@ -1,6 +1,10 @@
+<<<<<<< HEAD
 # A tour of diskOS 1.2.2
+=======
+# A tour of diskOS 1.2.1
+>>>>>>> upstream/main
 
-diskOS is a touch interface for the FiiO Snowsky Disc's 360x360 screen. It uses the player supplied by the installed stock firmware. The available player controls can differ on V2.09, V2.28, V2.40, and V2.57; a setting that cannot be applied says "Not on this firmware".
+diskOS is a touch interface for the FiiO Snowsky Disc's 360x360 screen. It uses the player supplied by the installed stock firmware. The available player controls differ on V2.09, V2.28, V2.40, and V2.57; unavailable firmware-specific controls say "Not on this firmware".
 
 [Home](../README.md) | [Install](INSTALL.md) | [Docs](README.md)
 
@@ -17,7 +21,7 @@ diskOS is a touch interface for the FiiO Snowsky Disc's 360x360 screen. It uses 
 
 ### Home
 
-Home shows the time, date, battery, current song, and a weather glance when weather is enabled. Tap Library to browse music, Search to find a song, the play button to pause or resume, or the current song to open Now Playing. Tap a populated weather glance to open the forecast. Swipe left to Apps, swipe down from the top edge for Quick Settings, or use the left-edge right swipe to go back from other screens.
+Home shows the time, date, battery, current song, and a weather glance when weather is enabled. Tap Library to browse music, Search to find a song, the play button to pause or resume, or the current song to open Now Playing. In halo, the now-playing island's border shows playback progress. Tap the weather glance, including "Weather unavailable", to open Weather. Swipe left to Apps, swipe down from the top edge for Quick Settings, or use the left-edge right swipe to go back from other screens.
 
 <table>
 <tr>
@@ -49,7 +53,7 @@ Wi-Fi, Bluetooth, EQ, Search, Rescan, and Source are the initial tiles. The othe
 
 ### Volume
 
-Press a volume key to change the level when that key action is set to Adjust Volume; the on-screen volume display appears with the new value. Drag its arc to set a level, or tap away to close it. Audio > Max Volume caps the value sent to the player. Volume key press, double press, and long press actions can be changed on V2.57.
+Press a volume key to change the level when that key action is set to Adjust Volume; the on-screen volume display appears with the new value. Drag its arc to set a level; it closes by itself shortly after the last change. Audio > Max Volume caps the value sent to the player. Volume key press, double press, and long press actions can be changed on V2.57.
 
 <table>
 <tr>
@@ -59,7 +63,13 @@ Press a volume key to change the level when that key action is set to Adjust Vol
 
 ### Screensaver and screen off
 
+<<<<<<< HEAD
 After the Screensaver delay, the screen dims to a clock view; a later Screen Off delay can turn the panel fully off. Choose Cover, Analog, Minimal, Digital, or Vinyl under Saver Style, and set either delay to Off if you do not want that stage. Touch wakes the dimmed saver, and when Touch to Wake is enabled in Display settings, tapping a dark screen wakes the device (a single press of the power button always wakes it). The saver shows the current song and optional weather where the selected style has room for them.
+=======
+After the Screensaver delay, the screen enters idle dimming; Cover and Vinyl savers open automatically only during playback. Vinyl with a cover keeps your chosen brightness. The Screen Off delay then turns the panel fully off unless set to Off. Choose Cover, Analog, Minimal, Digital, or Vinyl under Saver Style. Set Screensaver to Off to disable both automatic idle stages. Touch wakes diskOS idle dimming and Screen Off; use the power button if the stock player put the panel to sleep.
+
+Song text appears while playing and hides when paused; optional weather appears where the style has room. The smaller, raised Analog dial leaves room for song text. Vinyl hides song labels while showing a spinning cover, but keeps text when no cover is available. Titles and artists refresh between tracks from a CUE sheet or SACD ISO, even when their file path is shared.
+>>>>>>> upstream/main
 
 <table>
 <tr>
@@ -73,11 +83,11 @@ After the Screensaver delay, the screen dims to a clock view; a later Screen Off
 
 Now Playing shows the current song, elapsed and remaining time, playback controls, play mode, and a Favourites heart; most themes also show cover art and album. Tap previous, play or pause, and next for transport; tap the heart to add or remove the current music track from Favourites, and tap the mode icon to cycle Sequential, Shuffle, Repeat One, Repeat All, and Single. Drag the progress control to seek, tap visible cover art for full-screen art, and tap the moon to choose a sleep timer; a book also offers End of chapter. Swipe left across the page to the Options hub, or open its context and tuning panels with the on-screen side controls; a deliberate right swipe returns, while a short drag on the seek control stays a seek.
 
-The Display > Now Playing choice sets Cover or a spinning Vinyl image. Default and something place art inside a round seek ring; hi-fi adds an LCD-like time readout, blueprint adds cover crop marks, and stone uses a thick ring and pill-shaped play key. Bauhaus splits the art and controls with a straight seek bar, zine tapes art above a highlighter-style bar, and terminal hides art for a text readout and straight bar. Vinyl freezes when paused and spins while the screen is showing a playing track; a missing cover uses a placeholder where art is shown.
+The Display > Now Playing choice sets Cover or a spinning Vinyl image. halo and something place art inside a round seek ring; hi-fi adds an LCD-like time readout, blueprint adds cover crop marks, and stone uses a thick ring and pill-shaped play key. Bauhaus splits the art and controls with a straight seek bar, zine tapes art above a highlighter-style bar, and terminal hides art for a text readout and straight bar. Vinyl freezes when paused and spins while the screen is showing a playing track that has cover art; a missing cover uses a still placeholder where art is shown.
 
 <table>
 <tr>
-<td align="center" valign="top" width="33%"><img src="tour/now-playing.png" width="220" alt="Now Playing"><br><sub>Default cover layout</sub></td>
+<td align="center" valign="top" width="33%"><img src="tour/now-playing.png" width="220" alt="Now Playing"><br><sub>halo cover layout</sub></td>
 <td align="center" valign="top" width="33%"><img src="tour/now-playing-terminal.png" width="220" alt="Terminal Now Playing"><br><sub>Terminal's straight seek bar</sub></td>
 </tr>
 <tr>
@@ -114,7 +124,7 @@ Open Up Next from the music Options hub to see the current song, upcoming queue,
 
 ### Song Info and lyrics
 
-Song Info displays the current file's available title, artist, album, genre, format, sample rate, bit depth, bitrate, channels, duration, size, folder, and filename. Unknown technical fields are hidden instead of guessed; for a book the labels change to Author, Progress, and Total length, with Narrator when available. Scroll the page to see lower fields and use Back to return.
+Song Info displays the current file's available title, artist, album, genre, format, sample rate, bit depth, bitrate, channels, duration, size, folder, and filename. Unknown bit depth, bitrate, channel count, and size are hidden; unknown sample rate and duration show "-". For a book the labels change to Author, Progress, and Total length, with Narrated by when available. Scroll the page to see lower fields and use Back to return.
 
 Lyrics first looks for a local .lrc beside the song, then lyrics embedded in its tags; with Online Lyrics enabled it can look up missing words over Wi-Fi. Timed .lrc lines follow the track position and can be scrolled by hand; plain lyrics can be read as a scrolling page. The online switch affects diskOS's lookup only, so local or embedded words still work when it is Off. Tap Back to return to the song.
 
@@ -127,7 +137,7 @@ Lyrics first looks for a local .lrc beside the song, then lyrics embedded in its
 
 ### Equalizer
 
-The Equalizer row offers Off, Jazz, Rock, R&B, Hip-Hop, Pop, Dance, Classical, Retro, Sibilance 1 and 2, and USER1 through USER10. Custom EQ shows ten fixed bands from 32 Hz to 16 kHz plus a master level; choose a USER slot, scroll sideways to reach more bands, and drag its sliders within -12 to +12 dB. On firmware where the stock curve can be written, changes save to that slot and are sent to the player; the audible result of presets still needs device confirmation. On V2.57 the Custom EQ editor is view-only, so do not expect slider changes to apply there.
+The Equalizer row offers Off, Jazz, Rock, R&B, Hip-Hop, Pop, Dance, Classical, Retro, Sibilance 1 and 2, and USER1 through USER10. Custom EQ shows ten fixed bands from 32 Hz to 16 kHz plus a master level; choose a USER slot, scroll sideways to reach more bands, and drag its sliders within -12 to +12 dB. On firmware where the stock curve can be written, changes save to that slot and are sent to the player. On V2.57 the Custom EQ editor is view-only: sliders are dimmed, and tapping a band explains "Not on this firmware".
 
 <table>
 <tr>
@@ -142,6 +152,8 @@ The Equalizer row offers Off, Jazz, Rock, R&B, Hip-Hop, Pop, Dance, Classical, R
 Library opens Songs, Albums, Artists, Genres, Playlists, Favourites, Folders, Books, and History. History contains Most Played and Recently Played. Tap a category and then an item to open its next level; tap a song to play it, or use Play and Shuffle at the top of a song list. Hold an album, artist, or genre row to play its songs, and use the Add to Playlist row inside an album, artist, or genre song list to add that displayed group. Long lists use high-performance virtualized row recycling for immediate, stutter-free scrolling across thousands of tracks. Drag along the outer edge to scroll a long list, or tap the A-Z control and a letter to jump; the left-edge right swipe remains Back.
 
 Songs is the complete indexed music list. Artists and Genres open a list of their albums plus All Songs, while Albums opens an album's cover and tracks. Album View can switch the Albums list to Cover Flow: flick or drag the covers, use the rim to move through them, tap the centered album to open its tracks, or hold it to play the album. An A-Z letter popup displays while deliberately dragging the scrollbar thumb (suppressed during normal album swipes to avoid visual clutter). A cover wall can show placeholders until artwork has been cached; playing a track with art can fill that cache.
+
+Missing or blank artist tags appear together under "Unknown artist"; open or play that group to find its songs. Returning from Now Playing to the top-level Songs, Albums, Artists, or Genres lists no longer reloads them.
 
 <table>
 <tr>
@@ -202,13 +214,13 @@ Library > Books lists indexed .m4b audiobooks separately from music, with author
 
 ### Browse Files
 
-Library > Folders opens the microSD card as folders and files. Tap a folder to descend, the header Back control to ascend, or a supported file to request playback. Folders support both **Play All** and **Shuffle Play** directly scoped to the current folder, as well as an A-Z "Jump to" fast-scroll index. A .cue sheet and an indexed SACD .iso can open their track rows through the library. A file must already be in the library database: an unindexed selection reports "Not in library".
+Library > Folders opens the microSD card as folders and files. Tap a folder to descend, the header Back control to ascend, or a supported file to request playback. Folders support both **Play All** and **Shuffle Play** directly scoped to the current folder queue, as well as an A-Z "Jump to" fast-scroll index. Tapping a .cue sheet or an indexed SACD .iso starts its indexed tracks in track order. A file must already be in the library database: an unindexed selection reports "Not in library".
 
 ## Make it yours
 
 ### Settings
 
-Settings groups the controls into Playback, Audio, Display, Network, and System. Tap a group, scroll its rows, and tap a row to cycle a choice, open its detail, or run the named action; sliders can be dragged. Read-only rows show information without changing it. Values in the tables below are the first-run diskOS defaults; existing stock player values can still matter until you choose an Audio setting that says System default.
+Settings groups the controls into Playback, Audio, Display, Network, and System. Tap a group, scroll its rows, and tap a row to cycle a choice, open its detail, or run the named action; sliders can be dragged. Read-only rows show information without changing it. The tables show diskOS's default values. Artists, Play Through Folders, Automatic Time, Charging Limit, Screen Rotation, and volume-key actions initially follow the saved stock-player values. Play Mode, Resume Playback, Gapless, Max Volume, and Balance keep the player's existing state at startup until a diskOS choice is saved.
 
 <table>
 <tr>
@@ -273,7 +285,7 @@ Display controls the look of the interface and its idle behavior. Tap choices to
 | Row | Action and default |
 |---|---|
 | Brightness | 16 by default; drag from 4 to 40. Outdoor Mode holds full brightness. |
-| Theme; Appearance | Default theme and Dark by default; select any of eight themes and Dark or Light. |
+| Theme; Appearance | halo theme and Dark by default; select any of eight themes and Dark or Light. |
 | Font Size | Medium by default; Small and Large affect list and body text, not clocks and titles. |
 | Screen Rotation | Normal by default; 90, 180, or 270 degrees with a keep or revert prompt on V2.57. |
 | Outdoor Mode | Off by default; light screens and full brightness. |
@@ -287,14 +299,11 @@ Display controls the look of the interface and its idle behavior. Tap choices to
 | Screensaver; Saver Style; Screen Off | 1 min, Cover, and 2 min by default; choose Off, 30 sec, 1 min, 2 min, or 5 min for each delay. |
 | Touch to Wake | Off by default; when enabled, tapping a dark screen wakes the device. When disabled, the touch controller enters deep sleep for maximum standby battery life. |
 | 24-Hour Time; Animations | Both On by default; change clock format or screen transitions. |
-| Disc Colour | Black by default; choose Turquoise or Pink for the startup Disc drawing. |
-| Weather on Home | On by default; Off hides the glance and skips periodic background fetches, but the current build still starts one fetch at UI startup. |
+| Weather on Home | On by default; Off hides passive weather and skips startup and periodic background fetches. |
 | Back-swipe | 60 pixels by default; drag from 30 to 120 pixels to change the needed travel. |
 
 <table>
 <tr>
-<td align="center" valign="top" width="33%"><img src="tour/settings-display.png" width="220" alt="Display settings"><br><sub>Display rows</sub></td>
-<td align="center" valign="top" width="33%"><img src="tour/theme-picker.png" width="220" alt="Theme picker"><br><sub>Theme choices</sub></td>
 <td align="center" valign="top" width="33%"><img src="tour/accent-picker.png" width="220" alt="Accent picker"><br><sub>Fixed or art-derived color</sub></td>
 </tr>
 </table>
@@ -303,16 +312,18 @@ Display controls the look of the interface and its idle behavior. Tap choices to
 
 Display > Theme has eight built-in themes; each also has a Dark and Light appearance. Tap a theme name to apply it and use Appearance to switch its variant. The theme changes fonts, colors, and layouts, while the available music and settings actions stay the same. The Now Playing screenshots above show the most visible layout differences.
 
+Chinese, Japanese, and Korean names and titles use the stock font fallback across themes and text sizes. Zine and something retain their title faces for Latin-1 accented letters; zine also covers Cyrillic U+0400-U+045F in its own face. Theme case styling handles Latin-1, Latin Extended-A, and Cyrillic U+0400-U+045F letter pairs.
+
 | Theme | What changes |
 |---|---|
-| Default | Rounded controls, a cover-centered Now Playing view, and a large Home clock. |
-| something | Dot grid, dot-matrix clock and titles, fine list rules, and a red accent. |
-| hi-fi | Faceplate rows, fine rules, and a segmented clock. |
-| terminal | Monospace readouts, square controls, and a straight Now Playing seek bar. |
-| bauhaus | Bold capitals, geometric controls, and a split Now Playing layout. |
-| blueprint | Drafting lines, numbered rows, and cover crop marks. |
-| stone | Rounded pill controls and a clock split into hour and minute blocks. |
-| zine | Paper scraps, typewriter text, and cut-out clock digits. |
+| halo | Rounded controls, a cover-centered Now Playing view, a large Home clock, and Home border progress. |
+| something | Dot-matrix clock and titles, blinking colon, dot arrows, and a dotted progress ring. |
+| hi-fi | Faceplate rows with amber press lights, a segmented clock, and bezel-tick progress. |
+| terminal | Monospace readouts, blinking header cursor, aligned playlist durations, a highlighted Now Playing label in Up Next, and a straight seek bar. |
+| bauhaus | Bold capitals, geometric row bullets with press feedback, artwork in the left half of Now Playing, and a separate queue-position line. |
+| blueprint | Figure numbers, row crosshairs, dimension marks, and cover crop marks. |
+| stone | Uneven pebble controls, a split clock, and a fading progress arc. |
+| zine | Taped headers, pressed-row underlines, typewriter text, and cut-out clock digits. |
 
 <table>
 <tr>
@@ -341,13 +352,15 @@ Network opens radio controls and Bluetooth codec selection. Tap a radio row, swi
 
 ### Wi-Fi and Bluetooth
 
-On Wi-Fi, use the switch to enable the radio, tap Rescan to refresh the list, tap a network to connect, and enter a password when asked. Tap a connected or saved network for its information and Forget action. Bluetooth offers its own switch and Rescan; tap a found device to pair or connect, and open a connected device's details to Disconnect or Forget it. Bluetooth output is beta, and the selected codec depends on what both the firmware and headphones support.
+On Wi-Fi, use the switch to enable the radio, tap Rescan to refresh the list, tap a network to connect, and enter a password when asked. Tap a connected or saved network for its information and Forget action. Bluetooth offers its own switch and Rescan; tap a found device to pair or connect, and open a connected device's details to Disconnect or Forget it. The selected codec depends on what both the firmware and headphones support.
+
+Wi-Fi allows up to 75 seconds for a connection. Network details refresh as it completes; IP and router values appear only when the connection is ready.
 
 ### Apps, Last.fm, and weather
 
-Swipe left from Home to Apps, then tap Last.fm, Battery, Settings, or an installed external app. **Battery** displays a 24-hour circular usage dial (`SCR_USAGE`), tracking battery %, charging status, remaining run time from recent drain, and screen-on vs. playback active segments. An external app takes over the screen and touch input while it runs; its behavior depends on that app. Last.fm setup shows a QR code for entering your own API key and secret on a phone, then a second authorization step; after connection, toggle Scrobbling or tap Disconnect. It is experimental and Off until you set it up; the setup page uses plain HTTP on your local Wi-Fi.
+Swipe left from Home to Apps, then tap Last.fm, Battery, Settings, or an installed external app. **Battery** displays a 24-hour circular usage dial (`SCR_USAGE`), tracking battery %, charging status, remaining run time from recent drain, and screen-on vs. playback active segments. An external app takes over the screen and touch input while it runs; its behavior depends on that app. Last.fm setup shows a QR code for entering your own API key and secret on a phone, then a second authorization step; after connection, toggle Scrobbling or tap Disconnect. It is Off until you set it up; the setup page uses plain HTTP on your local Wi-Fi.
 
-Tap the weather glance on Home to see the forecast when a result is available. In Weather, choose a location manually or request automatic location and refresh the display. Weather depends on Wi-Fi and the remote service; an unavailable result leaves the glance empty.
+With Weather on Home enabled, tap the glance to open Weather. "Weather unavailable" is tappable too, so you can set the location before a reading is available. In Weather, choose a location manually or request automatic location. Weather depends on Wi-Fi and the remote service.
 
 <table>
 <tr>
@@ -360,7 +373,7 @@ Tap the weather glance on Home to see the forecast when a result is available. I
 
 ### Settings: System
 
-System covers language, power, library maintenance, time, updates, recovery, and device information. Tap an action row to open it; actions such as Restart, Reset, and updates ask for confirmation where a change will be made. Some rows are available only with V2.57 or with an update key in the installed image. Read-only rows report what the player knows rather than offering a control.
+System covers language, power, library maintenance, time, updates, recovery, and device information. Tap an action row to open it; actions such as Restart, Reset, and updates ask for confirmation where a change will be made. Some rows are available only with V2.57 or with an update key in the installed image. Read-only rows show device information.
 
 | Row | Action and default |
 |---|---|
@@ -372,6 +385,7 @@ System covers language, power, library maintenance, time, updates, recovery, and
 | Vol Keys: Press | Adjust Volume by default; on V2.57 a single press can instead Switch Track. |
 | Vol Keys: Double Press | Adjust Volume by default; on V2.57 a double press can instead Switch Track. |
 | Vol Keys: Long Press | Adjust Volume by default; on V2.57 a hold can instead Switch Track. |
+| Old tags | Auto by default: guess legacy Cyrillic (CP1251) tags and CUE-sheet text. Western keeps the previous decoding; Cyrillic reads legacy text as CP1251. Use Rescan Library after changing the choice to apply it to existing songs; valid UTF-8 and UTF-16 tags are unchanged. |
 | Rescan Library | Scan the card with progress shown; tap Stop to cancel pending scan changes. |
 | Import Playlists | Import recognized .m3u and .m3u8 lists from the card. |
 | Default UI | diskOS by default; choose Stock for future normal boots. |
@@ -380,11 +394,11 @@ System covers language, power, library maintenance, time, updates, recovery, and
 | Restart | Confirm a restart; a busy card or failed flush can leave the device running with an error. |
 | Device Info | Show model, firmware, diskOS build, addresses, storage, and battery details. |
 | Update from SD Card | Find a stock-style update filename and explain the stock route; diskOS does not run it. |
-| Allow diskOS Updates | On by default in the 1.2.0 release image; Off blocks download and staging, but a release check remains possible. |
+| Allow diskOS Updates | On by default when the installed image includes an update key; Off blocks download and staging, but a release check remains possible. |
 | Update diskOS | Check for a later signed diskOS app update over Wi-Fi, then confirm download and restart. |
 | Reset diskOS Settings | Confirm reset of diskOS appearance and behavior choices; music, radios, Last.fm, EQ, and audio settings remain. |
 | Debug Mode | Off by default; enable temporary SSH over Wi-Fi with a new shown password. |
-| Temperature; About | Read battery or board temperature and the exact diskOS build identifier. |
+| Temperature; About | Read battery temperature and the exact diskOS build identifier. |
 
 <table>
 <tr>
@@ -396,35 +410,46 @@ System covers language, power, library maintenance, time, updates, recovery, and
 
 ### Updates, startup, and power
 
-Installing 1.2.0 requires a full flash; it installs the update feature, so the first update over
-Wi-Fi will be a later release. The 1.2.0 release image includes the diskOS release key by default;
-untick "Allow diskOS updates over Wi-Fi" when flashing to omit it. Update diskOS checks for a
-newer signed diskOS app bundle. It replaces only the app, not stock firmware or the whole image.
-After restarting into a trial, choose Keep or Go back; a broken update rolls back automatically.
+1.2.0 users can install the signed 1.2.1 app update over Wi-Fi from Settings > System >
+Update diskOS if updates are allowed. Fresh installs and older versions use the installer.
+The app update replaces only diskOS, not stock firmware or the whole image. It does not
+replace the boot install script. The shutdown fix and the additional boot-script update fixes
+require a full flash with the complete 1.2.1 installer; see the
+[release notes](RELEASE_NOTES_1.2.1.md).
+The release installer includes the diskOS release key by default; untick "Allow diskOS
+updates over Wi-Fi" when flashing to omit it.
+After restarting into a trial, playback can keep the update automatically. Otherwise, choose
+Keep or Go back when asked. An update that fails its startup or health checks rolls back automatically.
 Allow diskOS Updates can stop downloads on the Disc. Turning it off with a staged update offers
 Discard or Cancel. An install without a key reports that updates are unsupported.
 
-At startup, the Disc animation uses the body color selected under Display > Disc Colour. The stock player handles the physical power button: a single press blanks the display and another single press wakes it; the physical play/pause button controls playback through that player. The Volume Up and Volume Down keys adjust volume by default, or switch tracks according to the V2.57 Vol Keys settings. A tap wakes the idle saver (or the dark screen when Touch to Wake is enabled), and the separate Screensaver, Screen Off, Sleep Timer, and Idle Power-off choices control later idle behavior. For USB Storage, eject the card safely on the computer before changing modes; diskOS can refuse the switch when card ownership is uncertain.
+At startup, a light splits into two spectra across the disc, the diskOS wordmark appears
+in the hub, and the hub opens to reveal the interface. The animation lasts about 2.4 seconds
+and its glow follows the current theme's accent. The wordmark uses Archivo, matching the
+website and installer.
 
-<table>
-<tr>
-<td align="center" valign="top" width="33%"><img src="tour/startup.png" width="220" alt="Startup"><br><sub>Disc startup animation</sub></td>
-</tr>
-</table>
+The stock player handles the physical power button: one press blanks the display and another restores it. Touch wakes diskOS idle dimming or Screen Off, but a panel put to sleep by the stock player needs the power button. On V2.57, one power-button press also wakes diskOS Screen Off. Button wake restores your diskOS brightness.
+
+The physical play/pause button controls playback through the stock player. The Volume Up and Volume Down keys adjust volume by default, or switch tracks according to the V2.57 Vol Keys settings. The separate Screensaver, Screen Off, Sleep Timer, and Idle Power-off choices control later idle behavior. For USB Storage, eject the card safely on the computer before changing modes; diskOS can refuse the switch when card ownership is uncertain.
 
 ### Limits
 
-The scanner indexes common music formats and also recognizes AAC, OGG, APE, AIFF/AIF, WMA, DSF,
-DFF, DTS, external CUE sheets, and SACD ISO tracks; appearing in a list does not prove that every
-format plays on this device. Browse Files supports folder-scoped queues and folder shuffle play. V2.09
+The scanner indexes common music formats and also recognizes AAC, OGG, OPUS, APE, AIFF/AIF, WMA, DSF,
+DFF, DTS, external CUE sheets, and SACD ISO tracks; indexing a format does not ensure the stock
+player can play it. Browse Files supports folder-scoped queues and folder shuffle play. V2.09
 playlist and book playback may fail. V2.57's Custom EQ editor is view-only, although Gain is
 available; older firmware has no Bluetooth codec choice. Up Next displays upcoming queue and history,
 and network services and Bluetooth codec behavior remain experimental.
 
 When using USB Audio mode, if the external DAC is unplugged, playback automatically pauses, the player safely re-routes to a null sink, and diskOS blocks playback commands until reconnected. Once the USB DAC is plugged back in, a normal tap on Play cleanly resumes playback from the paused position.
 
-After a restart, Wi-Fi can take up to about a minute to connect; if it shows no IP, reconnect in
-Settings > Wi-Fi.
+Some mono FLAC, MP3, and Opus files can play slowed down, taking about twice as long
+in the stock player. diskOS checks briefly for a missed track advance while the screen
+is lit and checks once on wake, but advancing from one mono Opus file to another can
+still leave the previous track on screen.
+
+On V2.57, Wi-Fi can still be delayed or turned off after a restart when Bluetooth is saved on.
+If Wi-Fi is off, turn it on in Settings > Network > Wi-Fi; if it shows no IP, reconnect there.
 
 ### Safety and stock UI
 

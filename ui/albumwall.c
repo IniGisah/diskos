@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <math.h>
+#include <pthread.h>
 
 /* Album Wall: an Apple-style COVER FLOW that FLOWS. The centred album faces the viewer; the covers to
  * each side are angled (an affine squash, dimmed) with a faded reflection. A swipe slides the whole strip
@@ -60,12 +61,12 @@ static float    g_off;                /* strip offset during a step animation (0
 static int      g_animating;
 static int      g_drag_on;
 static uint32_t g_tickctr;
-static uint8_t  g_src[AW_SRC*AW_SRC*4];   /* scratch decode buffer (UI thread only) */
 
 /* a baked cover: facing sprite (front) + turned sprite (side), each cover + reflection */
 typedef struct {
     int      idx;
     int      has_cover;
+    int      asked;
     uint8_t *fbuf;                     /* AW_SRC   * AW_SPR_H * 4 ARGB */
     uint8_t *sbuf;                     /* AW_SIDE_W* AW_SPR_H * 4 ARGB */
     lv_image_dsc_t fdsc, sdsc;
@@ -130,30 +131,71 @@ static void aw_bake_side(const uint8_t *src, uint8_t *s){
     }
 }
 
-static void aw_bake(sprite_t *sp, int idx){
-    sp->idx = idx; sp->has_cover = 0;
-    if(idx >= 0 && idx < g_nalb){
-        int ids[6]; int n = mdb_album_track_ids(g_names[idx], ids, 6);
+/* Same handoff as the sharp-cover worker: private pixels, mutex, UI poll. */
+static pthread_mutex_t g_wmu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_wcv = PTHREAD_COND_INITIALIZER;
+static unsigned g_wgen, g_wac_gen;              /* g_wac_gen: artcache_gen() when the request was made */
+static int g_wstarted, g_wbusy, g_wwant, g_wready, g_widx;
+static char g_wpaths[6][512];
+static int g_wn;
+static sprite_t g_wres;
+static unsigned g_wres_gen, g_wres_ac_gen;
+
+static void aw_pixels_free(sprite_t *sp){
+    free(sp->fbuf); free(sp->sbuf); sp->fbuf = sp->sbuf = NULL;
+}
+static void aw_cancel(void){
+    pthread_mutex_lock(&g_wmu);
+    g_wgen++;
+    if(g_wwant) g_wbusy = 0;
+    g_wwant = 0;
+    aw_pixels_free(&g_wres); g_wready = 0;
+    pthread_mutex_unlock(&g_wmu);
+}
+static void *aw_worker(void *arg){
+    (void)arg;
+    for(;;){
+        char paths[6][512]; int n, idx; unsigned gen, ac_gen;
+        pthread_mutex_lock(&g_wmu);
+        while(!g_wwant) pthread_cond_wait(&g_wcv, &g_wmu);
+        memcpy(paths, g_wpaths, sizeof paths); n = g_wn; idx = g_widx; gen = g_wgen; ac_gen = g_wac_gen;
+        g_wwant = 0;
+        pthread_mutex_unlock(&g_wmu);
+        sprite_t sp = { .idx = idx, .asked = 1 };
+        uint8_t src[AW_SRC*AW_SRC*4];
         for(int i=0;i<n;i++){
-            char track[512]; track[0]=0; mdb_song_path(ids[i], track, sizeof track);
+            pthread_mutex_lock(&g_wmu);
+            int stale = gen != g_wgen;
+            pthread_mutex_unlock(&g_wmu);
+            if(stale) break;
+            if(!paths[i][0]) continue;
+            if(!sd_io_begin()) break;
             char cov[600];
-            int loaded = 0;
-            if(track[0] && sd_io_begin()){
-                loaded = artcache_cover_path(track, cov, sizeof cov)==0 && aw_read_bmp(cov, g_src)==0;
+            int loaded = artcache_cover_path(paths[i], cov, sizeof cov)==0 && aw_read_bmp(cov, src)==0;
                 sd_io_end();
+            if(!loaded) continue;
+            sp.fbuf = malloc(AW_SRC*AW_SPR_H*4); sp.sbuf = malloc(AW_SIDE_W*AW_SPR_H*4);
+            if(sp.fbuf && sp.sbuf){
+                aw_bake_front(src, sp.fbuf); aw_bake_side(src, sp.sbuf); sp.has_cover = 1;
+            }else aw_pixels_free(&sp);
+            break;
             }
-            if(loaded){
-                aw_bake_front(g_src, sp->fbuf); aw_bake_side(g_src, sp->sbuf);
-                aw_set_dsc(&sp->fdsc, sp->fbuf, AW_SRC, AW_SPR_H);
-                aw_set_dsc(&sp->sdsc, sp->sbuf, AW_SIDE_W, AW_SPR_H);
-                sp->has_cover = 1; return;
+        pthread_mutex_lock(&g_wmu);
+        g_wbusy = 0;
+        if(gen == g_wgen){ g_wres = sp; g_wres_gen = gen; g_wres_ac_gen = ac_gen; g_wready = 1; }
+        else aw_pixels_free(&sp);
+        pthread_mutex_unlock(&g_wmu);
             }
+    return NULL;
+}
+/* Detach borrowers and decoder caches before changing or freeing a slot. */
+static void aw_drop(sprite_t *sp){
+    for(int c=0;c<AW_CARDS;c++){
+        if(g_front[c] && lv_image_get_src(g_front[c]) == &sp->fdsc) lv_image_set_src(g_front[c], NULL);
+        if(g_side[c] && lv_image_get_src(g_side[c]) == &sp->sdsc) lv_image_set_src(g_side[c], NULL);
         }
-    }
-    /* MISS: point at the shared placeholder. Never leave the descriptors untouched - a reused LRU slot
-     * would otherwise still display the PREVIOUS album's baked cover. */
-    sp->fdsc = g_blank.fdsc;
-    sp->sdsc = g_blank.sdsc;
+    lv_image_cache_drop(&sp->fdsc); lv_image_cache_drop(&sp->sdsc);
+    aw_pixels_free(sp); memset(sp, 0, sizeof *sp); sp->idx = -1;
 }
 /* is this album currently on screen (a card)? Such entries must never be evicted while their image
  * widget still points at their pixel buffer, or the prefetch would swap the cover under a visible card. */
@@ -172,10 +214,8 @@ static sprite_t *aw_sprite(int idx){
         if(!lru || g_lru[i].tick < lru->tick) lru = &g_lru[i];
     }
     if(!lru) lru = &g_lru[0];                               /* unreachable: AW_LRU > visible span */
-    if(!lru->fbuf) lru->fbuf = malloc(AW_SRC*AW_SPR_H*4);
-    if(!lru->sbuf) lru->sbuf = malloc(AW_SIDE_W*AW_SPR_H*4);
-    if(!lru->fbuf || !lru->sbuf){ free(lru->fbuf); free(lru->sbuf); lru->fbuf=NULL; lru->sbuf=NULL; lru->idx=-1; return NULL; }
-    aw_bake(lru, idx); lru->tick = ++g_tickctr; return lru;
+    aw_drop(lru); lru->idx = idx; lru->tick = ++g_tickctr;
+    return lru;
 }
 
 /* ---- flow geometry ------------------------------------------------------------------------------ */
@@ -195,9 +235,9 @@ static void aw_render_card(int c){
     if(a > 2.75f){ lv_obj_add_flag(fi, LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(si, LV_OBJ_FLAG_HIDDEN); return; }
 
     int album = aw_wrap(g_cur + (c - AW_CARDS/2));
-    sprite_t *sp = aw_sprite(album); if(!sp) sp = &g_blank;
-    lv_image_set_src(fi, &sp->fdsc);
-    lv_image_set_src(si, &sp->sdsc);
+    sprite_t *sp = aw_sprite(album); if(!sp || !sp->has_cover) sp = &g_blank;
+    if(lv_image_get_src(fi) != &sp->fdsc) lv_image_set_src(fi, &sp->fdsc);
+    if(lv_image_get_src(si) != &sp->sdsc) lv_image_set_src(si, &sp->sdsc);
 
     int fade = 255;                              /* edge fade in/out */
     if(a > 2.25f){ fade = (int)((2.75f - a)/0.5f * 255); if(fade<0) fade=0; }
@@ -227,7 +267,7 @@ static void aw_labels(void){
         lv_label_set_text(g_initial, in); lv_obj_clear_flag(g_initial, LV_OBJ_FLAG_HIDDEN);
     }else lv_obj_add_flag(g_initial, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(g_name, g_names[g_cur]);
-    lv_label_set_text(g_artist, g_artists[g_cur][0]?g_artists[g_cur]:"Unknown artist");
+    lv_label_set_text(g_artist, mdb_artist_missing(g_artists[g_cur]) ? "Unknown artist" : g_artists[g_cur]);
     char cc[24]; snprintf(cc,sizeof cc,"%d / %d", g_cur+1, g_nalb); lv_label_set_text(g_counter, cc);
 }
 static void aw_render_all(void){ for(int c=0;c<AW_CARDS;c++) aw_render_card(c); }
@@ -372,7 +412,7 @@ static void aw_rebake_new_covers(void){
     for(int i=0;i<AW_LRU;i++){
         if(g_lru[i].idx>=0 && !g_lru[i].has_cover){        /* only placeholders can gain art */
             if(aw_visible(g_lru[i].idx)) vis_changed = 1;
-            g_lru[i].idx = -1;                             /* evict -> fresh bake (with cover if now cached) on next access */
+            g_lru[i].asked = 0;                             /* retry in the worker */
         }
     }
     if(vis_changed){ aw_render_all(); aw_labels(); }       /* repaint the on-screen cards + centre initial */
@@ -439,17 +479,87 @@ void albumwall_prewarm_seed(void){                          /* MAIN thread: (re)
 }
 
 static lv_timer_t *g_prefetch;
-static void aw_prefetch_cb(lv_timer_t *t){ (void)t;
-    if(screen_current()!=SCR_ALBUMWALL || g_nalb<=0) return;
-    unsigned g = artcache_gen();
-    if(g != g_last_ac_gen){ g_last_ac_gen = g; aw_rebake_new_covers(); }   /* pick up freshly-decoded covers */
-    for(int d=1; d<=AW_PREFETCH; d++) for(int s=-1;s<=1;s+=2){
-        int idx = aw_wrap(g_cur + s*d), res=0;
-        for(int i=0;i<AW_LRU;i++) if(g_lru[i].idx==idx){ res=1; break; }
-        if(!res){ aw_sprite(idx); return; }
+static int g_active;
+static int g_prefetch_cur = -1;                  /* centre whose neighbours are settled; -1 = work left */
+/* After leaving: stop the worker at once; a fling still runs to its target, so the sprites go only once the
+ * root is hidden and the motion has settled. 1 = nothing left to clean up. */
+static int aw_leave(void){
+    if(g_active){ aw_cancel(); g_active = 0; g_drag_on = 0; }
+    int held = 0;
+    for(int i=0;i<AW_LRU;i++) if(g_lru[i].idx>=0) held = 1;
+    if(!held) return 1;
+    if(!g_root || !lv_obj_has_flag(g_root, LV_OBJ_FLAG_HIDDEN) || g_animating) return 0;
+    for(int i=0;i<AW_LRU;i++) if(g_lru[i].idx>=0) aw_drop(&g_lru[i]);
+    return 1;
+}
+/* Collect a finished result, then ask for the nearest missing neighbour (one request at a time).
+ * 1 = work left: a request in flight or uncollected, or a neighbour not yet asked. */
+static int aw_prefetch_step(unsigned g){
+    pthread_mutex_lock(&g_wmu);
+    if(g_wready){
+        sprite_t sp = g_wres; unsigned gen = g_wres_gen, ac_gen = g_wres_ac_gen;
+        memset(&g_wres, 0, sizeof g_wres); g_wready = 0;
+        pthread_mutex_unlock(&g_wmu);
+        if(!sp.has_cover && ac_gen != g) sp.asked = 0;   /* a cover landed after this miss was read: retry */
+        int installed = 0;
+        if(gen == g_wgen && sd_io_allowed()) for(int i=0;i<AW_LRU;i++){
+            sprite_t *dst = &g_lru[i];
+            if(dst->idx != sp.idx) continue;
+            uint32_t tick = dst->tick; aw_drop(dst); *dst = sp; dst->tick = tick;
+            if(sp.has_cover){
+                aw_set_dsc(&dst->fdsc, dst->fbuf, AW_SRC, AW_SPR_H);
+                aw_set_dsc(&dst->sdsc, dst->sbuf, AW_SIDE_W, AW_SPR_H);
     }
+            installed = 1; break;
+        }
+        if(!installed) aw_pixels_free(&sp);
+        if(installed && sp.has_cover && aw_visible(sp.idx)){
+            aw_render_all(); if(sp.idx == g_cur) aw_labels();
+        }
+    }else pthread_mutex_unlock(&g_wmu);
+    for(int d=0;d<=AW_PREFETCH;d++) for(int side=-1;side<=1;side+=2){
+        sprite_t *sp = aw_sprite(aw_wrap(g_cur + side*d));
+        if(sp->has_cover || sp->asked) continue;
+        pthread_mutex_lock(&g_wmu);
+        if(!g_wbusy && !g_wready){
+            if(!g_wstarted){
+                pthread_t th;
+                if(pthread_create(&th, NULL, aw_worker, NULL)==0){ pthread_detach(th); g_wstarted = 1; }
+            }
+            if(g_wstarted){
+                int ids[6]; g_wn = mdb_album_track_ids(g_names[sp->idx], ids, 6);
+                for(int i=0;i<g_wn;i++){ g_wpaths[i][0]=0; mdb_song_path(ids[i], g_wpaths[i], sizeof g_wpaths[i]); }
+                g_widx = sp->idx; g_wac_gen = g; sp->asked = 1; g_wbusy = g_wwant = 1;
+                pthread_cond_signal(&g_wcv);
+            }
+        }
+        pthread_mutex_unlock(&g_wmu);
+        return 1;
+    }
+    pthread_mutex_lock(&g_wmu);
+    int pending = g_wbusy || g_wready;
+    pthread_mutex_unlock(&g_wmu);
+    return pending;
+}
+/* Runs only while there is work: albumwall_poll_sync resumes it on the lit wall when the centre or the art
+ * cache changed or work is left; it pauses itself once settled. Leaving is cleaned up by albumwall_poll_sync. */
+static void aw_prefetch_cb(lv_timer_t *t){
+    if(screen_current()!=SCR_ALBUMWALL){ if(aw_leave()) lv_timer_pause(t); return; }
+    if(g_nalb<=0){ lv_timer_pause(t); return; }
+    unsigned g = artcache_gen();
+    if(g != g_last_ac_gen){ g_last_ac_gen = g; aw_rebake_new_covers(); }
+    if(aw_prefetch_step(g)){ g_prefetch_cur = -1; return; }
+    g_prefetch_cur = g_cur;
+    lv_timer_pause(t);
 }
 
+/* Main loop, every pass: no callbacks while dark or off the wall; leaving cleans up here without the timer. */
+void albumwall_poll_sync(int lit){
+    if(!g_prefetch) return;
+    if(screen_current()!=SCR_ALBUMWALL){ aw_leave(); lv_timer_pause(g_prefetch); }
+    else if(!lit || g_nalb<=0) lv_timer_pause(g_prefetch);
+    else if(g_prefetch_cur != g_cur || g_last_ac_gen != artcache_gen()) lv_timer_resume(g_prefetch);
+}
 
 /* ---- lifecycle & fast scrolling -------------------------------------------------- */
 static char first_letter(const char *s){
@@ -531,11 +641,14 @@ static lv_obj_t *aw_img(void){ lv_obj_t *im = lv_image_create(g_root); lv_obj_ad
 void albumwall_create(lv_obj_t *root){
     g_root = root;
     if(!g_prefetch) g_prefetch = lv_timer_create(aw_prefetch_cb, 40, NULL);
+    if(g_prefetch) lv_timer_pause(g_prefetch);
     if(!g_lhint_timer) g_lhint_timer = lv_timer_create(aw_lhint_timer_cb, 150, NULL);
 }
 
 void albumwall_refresh(void){
     if(!g_root) return;
+    aw_cancel(); g_active = 1;
+    g_prefetch_cur = -1;
     if(!g_aw_inited){
         /* placeholder sprites (built once; BGRA from the theme's art-wall roles) */
         static uint8_t fb[AW_SRC*AW_SPR_H*4], sb[AW_SIDE_W*AW_SPR_H*4];
@@ -566,7 +679,7 @@ void albumwall_refresh(void){
       }
     }
     lv_anim_delete(&g_anim_tag, NULL);           /* stop any in-flight fling BEFORE lv_obj_clean frees the widgets it animates */
-    for(int i=0;i<AW_LRU;i++) g_lru[i].idx=-1;   /* album list may have changed -> reload */
+    for(int i=0;i<AW_LRU;i++) aw_drop(&g_lru[i]);   /* album list may have changed */
     g_off = 0; g_animating = 0; g_drag_on = 0;
 
     lv_obj_clean(g_root);

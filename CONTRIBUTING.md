@@ -1,27 +1,26 @@
 # Contributing to diskOS
 
-Thanks for wanting to help. diskOS touches real hardware in a way that can brick a device, so a few
-rules keep contributions safe and legally clean.
+Contributions are welcome. Follow these rules for device safety and licensing.
 
 ## Ground rules
 
-1. **Hardware-affecting changes must be tested on real hardware.** Anything that changes the image
-   builder, the boot hook, the NAND writer, the SPL, or device targeting has to be flashed and
-   booted on an actual Snowsky Disc before it is declared working. Say which firmware version and
-   which DRAM/NAND variant you tested on.
+1. **Check hardware-affecting changes on a Snowsky Disc before sharing them.** Changes to the image
+   builder, boot hook, NAND writer, SPL, or device targeting require a flash and boot on the device.
+   Include the firmware version and DRAM/NAND variant.
 2. **Never weaken the fail-closed contract.** The first-boot hook must always fall back to the stock
    UI when it cannot verify the UI against the baked manifest. The flasher must fail closed rather
    than commit an unverified or wrong-device write.
 3. **Add an error code for every new failure mode** (`E1xx` preflight, `E2xx` build, `E3xx` flash,
-   `F1xx` device-writer) and document it in `README.md`.
+   `F1xx` device-writer aborts, `F2xx` firmware-base refusals) and document it in [`docs/INSTALL.md`](docs/INSTALL.md#error-codes).
 4. **Keep the honest-limitations tone.** If something is blocked by hardware or a toolchain gap, say
-   so plainly. Do not imply a feature works when it has not been verified.
+   so plainly.
 
 ## Licensing and provenance
 
-- diskOS has two licenses by area: the on-device UI source in [`ui/`](ui/) is **GPL-3.0-or-later**;
-  the installer and build tooling (everything else) is **MIT**. By contributing you agree your
-  contribution is under the license that already governs the file(s) you change. Please sign off your
+- The diskOS UI source in [`ui/`](ui/) is **GPL-3.0-or-later**; the project's installer and build
+  tooling are **MIT**. Bundled third-party components retain their own licenses; see [`NOTICE.md`](NOTICE.md).
+  By contributing you agree your contribution is under the license that already governs the files
+  you change. Please sign off your
   commits (`git commit -s`, Developer Certificate of Origin).
 - **Do not upload FiiO firmware, stock rootfs images, or generated `diskos_*.bin` images** to issues
   or PRs - they contain FiiO's software. The installer builds images locally from a user's own
@@ -38,9 +37,8 @@ addresses, firmware zips, stock rootfs, or generated images.
 
 ## Development
 
-See [`agents/AGENTS.md`](agents/AGENTS.md) for a project brief (the hardware facts that are easy to
-get wrong, the repo layout, and the device-safety rules) - useful whether you work by hand or with
-an AI coding agent. Build the installer with `bash build/build.sh`.
+See [`agents/AGENTS.md`](agents/AGENTS.md) for hardware facts, the repo layout, and device-safety
+rules. Build the installer with `bash build/build.sh`.
 
 For iterating on the on-device UI, see [`docs/DEV_WORKFLOW.md`](docs/DEV_WORKFLOW.md) (build, deploy over
 SSH, hot-reload, and the watchdog trap to avoid) and the helper scripts in [`tools/`](tools/) for

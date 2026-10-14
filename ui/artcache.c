@@ -95,10 +95,13 @@ static int enough_free(void){
     return ((uint64_t)v.f_bavail * v.f_frsize) > MIN_FREE_BYTES;
 }
 
-static int artcache_has_leased(const char *track){
-    char fp[24]; if(fingerprint(track,fp,sizeof fp)!=0) return 0;
+static int entry_ok(const char *fp){
     char cv[600],th[600],bg[600]; cache_paths(fp,cv,th,bg,600);
     return CV_OK(cv) && TH_OK(th) && BG_OK(bg);
+}
+static int artcache_has_leased(const char *track){
+    char fp[24]; if(fingerprint(track,fp,sizeof fp)!=0) return 0;
+    return entry_ok(fp);
 }
 
 static int artcache_get_leased(const char *track, const char *cover_out, const char *thumb_out, const char *bg_out){
@@ -169,6 +172,13 @@ int artcache_has(const char *track){
     int result = artcache_has_leased(track);
     sd_io_end();
     return result;
+}
+
+int artcache_lookup(const char *track, char *key_out, int cap){
+    if(cap < 24 || !sd_io_begin()) return -1;
+    int r = fingerprint(track, key_out, cap) != 0 ? -1 : entry_ok(key_out);
+    sd_io_end();
+    return r;
 }
 
 int artcache_get(const char *track, const char *cover_out, const char *thumb_out, const char *bg_out){

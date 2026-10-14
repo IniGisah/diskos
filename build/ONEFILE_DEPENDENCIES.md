@@ -1,17 +1,16 @@
 # Dependency inventory - generated from a self-built onefile artifact
 
-> **Scope note:** this inventory describes a **self-built PyInstaller onefile**. The **published
-> diskOS release does NOT ship that onefile** - it distributes source and runs from your own Python
-> (see [`NOTICE.md`](../NOTICE.md) / [`licenses/THIRD_PARTY_BUNDLED.md`](../licenses/THIRD_PARTY_BUNDLED.md)),
-> so these bundled libraries are not redistributed by this project. This file is retained for anyone
-> who chooses to build and redistribute the onefile themselves (they take on these obligations).
+> **Scope:** this is a Linux PyInstaller onefile inventory. Linux/macOS source
+> release tarballs run with your Python and do not bundle that runtime. The
+> Windows package bundles Python and has its own inventory in
+> [`WINDOWS_FROZEN_DEPENDENCIES.md`](WINDOWS_FROZEN_DEPENDENCIES.md). See
+> [`NOTICE.md`](../NOTICE.md) and
+> [`licenses/THIRD_PARTY_BUNDLED.md`](../licenses/THIRD_PARTY_BUNDLED.md).
 
-
-This is an artifact-derived list from a PyInstaller onefile build: ~93 distinct native `.so` entries
-were bundled. Below are the license-bearing shared libraries PyInstaller pulled in transitively
-(CPython + Tkinter GUI + pycryptodome + pyusb chains), grouped by license obligation. They matter
-**only if you build and redistribute the onefile yourself**; the published source release does not
-bundle them.
+The Linux onefile inventory contains ~93 distinct native `.so` entries from
+the CPython, Tkinter, pycryptodome and pyusb dependency chains. The libraries
+below are grouped by licence obligation. Collection varies with the build
+host; inventory the extracted shared objects before redistributing a build.
 
 ## Copyleft - obligations to satisfy (priority)
 | Library | Bundled as | License | Obligation |
@@ -20,8 +19,9 @@ bundle them.
 | **FreeType** | `libfreetype.so.6` | **FTL or GPLv2 (dual)** | ship FTL text (permissive path) + attribution |
 | **libcap** | `libcap.so.2` | BSD-3 / GPLv2 (dual) | permissive path: BSD text |
 
-> NOTE: `libudev` (LGPL) is bundled only because of the **Tkinter GUI**'s X/font chain. Consider a
-> `--nowindow`/CLI-only build, or explicitly excluding `libudev`, to remove the LGPL relink burden.
+> The Tkinter X/font dependency chain brings in `libudev`. A CLI build needs a
+> modified spec that excludes `tkinter`; the current recipe includes the GUI.
+> Check the resulting dependency inventory before omitting notices or libraries.
 
 ## Permissive - attribution/notice only (ship license texts)
 | Library | Bundled as | License |
@@ -45,9 +45,8 @@ CPython (PSF), pyusb (BSD-3), pycryptodome (BSD-2 + public-domain), PyInstaller 
 
 ## If you build and redistribute the onefile yourself
 
-The published release does **not** ship the onefile, so none of the above is an obligation for it. If
-you choose to build one (`build/build.sh`) and hand it to others, **you** become the redistributor of
-everything it embeds and must satisfy those licenses - in particular the LGPL `libudev` and the
-dual-licensed FreeType pulled in by the Tkinter GUI. The simplest way to avoid that burden is a
-CLI-only build that excludes `tkinter`. To enumerate exactly what a given onefile bundles, walk the
-extracted binary's shared objects and map each back to its distribution package.
+A onefile from `build/build.sh` embeds its collected runtime. Redistributing
+it requires satisfying those licences, including LGPL libudev relink materials
+and FreeType's FTL attribution and text if using that licence option. Map each
+extracted shared object back to its distribution package to establish the
+complete notice and source obligations.

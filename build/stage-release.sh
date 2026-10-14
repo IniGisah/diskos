@@ -6,15 +6,52 @@
 # extract it, run ./install.sh once, then ./diskos-installer.
 #
 # Usage:
-#   build/stage-release.sh [TAG ...]      # default TAG: the host's (e.g. linux-x86_64)
+#   build/stage-release.sh [--artifact NAME ...] [TAG ...]
+#   Windows requires --windows-zip PATH, --windows-sha256 HASH and --windows-source-commit COMMIT
+#   from the qualification record for that exact ZIP.
+# --artifact names existing build/release files in the COMPLETE release list.
 # Needs a git checkout with the release committed (git archive of DISKOS_REF, default HEAD).
-# Build the native tools for each TAG first (Linux: build/build-*-static.sh; macOS: vendor/setup-macos.sh).
+# Linux usbboot: build/build-usbboot-pinned.sh; macOS: vendor/setup-macos.sh.
 set -euo pipefail
 cd "$(dirname "$0")/.."                        # installer/
 ROOT=$(pwd)
 REL="$ROOT/build/release"
 mkdir -p "$REL"
 
+fail() { echo "FAIL: $*" >&2; exit 1; }
+artifacts=(); tags=(); windows_zip=; windows_sha=; windows_commit=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --artifact|--windows-zip|--windows-sha256|--windows-source-commit)
+      [ "$#" -ge 2 ] || fail "missing value for $1"
+      case "$1" in
+        --artifact) artifacts+=("$2");;
+        --windows-zip) windows_zip=$2;;
+        --windows-sha256) windows_sha=$2;;
+        --windows-source-commit) windows_commit=$2;;
+      esac
+      shift 2;;
+    --*) fail "unknown option: $1";;
+    *) tags+=("$1"); shift;;
+  esac
+done
+for name in "${artifacts[@]}"; do
+  [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && "$name" != SHA256SUMS && "$name" != SHA256SUMS.new ]] || fail "bad artifact name: $name"
+  [ -f "$REL/$name" ] && [ ! -L "$REL/$name" ] || fail "missing regular artifact: $name"
+done
+for tag in "${tags[@]}"; do
+  case "$tag" in linux-x86_64|linux-arm64|macos-x86_64|macos-arm64|windows-x86_64) ;; *) fail "unsupported tag: $tag";; esac
+done
+if [[ " ${tags[*]} " == *" windows-x86_64 "* ]]; then
+  [[ "$windows_commit" =~ ^[0-9a-f]{40}$ ]] || fail "recorded qualified Windows source commit is required (full SHA)"
+  [[ "$windows_sha" =~ ^[0-9a-f]{64}$ ]] || fail "recorded qualified Windows SHA256 is required"
+  [ -f "$windows_zip" ] && [ ! -L "$windows_zip" ] || fail "qualified Windows ZIP is required"
+  windows_zip=$(realpath "$windows_zip")
+  [ "$(sha256sum "$windows_zip" | cut -d ' ' -f 1)" = "$windows_sha" ] || fail "qualified ZIP hash mismatch"
+elif [ -n "$windows_zip$windows_sha$windows_commit" ]; then
+  fail "Windows ZIP options require windows-x86_64"
+fi
+set -- "${tags[@]}"
 # default to the host platform tag if none given
 if [ "$#" -eq 0 ]; then
   _os=$(uname -s | tr '[:upper:]' '[:lower:]'); case "$_os" in darwin) _os=macos;; esac
@@ -26,8 +63,9 @@ fi
 # local files (scratch tools, unused assets, signing keys) cannot leak in. Commit what belongs in the release
 # first; set DISKOS_REF=<tag|commit> to stage something other than HEAD.
 REF=${DISKOS_REF:-HEAD}
-git -C "$ROOT" rev-parse --verify --quiet "$REF^{commit}" >/dev/null || { echo "bad ref: $REF" >&2; exit 1; }
+REV=$(git -C "$ROOT" rev-parse --verify --quiet "$REF^{commit}") || { echo "bad ref: $REF" >&2; exit 1; }
 [ "$(git -C "$ROOT" rev-parse --show-toplevel)" = "$ROOT" ] || { echo "installer/ must be the git root" >&2; exit 1; }
+[ -z "$windows_zip" ] || [ "$REV" = "$windows_commit" ] || fail "archive revision differs from qualified Windows source commit: $REV != $windows_commit"
 
 # Paths that must NEVER appear in a tarball, even if someone commits them by mistake (checked after extract).
 FORBIDDEN=(signing '*.key' '*.squashfs' '*.sqfs' 'diskos_dev*.bin' 'diskos_public*.bin' '*_recovery.bin'
@@ -44,13 +82,67 @@ MACOS_DYLIBS=(libusb-1.0.0.dylib liblzo2.2.dylib liblz4.1.10.0.dylib liblzma.5.d
 # Other files that MUST be in the archive (writer + its build inputs, launcher source, verifier support).
 REQ_ARCHIVE=(flash/my_write6_dram.bin flash/my_write6.c flash/build_nand.sh flash/dram_head.bin flash/dram_head.S flash/dram_head.ld flash/dram.ld
   flash/sha256_min.h flash/disc_spl_lpddr3.bin src/launcher/diskos_launch.c build/build-launcher.sh
-  diskos_installer/basegate.py ui/tools/diskos_artdec.c ui/tools/stb_image.h vendor/setup-macos.sh)
+  diskos_installer/basegate.py diskos_installer/assets/wordmark.png diskos_installer/assets/wordmark@2x.png
+  diskos_installer/assets/display.png diskos_installer/assets/display@1.5x.png diskos_installer/assets/display@2x.png
+  diskos_installer/assets/display.json diskos_installer/assets/disc.png diskos_installer/assets/disc@1.5x.png
+  diskos_installer/assets/disc@2x.png
+  diskos_installer/assets/LICENSE-archivo-OFL.txt diskos_installer/assets/LICENSE-michroma-OFL.txt ui/tools/diskos_artdec.c ui/tools/stb_image.h vendor/setup-macos.sh)
 
+planned=(RELEASE_NOTES.md)
+for TAG in "$@"; do planned+=("diskos-installer-$TAG.tar.gz"); done
+[ -z "$windows_zip" ] || planned+=(diskos-installer-windows-x86_64.zip)
+check_inventory() {
+python3 - "$REL" "$1" "${planned[@]}" "${artifacts[@]}" <<'PYSUM'
+import re, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+names = set(sys.argv[3:])
+entries = {p.name: p for p in root.iterdir()}
+extra = entries.keys() - names - {'SHA256SUMS'}
+if extra:
+    raise SystemExit('Unexpected release entries; pass the complete --artifact list: ' + ', '.join(sorted(extra)))
+for name, path in entries.items():
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit('Release entry is not a regular file: ' + name)
+if sys.argv[2] == 'final' and names - entries.keys():
+    raise SystemExit('Missing release artifacts: ' + ', '.join(sorted(names - entries.keys())))
+previous = root / 'SHA256SUMS'
+if previous.exists():
+    for line in previous.read_text(encoding='ascii').splitlines():
+        match = re.fullmatch(r'[0-9a-f]{64}  ([A-Za-z0-9][A-Za-z0-9._-]*)', line)
+        if not match or match[1] not in names:
+            raise SystemExit('Previous artifact omitted; pass the complete --artifact list: ' + line)
+PYSUM
+}
+check_inventory preflight
+# Refuse every requested platform's device copies before writing any artifact.
+python3 - "$ROOT" "$REV" "$@" <<'PYBLOBS'
+import subprocess
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / 'build'))
+from verify_git_blobs import BlobGuard, DEVICE
+try:
+    BlobGuard(root, sys.argv[2]).verify(
+        (root / 'vendor' / tag / name, 'flash/' + name)
+        for tag in sys.argv[3:] for name in DEVICE)
+except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+    raise SystemExit('Git blob verification failed: ' + str(exc))
+PYBLOBS
 made=()
 for TAG in "$@"; do
   echo "== staging $TAG (from $REF) =="
   miss=()
-  for f in "${REQ_VENDOR[@]}"; do [ -f "vendor/$TAG/$f" ] || miss+=("vendor/$TAG/$f"); done
+  required_vendor=("${REQ_VENDOR[@]}")
+  if [[ "$TAG" == linux-* ]]; then
+    required_vendor+=(usbboot.manifest)
+  fi
+  if [ "$TAG" = windows-x86_64 ]; then
+    required_vendor=(usbboot.exe mksquashfs.exe unsquashfs.exe bind_winusb.exe msys-2.0.dll
+      my_write6_dram.bin disc_spl_lpddr3.bin MANIFEST.txt)
+  fi
+  for f in "${required_vendor[@]}"; do [ -f "vendor/$TAG/$f" ] || miss+=("vendor/$TAG/$f"); done
   if [ "${#miss[@]}" -gt 0 ]; then
     echo "  FAIL $TAG - missing: ${miss[*]}" >&2
     echo "  (build the native tools for $TAG first; every requested platform must stage, or nothing is published)" >&2
@@ -82,7 +174,7 @@ for TAG in "$@"; do
   stage=$(mktemp -d)
   dest="$stage/diskos-installer"
   mkdir -p "$dest"
-  git -C "$ROOT" archive --format=tar "$REF" | tar -x -C "$dest"
+  git -c core.autocrlf=false -c core.eol=lf -C "$ROOT" archive --format=tar "$REV" | tar -x -C "$dest"
 
   # required files must be committed at REF (an untracked file is NOT in the archive)
   miss=()
@@ -111,7 +203,12 @@ for TAG in "$@"; do
   # only this TAG's allowlisted vendor tools; drop any other vendor content from the archive
   find "$dest/vendor" -mindepth 1 -maxdepth 1 ! -name setup-macos.sh -exec rm -rf {} +
   mkdir -p "$dest/vendor/$TAG"
-  for f in "${REQ_VENDOR[@]}"; do cp -a "vendor/$TAG/$f" "$dest/vendor/$TAG/$f"; done
+  for f in "${required_vendor[@]}"; do cp -a "vendor/$TAG/$f" "$dest/vendor/$TAG/$f"; done
+  python3 "$ROOT/build/verify_git_blobs.py" "$ROOT" "$dest" "$TAG" --ref "$REV"
+  if [[ "$TAG" == linux-* ]]; then
+    # Use the current validator, but compare inputs only with the archive export.
+    python3 "$ROOT/build/usbboot_manifest.py" check "$dest" "$dest/vendor/$TAG" "$TAG"
+  fi
   if [[ "$TAG" == macos-* ]]; then
     mkdir -p "$dest/vendor/$TAG/lib"
     while IFS= read -r -d '' f; do
@@ -150,6 +247,49 @@ for TAG in "$@"; do
     done
   fi
 
+  if [ "$TAG" = windows-x86_64 ]; then
+    python3 - "$dest" "$windows_zip" "${REQ_PAYLOAD[@]}" <<'PYWIN'
+import hashlib, re, sys, zipfile
+from pathlib import Path
+root = Path(sys.argv[1])
+vendor = root / 'vendor/windows-x86_64'
+text = (vendor / 'MANIFEST.txt').read_text(encoding='ascii')
+def records(section):
+    body = text.split(section + ':\n', 1)[1].split('\n\n', 1)[0]
+    result = {}
+    for line in body.splitlines():
+        match = re.fullmatch(r'([0-9a-f]{64}) [ *]([^\\\r\n]+)', line)
+        if not match:
+            raise ValueError('Malformed manifest record')
+        sha, name = match.groups()
+        if name.startswith('/') or ':' in name or any(p in ('', '.', '..') for p in name.split('/')) or name in result:
+            raise ValueError('Unsafe/duplicate manifest path')
+        path = root / name if section.startswith('Input') else vendor / name
+        if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != sha:
+            raise ValueError('Manifest hash mismatch: ' + name)
+        result[name] = sha
+    return result
+inputs = records('Input SHA256 (paths relative to installer)')
+outputs = records('Output SHA256')
+required = {'src/usbboot/usbboot.c', 'build/build-windows-tools.sh', 'build/build-windows-driver.sh',
+    'src/windows-driver/bind_winusb.c', 'src/windows-driver/bind_winusb.manifest',
+    'src/windows-driver/bind_winusb.rc', 'corresponding-source/msys2-squashfs.patch',
+    'corresponding-source/squashfs-tools_4.6.1.orig.tar.gz',
+    'corresponding-source/lzo2_2.10.orig.tar.gz', 'corresponding-source/libusb-1.0_1.0.27.orig.tar.bz2'}
+if not required <= inputs.keys() or set(outputs) != {'usbboot.exe', 'mksquashfs.exe', 'unsquashfs.exe', 'bind_winusb.exe', 'msys-2.0.dll'}:
+    raise ValueError('Incomplete Windows manifest inventory')
+with zipfile.ZipFile(sys.argv[2]) as package:
+    prefix = 'diskos-installer-windows-x86_64/'
+    paths = [root / n for n in inputs] + list(vendor.iterdir()) + [root / 'payload' / n for n in sys.argv[3:]]
+    for path in paths:
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink() or package.read(prefix + '_internal/' + relative) != path.read_bytes():
+            raise ValueError('Qualified ZIP differs from source/native inputs: ' + relative)
+    if package.read(prefix + 'RECOVERY.txt') != (root / 'RECOVERY.txt').read_bytes():
+        raise ValueError('Qualified recovery text differs from archived source')
+PYWIN
+  fi
+
   # forbidden-path check on the final tree
   bad=()
   for pat in "${FORBIDDEN[@]}"; do
@@ -174,8 +314,12 @@ done
 
 [ "${#made[@]}" -gt 0 ] || { echo "nothing staged." >&2; exit 1; }
 
-echo "== generating SHA256SUMS =="
-( cd "$REL" && sha256sum "${made[@]}" > SHA256SUMS ) && cat "$REL/SHA256SUMS"
+if [ -n "$windows_zip" ]; then
+  zip_name=diskos-installer-windows-x86_64.zip
+  if [ "$windows_zip" != "$REL/$zip_name" ]; then cp "$windows_zip" "$REL/$zip_name"; fi
+  [ "$(sha256sum "$REL/$zip_name" | cut -d ' ' -f 1)" = "$windows_sha" ] || fail "staged ZIP hash mismatch"
+  made+=("$zip_name")
+fi
 
 NOTES="$REL/RELEASE_NOTES.md"
 cat > "$NOTES" <<'EOF'
@@ -211,4 +355,11 @@ user on Apple Silicon (Intel is expected to work but is not confirmed); see the 
 Not affiliated with FiiO.
 EOF
 echo "  -> $NOTES"
-echo "Done. Attach $REL/* to the GitHub Release."
+made+=(RELEASE_NOTES.md)
+check_inventory final
+echo "== generating complete SHA256SUMS =="
+complete=()
+while IFS= read -r name; do complete+=("$name"); done < <(printf '%s\n' "${made[@]}" "${artifacts[@]}" | LC_ALL=C sort -u)
+( cd "$REL" && sha256sum "${complete[@]}" > SHA256SUMS.new && mv SHA256SUMS.new SHA256SUMS )
+cat "$REL/SHA256SUMS"
+echo "Done. Release artifacts are the explicit files listed in SHA256SUMS."

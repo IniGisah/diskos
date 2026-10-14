@@ -1,0 +1,3111 @@
+/*
+ * stdlib.h --
+ *
+ *	Declares facilities exported by the "stdlib" portion of the C library.
+ *	This file isn't complete in the ANSI-C sense; it only declares things
+ *	that are needed by Tcl. This file is needed even on many systems with
+ *	their own stdlib.h (e.g. SunOS) because not all stdlib.h files declare
+ *	all the procedures needed here (such as strtol/strtoul).
+ *
+ * Copyright (c) 1991 The Regents of the University of California.
+ * Copyright (c) 1994-1998 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * unistd.h --
+ *
+ *      Macros, constants and prototypes for Posix conformance.
+ *
+ * Copyright 1989 Regents of the University of California Permission to use,
+ * copy, modify, and distribute this software and its documentation for any
+ * purpose and without fee is hereby granted, provided that the above
+ * copyright notice appear in all copies. The University of California makes
+ * no representations about the suitability of this software for any purpose.
+ * It is provided "as is" without express or implied warranty.
+ */
+/*
+ * default.h --
+ *
+ *	This file defines the defaults for all options for all of
+ *	the Tk widgets.
+ *
+ * Copyright (c) 1991-1994 The Regents of the University of California.
+ * Copyright (c) 1994 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution
+ * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tk.h --
+ *
+ *	Declarations for Tk-related things that are visible outside of the Tk
+ *	module itself.
+ *
+ * Copyright (c) 1989-1994 The Regents of the University of California.
+ * Copyright (c) 1994 The Australian National University.
+ * Copyright (c) 1994-1998 Sun Microsystems, Inc.
+ * Copyright (c) 1998-2000 Ajuba Solutions.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tk3d.c --
+ *
+ *	This module provides procedures to draw borders in the
+ *	three-dimensional Motif style.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tk3d.h --
+ *
+ *	Declarations of types and functions shared by the 3d border module.
+ *
+ * Copyright (c) 1996-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkArgv.c --
+ *
+ *	This file contains a function that handles table-based argv-argc
+ *	parsing.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkArray.h --
+ *
+ * An array is a sequence of items, stored in a contiguous memory region.
+ * Random access to any item is very fast. New items can be either appended
+ * or prepended. An array may be traversed in the forward or backward direction.
+ *
+ * Copyright (c) 2018-2019 Gregor Cramer.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkAtom.c --
+ *
+ *	This file manages a cache of X Atoms in order to avoid interactions
+ *	with the X server. It's much like the Xmu routines, except it has a
+ *	cleaner interface (caller doesn't have to provide permanent storage
+ *	for atom names, for example).
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkBind.c --
+ *
+ *	This file provides functions that associate Tcl commands with X events
+ *	or sequences of X events.
+ *
+ * Copyright (c) 1989-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ * Copyright (c) 1998 Scriptics Corporation.
+ * Copyright (c) 2018-2019 Gregor Cramer.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkBitmap.c --
+ *
+ *	This file maintains a database of read-only bitmaps for the Tk
+ *	toolkit. This allows bitmaps to be shared between widgets and also
+ *	avoids interactions with the X server.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1998 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkBusy.c --
+ *
+ *	This file provides functions that implement busy for Tk.
+ *
+ * Copyright 1993-1998 Lucent Technologies, Inc.
+ *
+ *	The "busy" command was created by George Howlett. Adapted for
+ *	integration into Tk by Jos Decoster and Donal K. Fellows.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkBusy.h --
+ *
+ *	This file defines the type of the structure describing a busy window.
+ *
+ * Copyright 1993-1998 Lucent Technologies, Inc.
+ *
+ *	The "busy" command was created by George Howlett. Adapted for
+ *	integration into Tk by Jos Decoster and Donal K. Fellows.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkButton.c --
+ *
+ *	This module implements a collection of button-like widgets for the Tk
+ *	toolkit. The widgets implemented include buttons, checkbuttons,
+ *	radiobuttons, and labels.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1998 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkButton.h --
+ *
+ *	Declarations of types and functions used to implement button-like
+ *	widgets.
+ *
+ * Copyright (c) 1996-1998 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkCanvArc.c --
+ *
+ *	This file implements arc items for canvas widgets.
+ *
+ * Copyright (c) 1992-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkCanvBmap.c --
+ *
+ *	This file implements bitmap items for canvas widgets.
+ *
+ * Copyright (c) 1992-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkCanvImg.c --
+ *
+ *	This file implements image items for canvas widgets.
+ *
+ * Copyright (c) 1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkCanvLine.c --
+ *
+ *	This file implements line items for canvas widgets.
+ *
+ * Copyright (c) 1991-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ * Copyright (c) 1998-1999 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkCanvPoly.c --
+ *
+ *	This file implements polygon items for canvas widgets.
+ *
+ * Copyright (c) 1991-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ * Copyright (c) 1998-2000 Ajuba Solutions.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkCanvPs.c --
+ *
+ *	This module provides Postscript output support for canvases, including
+ *	the "postscript" widget command plus a few utility functions used for
+ *	generating Postscript.
+ *
+ * Copyright (c) 1991-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkCanvText.c --
+ *
+ *	This file implements text items for canvas widgets.
+ *
+ * Copyright (c) 1991-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkCanvUtil.c --
+ *
+ *	This file contains a collection of utility functions used by the
+ *	implementations of various canvas item types.
+ *
+ * Copyright (c) 1994 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkCanvWind.c --
+ *
+ *	This file implements window items for canvas widgets.
+ *
+ * Copyright (c) 1992-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkCanvas.c --
+ *
+ *	This module implements canvas widgets for the Tk toolkit. A canvas
+ *	displays a background and a collection of graphical objects such as
+ *	rectangles, lines, and texts.
+ *
+ * Copyright (c) 1991-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ * Copyright (c) 1998-1999 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkCanvas.h --
+ *
+ *	Declarations shared among all the files that implement canvas widgets.
+ *
+ * Copyright (c) 1991-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1995 Sun Microsystems, Inc.
+ * Copyright (c) 1998 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkClipboard.c --
+ *
+ * 	This file manages the clipboard for the Tk toolkit, maintaining a
+ * 	collection of data buffers that will be supplied on demand to
+ * 	requesting applications.
+ *
+ * Copyright (c) 1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkCmds.c --
+ *
+ *	This file contains a collection of Tk-related Tcl commands that didn't
+ *	fit in any particular file of the toolkit.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ * Copyright (c) 2000 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkColor.c --
+ *
+ *	This file maintains a database of color values for the Tk toolkit, in
+ *	order to avoid round-trips to the server to map color names to pixel
+ *	values.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkColor.h --
+ *
+ *	Declarations of data types and functions used by the Tk color module.
+ *
+ * Copyright (c) 1996-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkConfig.c --
+ *
+ *	This file contains functions that manage configuration options for
+ *	widgets and other things.
+ *
+ * Copyright (c) 1997-1998 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkConsole.c --
+ *
+ *	This file implements a Tcl console for systems that may not otherwise
+ *	have access to a console. It uses the Text widget and provides special
+ *	access via a console command.
+ *
+ * Copyright (c) 1995-1996 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkCursor.c --
+ *
+ *	This file maintains a database of read-only cursors for the Tk
+ *	toolkit. This allows cursors to be shared between widgets and also
+ *	avoids round-trips to the X server.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkDList.h --
+ *
+ * A list is headed by pointers to first and last element. The elements
+ * are doubly linked so that an arbitrary element can be removed without
+ * a need to traverse the list. New elements can be added to the list
+ * before or after an existing element or at the head/tail of the list.
+ * A list may be traversed in the forward or backward direction.
+ *
+ * Copyright (c) 2018 Gregor Cramer.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkDecls.h --
+ *
+ *	Declarations of functions in the platform independent public Tcl API.
+ *
+ * Copyright (c) 1998-1999 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution
+ * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkEntry.c --
+ *
+ *	This module implements entry and spinbox widgets for the Tk toolkit.
+ *	An entry displays a string and allows the string to be edited. A
+ *	spinbox expands on the entry by adding up/down buttons that control
+ *	the value of the entry widget.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ * Copyright (c) 2000 Ajuba Solutions.
+ * Copyright (c) 2002 ActiveState Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ *  tkEntry.h --
+ *
+ * This module defined the structures for the Entry & SpinBox widgets.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ *
+ * Copyright (c) 2002 Apple Inc.
+ */
+/*
+ * tkError.c --
+ *
+ *	This file provides a high-performance mechanism for selectively
+ *	dealing with errors that occur in talking to the X server. This is
+ *	useful, for example, when communicating with a window that may not
+ *	exist.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkEvent.c --
+ *
+ *	This file provides basic low-level facilities for managing X events in
+ *	Tk.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1995 Sun Microsystems, Inc.
+ * Copyright (c) 1998-2000 Ajuba Solutions.
+ * Copyright (c) 2004 George Peter Staplin
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkFileFilter.c --
+ *
+ *	Process the -filetypes option for the file dialogs on Windows and the
+ *	Mac.
+ *
+ * Copyright (c) 1996 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkFileFilter.h --
+ *
+ *	Declarations for the file filter processing routines needed by the
+ *	file selection dialogs.
+ *
+ * Copyright (c) 1996 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkFocus.c --
+ *
+ *	This file contains functions that manage the input focus for Tk.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkFont.c --
+ *
+ *	This file maintains a database of fonts for the Tk toolkit. It also
+ *	provides several utility functions for measuring and displaying text.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1998 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkFont.h --
+ *
+ *	Declarations for interfaces between the generic and platform-specific
+ *	parts of the font package. This information is not visible outside of
+ *	the font package.
+ *
+ * Copyright (c) 1996-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkFrame.c --
+ *
+ *	This module implements "frame", "labelframe" and "toplevel" widgets
+ *	for the Tk toolkit. Frames are windows with a background color and
+ *	possibly a 3-D effect, but not much else in the way of attributes.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkGC.c --
+ *
+ *	This file maintains a database of read-only graphics contexts for the
+ *	Tk toolkit, in order to allow GC's to be shared.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkGeometry.c --
+ *
+ *	This file contains generic Tk code for geometry management (stuff
+ *	that's used by all geometry managers).
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkGet.c --
+ *
+ *	This file contains a number of "Tk_GetXXX" procedures, which parse
+ *	text strings into useful forms for Tk. This file has the simpler
+ *	functions, like Tk_GetDirection and Tk_GetUid. The more complex
+ *	functions like Tk_GetColor are in separate files.
+ *
+ * Copyright (c) 1991-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkGrab.c --
+ *
+ *	This file provides functions that implement grabs for Tk.
+ *
+ * Copyright (c) 1992-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkGrid.c --
+ *
+ *	Grid based geometry manager.
+ *
+ * Copyright (c) 1996-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkImage.c --
+ *
+ *	This module implements the image protocol, which allows lots of
+ *	different kinds of images to be used in lots of different widgets.
+ *
+ * Copyright (c) 1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkImgBmap.c --
+ *
+ *	This procedure implements images of type "bitmap" for Tk.
+ *
+ * Copyright (c) 1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ * Copyright (c) 1999 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution
+ * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkImgGIF.c --
+ *
+ *	A photo image file handler for GIF files. Reads 87a and 89a GIF files.
+ *	At present, there only is a file write function. GIF images may be
+ *	read using the -data option of the photo image. The data may be given
+ *	as a binary string in a Tcl_Obj or by representing the data as BASE64
+ *	encoded ascii. Derived from the giftoppm code found in the pbmplus
+ *	package and tkImgFmtPPM.c in the tk4.0b2 distribution.
+ *
+ * Copyright (c) Reed Wade (wade@cs.utk.edu), University of Tennessee
+ * Copyright (c) 1995-1997 Sun Microsystems, Inc.
+ * Copyright (c) 1997 Australian National University
+ * Copyright (c) 2005-2010 Donal K. Fellows
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ *
+ * This file also contains code from the giftoppm program, which is
+ * copyrighted as follows:
+ *
+ * +--------------------------------------------------------------------+
+ * | Copyright 1990, David Koblas.					|
+ * |   Permission to use, copy, modify, and distribute this software	|
+ * |   and its documentation for any purpose and without fee is hereby	|
+ * |   granted, provided that the above copyright notice appear in all	|
+ * |   copies and that both that copyright notice and this permission	|
+ * |   notice appear in supporting documentation. This software is	|
+ * |   provided "as is" without express or implied warranty.		|
+ * +--------------------------------------------------------------------+
+ */
+/*
+ * tkImgPNG.c --
+ *
+ *	A Tk photo image file handler for PNG files.
+ *
+ * Copyright (c) 2006-2008 Muonics, Inc.
+ * Copyright (c) 2008 Donal K. Fellows
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkImgPPM.c --
+ *
+ *	A photo image file handler for PPM (Portable PixMap) files.
+ *
+ * Copyright (c) 1994 The Australian National University.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ *
+ * Author: Paul Mackerras (paulus@cs.anu.edu.au),
+ *	Department of Computer Science,
+ *	Australian National University.
+ */
+/*
+ * tkImgPhInstance.c --
+ *
+ *	Implements the rendering of images of type "photo" for Tk. Photo
+ *	images are stored in full color (32 bits per pixel including alpha
+ *	channel) and displayed using dithering if necessary.
+ *
+ * Copyright (c) 1994 The Australian National University.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ * Copyright (c) 2002-2008 Donal K. Fellows
+ * Copyright (c) 2003 ActiveState Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ *
+ * Author: Paul Mackerras (paulus@cs.anu.edu.au),
+ *	   Department of Computer Science,
+ *	   Australian National University.
+ */
+/*
+ * tkImgPhoto.c --
+ *
+ *	Implements images of type "photo" for Tk. Photo images are stored in
+ *	full color (32 bits per pixel including alpha channel) and displayed
+ *	using dithering if necessary.
+ *
+ * Copyright (c) 1994 The Australian National University.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ * Copyright (c) 2002-2003 Donal K. Fellows
+ * Copyright (c) 2003 ActiveState Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ *
+ * Author: Paul Mackerras (paulus@cs.anu.edu.au),
+ *	   Department of Computer Science,
+ *	   Australian National University.
+ */
+/*
+ * tkImgPhoto.h --
+ *
+ *	Declarations for images of type "photo" for Tk.
+ *
+ * Copyright (c) 1994 The Australian National University.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ * Copyright (c) 2002-2008 Donal K. Fellows
+ * Copyright (c) 2003 ActiveState Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ *
+ * Author: Paul Mackerras (paulus@cs.anu.edu.au),
+ *	   Department of Computer Science,
+ *	   Australian National University.
+ */
+/*
+ * tkImgUtil.c --
+ *
+ *	This file contains image related utility functions.
+ *
+ * Copyright (c) 1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkInt.h --
+ *
+ *	Declarations for things used internally by the Tk functions but not
+ *	exported outside the module.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ * Copyright (c) 1998 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkIntDecls.h --
+ *
+ *	This file contains the declarations for all unsupported
+ *	functions that are exported by the Tk library.  These
+ *	interfaces are not guaranteed to remain the same between
+ *	versions.  Use at your own risk.
+ *
+ * Copyright (c) 1998-1999 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution
+ * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkIntPlatDecls.h --
+ *
+ *	This file contains the declarations for all platform dependent
+ *	unsupported functions that are exported by the Tk library.  These
+ *	interfaces are not guaranteed to remain the same between
+ *	versions.  Use at your own risk.
+ *
+ * Copyright (c) 1998-1999 Scriptics Corporation.
+ * All rights reserved.
+ */
+/*
+ * tkIntXlibDecls.h --
+ *
+ *	This file contains the declarations for all platform dependent
+ *	unsupported functions that are exported by the Tk library.  These
+ *	interfaces are not guaranteed to remain the same between
+ *	versions.  Use at your own risk.
+ *
+ * Copyright (c) 1998-1999 Scriptics Corporation.
+ * All rights reserved.
+ */
+/*
+ * tkListbox.c --
+ *
+ *	This module implements listbox widgets for the Tk toolkit. A listbox
+ *	displays a collection of strings, one per line, and provides scrolling
+ *	and selection.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkMacWinMenu.c --
+ *
+ *	This module implements the common elements of the Mac and Windows
+ *	specific features of menus. This file is not used for UNIX.
+ *
+ * Copyright (c) 1996-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkMain.c --
+ *
+ *	This file contains a generic main program for Tk-based applications.
+ *	It can be used as-is for many applications, just by supplying a
+ *	different appInitProc function for each specific application. Or, it
+ *	can be used as a template for creating new main programs for Tk
+ *	applications.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkMenu.c --
+ *
+ * This file contains most of the code for implementing menus in Tk. It takes
+ * care of all of the generic (platform-independent) parts of menus, and is
+ * supplemented by platform-specific files. The geometry calculation and
+ * drawing code for menus is in the file tkMenuDraw.c
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1998 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkMenu.h --
+ *
+ *	Declarations shared among all of the files that implement menu
+ *	widgets.
+ *
+ * Copyright (c) 1996-1998 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkMenuDraw.c --
+ *
+ *	This module implements the platform-independent drawing and geometry
+ *	calculations of menu widgets.
+ *
+ * Copyright (c) 1996-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkMenubutton.c --
+ *
+ *	This module implements button-like widgets that are used to invoke
+ *	pull-down menus.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkMenubutton.h --
+ *
+ *	Declarations of types and functions used to implement the menubutton
+ *	widget.
+ *
+ * Copyright (c) 1996-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkMessage.c --
+ *
+ *	This module implements a message widgets for the Tk toolkit. A message
+ *	widget displays a multi-line string in a window according to a
+ *	particular aspect ratio.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ * Copyright (c) 1998-2000 Ajuba Solutions.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkObj.c --
+ *
+ *	This file contains functions that implement the common Tk object types
+ *
+ * Copyright (c) 1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkOldConfig.c --
+ *
+ *	This file contains the Tk_ConfigureWidget function. THIS FILE IS HERE
+ *	FOR BACKWARD COMPATIBILITY; THE NEW CONFIGURATION PACKAGE SHOULD BE
+ *	USED FOR NEW PROJECTS.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkOption.c --
+ *
+ *	This module contains functions to manage the option database, which
+ *	allows various strings to be associated with windows either by name or
+ *	by class or both.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkPack.c --
+ *
+ *	This file contains code to implement the "packer" geometry manager for
+ *	Tk.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkPanedWindow.c --
+ *
+ *	This module implements "paned window" widgets that are object based. A
+ *	"paned window" is a widget that manages the geometry for some number
+ *	of other widgets, placing a movable "sash" between them, which can be
+ *	used to alter the relative sizes of adjacent widgets.
+ *
+ * Copyright (c) 1997 Sun Microsystems, Inc.
+ * Copyright (c) 2000 Ajuba Solutions.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkPlace.c --
+ *
+ *	This file contains code to implement a simple geometry manager for Tk
+ *	based on absolute placement or "rubber-sheet" placement.
+ *
+ * Copyright (c) 1992-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkPlatDecls.h --
+ *
+ *	Declarations of functions in the platform-specific public Tcl API.
+ *
+ * Copyright (c) 1998-1999 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution
+ * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkPointer.c --
+ *
+ *	This file contains functions for emulating the X server pointer and
+ *	grab state machine. This file is used by the Mac and Windows platforms
+ *	to generate appropriate enter/leave events, and to update the global
+ *	grab window information.
+ *
+ * Copyright (c) 1996 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkPort.h --
+ *
+ *	This header file handles porting issues that occur because of
+ *	differences between systems.  It reads in platform specific
+ *	portability files.
+ *
+ * Copyright (c) 1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution
+ * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkRectOval.c --
+ *
+ *	This file implements rectangle and oval items for canvas widgets.
+ *
+ * Copyright (c) 1991-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkScale.c --
+ *
+ *	This module implements a scale widgets for the Tk toolkit. A scale
+ *	displays a slider that can be adjusted to change a value; it also
+ *	displays numeric labels and a textual label, if desired.
+ *
+ *	The modifications to use floating-point values are based on an
+ *	implementation by Paul Mackerras. The -variable option is due to
+ *	Henning Schulzrinne. All of these are used with permission.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ * Copyright (c) 1998-2000 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkScale.h --
+ *
+ *	Declarations of types and functions used to implement the scale
+ *	widget.
+ *
+ * Copyright (c) 1996 Sun Microsystems, Inc.
+ * Copyright (c) 1999-2000 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkScrollbar.c --
+ *
+ *	This module implements a scrollbar widgets for the Tk toolkit. A
+ *	scrollbar displays a slider and two arrows; mouse clicks on features
+ *	within the scrollbar cause scrolling commands to be invoked.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkScrollbar.h --
+ *
+ *	Declarations of types and functions used to implement the scrollbar
+ *	widget.
+ *
+ * Copyright (c) 1996 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkSelect.c --
+ *
+ *	This file manages the selection for the Tk toolkit, translating
+ *	between the standard X ICCCM conventions and Tcl commands.
+ *
+ * Copyright (c) 1990-1993 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkSelect.h --
+ *
+ *	Declarations of types shared among the files that implement selection
+ *	support.
+ *
+ * Copyright (c) 1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkStubInit.c --
+ *
+ *	This file contains the initializers for the Tk stub vectors.
+ *
+ * Copyright (c) 1998-1999 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkStyle.c --
+ *
+ *	This file implements the widget styles and themes support.
+ *
+ * Copyright (c) 1990-1993 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkText.c --
+ *
+ *	This module provides a big chunk of the implementation of multi-line
+ *	editable text widgets for Tk. Among other things, it provides the Tcl
+ *	command interfaces to text widgets. The B-tree representation of text
+ *	and its actual display are implemented elsewhere.
+ *
+ * Copyright (c) 1992-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1996 Sun Microsystems, Inc.
+ * Copyright (c) 1999 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkText.h --
+ *
+ *	Declarations shared among the files that implement text widgets.
+ *
+ * Copyright (c) 1992-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkTextBTree.c --
+ *
+ *	This file contains code that manages the B-tree representation of text
+ *	for Tk's text widget and implements character and toggle segment
+ *	types.
+ *
+ * Copyright (c) 1992-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkTextDisp.c --
+ *
+ *	This module provides facilities to display text widgets. It is the
+ *	only place where information is kept about the screen layout of text
+ *	widgets. (Well, strictly, each TkTextLine and B-tree node caches its
+ *	last observed pixel height, but that information originates here).
+ *
+ * Copyright (c) 1992-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkImage.c --
+ *
+ *	This file contains code that allows images to be nested inside text
+ *	widgets. It also implements the "image" widget command for texts.
+ *
+ * Copyright (c) 1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkTextIndex.c --
+ *
+ *	This module provides functions that manipulate indices for text
+ *	widgets.
+ *
+ * Copyright (c) 1992-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkTextMark.c --
+ *
+ *	This file contains the functions that implement marks for text
+ *	widgets.
+ *
+ * Copyright (c) 1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkTextTag.c --
+ *
+ *	This module implements the "tag" subcommand of the widget command for
+ *	text widgets, plus most of the other high-level functions related to
+ *	tags.
+ *
+ * Copyright (c) 1992-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkTextWind.c --
+ *
+ *	This file contains code that allows arbitrary windows to be nested
+ *	inside text widgets. It also implements the "window" widget command
+ *	for texts.
+ *
+ * Copyright (c) 1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkTrig.c --
+ *
+ *	This file contains a collection of trigonometry utility routines that
+ *	are used by Tk and in particular by the canvas code. It also has
+ *	miscellaneous geometry functions used by canvases.
+ *
+ * Copyright (c) 1992-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkUndo.c --
+ *
+ *	This module provides the implementation of an undo stack.
+ *
+ * Copyright (c) 2002 Ludwig Callewaert.
+ * Copyright (c) 2003-2004 Vincent Darley.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkUndo.h --
+ *
+ *	Declarations shared among the files that implement an undo stack.
+ *
+ * Copyright (c) 2002 Ludwig Callewaert.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkUtil.c --
+ *
+ *	This file contains miscellaneous utility functions that are used by
+ *	the rest of Tk, such as a function for drawing a focus highlight.
+ *
+ * Copyright (c) 1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkVisual.c --
+ *
+ *	This file contains library procedures for allocating and freeing
+ *	visuals and colormaps. This code is based on a prototype
+ *	implementation by Paul Mackerras.
+ *
+ * Copyright (c) 1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWindow.c --
+ *
+ *	This file provides basic window-manipulation functions, which are
+ *	equivalent to functions in Xlib (and even invoke them) but also
+ *	maintain the local Tk_Window structure.
+ *
+ * Copyright (c) 1989-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * Copyright 2004, Joe English.
+ *
+ * Usage:
+ * 	TtkBlinkCursor(corePtr), usually called in a widget's Init hook,
+ * 	arranges to periodically toggle the corePtr->flags CURSOR_ON bit
+ * 	on and off (and schedule a redisplay) whenever the widget has focus.
+ *
+ * 	Note: Widgets may have additional logic to decide whether
+ * 	to display the cursor or not (e.g., readonly or disabled states);
+ * 	TtkBlinkCursor() does not account for this.
+ *
+ * TODO:
+ * 	Add script-level access to configure application-wide blink rate.
+ */
+/*
+ * Copyright (c) 2003, Joe English
+ *
+ * label, button, checkbutton, radiobutton, and menubutton widgets.
+ */
+/*
+ *      Theme engine resource cache.
+ *
+ * Copyright (c) 2004, Joe English
+ *
+ * The problem:
+ *
+ * Tk maintains reference counts for fonts, colors, and images,
+ * and deallocates them when the reference count goes to zero.
+ * With the theme engine, resources are allocated right before
+ * drawing an element and released immediately after.
+ * This causes a severe performance penalty, and on PseudoColor
+ * visuals it causes colormap cycling as colormap entries are
+ * released and reused.
+ *
+ * Solution: Acquire fonts, colors, and objects from a
+ * resource cache instead of directly from Tk; the cache
+ * holds a semipermanent reference to the resource to keep
+ * it from being deallocated.
+ *
+ * The plumbing and control flow here is quite contorted;
+ * it would be better to address this problem in the core instead.
+ *
+ * @@@ BUGS/TODO: Need distinct caches for each combination
+ * of display, visual, and colormap.
+ *
+ * @@@ Colormap flashing on PseudoColor visuals is still possible,
+ * but this will be a transient effect.
+ */
+/*
+ * Copyright (C) 2004 Joe English
+ *
+ * "clam" theme; inspired by the XFCE family of Gnome themes.
+ */
+/*
+ * Copyright (c) 2004, Joe English
+ *
+ * "classic" theme; implements the classic Motif-like Tk look.
+ *
+ */
+/*
+ * Copyright (c) 2003, Joe English
+ *
+ * Tk alternate theme, intended to match the MSUE and Gtk's (old) default theme
+ */
+/*
+ * Copyright (c) 2003 Joe English
+ *
+ * Default implementation for themed elements.
+ *
+ */
+/*
+ * DERIVED FROM: tk/generic/tkEntry.c r1.35.
+ *
+ * Copyright (c) 1990-1994 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ * Copyright (c) 2000 Ajuba Solutions.
+ * Copyright (c) 2002 ActiveState Corporation.
+ * Copyright (c) 2004 Joe English
+ */
+/*
+ * Copyright (c) 2004, Joe English
+ *
+ * ttk::frame and ttk::labelframe widgets.
+ */
+/*
+ *	Image specifications and image element factory.
+ *
+ * Copyright (C) 2004 Pat Thoyts <patthoyts@users.sf.net>
+ * Copyright (C) 2004 Joe English
+ *
+ * An imageSpec is a multi-element list; the first element
+ * is the name of the default image to use, the remainder of the
+ * list is a sequence of statespec/imagename options as per
+ * [style map].
+ */
+/*
+ * Copyright (c) 2003, Joe English
+ *
+ * Ttk package: initialization routine and miscellaneous utilities.
+ */
+/*
+ * ttkLayout.c --
+ *
+ * Generic layout processing.
+ *
+ * Copyright (c) 2003 Joe English.  Freely redistributable.
+ */
+/*
+ * Copyright 2005, Joe English.  Freely redistributable.
+ *
+ * Support routines for geometry managers.
+ */
+/*
+ * Copyright (c) 2005, Joe English.  Freely redistributable.
+ *
+ * Geometry manager utilities.
+ */
+/*
+ * Copyright (c) 2004, Joe English
+ */
+/*
+ * Copyright (c) 2005, Joe English.  Freely redistributable.
+ *
+ * ttk::panedwindow widget implementation.
+ *
+ * TODO: track active/pressed sash.
+ */
+/*
+ * Copyright (c) Joe English, Pat Thoyts, Michael Kirkham
+ *
+ * ttk::progressbar widget.
+ */
+/*
+ * Copyright (C) 2004 Pat Thoyts <patthoyts@users.sourceforge.net>
+ *
+ * ttk::scale widget.
+ */
+/*
+ * Copyright 2004, Joe English
+ *
+ * Support routines for scrollable widgets.
+ *
+ * (This is sort of half-baked; needs some work)
+ *
+ * Scrollable interface:
+ *
+ * 	+ 'first' is controlled by [xy]view widget command
+ * 	  and other scrolling commands like 'see';
+ *      + 'total' depends on widget contents;
+ *      + 'last' depends on first, total, and widget size.
+ *
+ * Choreography (typical usage):
+ *
+ * 	1. User adjusts scrollbar, scrollbar widget calls its -command
+ * 	2. Scrollbar -command invokes the scrollee [xy]view widget method
+ * 	3. TtkScrollviewCommand calls TtkScrollTo(), which updates
+ * 	   'first' and schedules a redisplay.
+ * 	4. Once the scrollee knows 'total' and 'last' (typically in
+ * 	   the LayoutProc), call TtkScrolled(h,first,last,total) to
+ * 	   synchronize the scrollbar.
+ * 	5. The scrollee -[xy]scrollcommand is called (in an idle callback)
+ * 	6. Which calls the scrollbar 'set' method and redisplays the scrollbar.
+ *
+ * If the scrollee has internal scrolling (e.g., a 'see' method),
+ * it should TtkScrollTo() directly (step 2).
+ *
+ * If the widget value changes, it should call TtkScrolled() (step 4).
+ * (This usually happens automatically when the widget is redisplayed).
+ *
+ * If the scrollee's -[xy]scrollcommand changes, it should call
+ * TtkScrollbarUpdateRequired, which will invoke step (5) (@@@ Fix this)
+ */
+/*
+ * Copyright (c) 2003, Joe English
+ *
+ * ttk::scrollbar widget.
+ */
+/*
+ * Copyright (c) 2004, Joe English
+ *
+ * ttk::separator and ttk::sizegrip widgets.
+ */
+/* square.c - Copyright (C) 2004 Pat Thoyts <patthoyts@users.sourceforge.net>
+ *
+ * Minimal sample ttk widget.
+ */
+/*
+ * Tk widget state utilities.
+ *
+ * Copyright (c) 2003 Joe English.  Freely redistributable.
+ *
+ */
+/*
+ * Tag tables.  3/4-baked, work in progress.
+ *
+ * Copyright (C) 2005, Joe English.  Freely redistributable.
+ */
+/*
+ * ttkTheme.c --
+ *
+ *	This file implements the widget styles and themes support.
+ *
+ * Copyright (c) 2002 Frederic Bonnet
+ * Copyright (c) 2003 Joe English
+ *
+ * See the file "license.terms" for information on usage and redistribution
+ * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * Copyright (c) 2003 Joe English.  Freely redistributable.
+ *
+ * Declarations for Tk theme engine.
+ */
+/*
+ * Theme engine: private definitions.
+ *
+ * Copyright (c) 2004 Joe English.  Freely redistributable.
+ */
+/*
+ * Copyright 2003, Joe English
+ *
+ * Simplified interface to Tcl_TraceVariable.
+ *
+ * PROBLEM: Can't distinguish "variable does not exist" (which is OK)
+ * from other errors (which are not).
+ */
+/*
+ * Copyright (c) 2004, Joe English
+ *
+ * TtkTrackElementState() -- helper routine for widgets
+ * like scrollbars in which individual elements may
+ * be active or pressed instead of the widget as a whole.
+ *
+ * Usage:
+ * 	TtkTrackElementState(&recordPtr->core);
+ *
+ * Registers an event handler on the widget that tracks pointer
+ * events and updates the state of the element under the
+ * mouse cursor.
+ *
+ * The "active" element is the one under the mouse cursor,
+ * and is normally set to the ACTIVE state unless another element
+ * is currently being pressed.
+ *
+ * The active element becomes "pressed" on <ButtonPress> events,
+ * and remains "active" and "pressed" until the corresponding
+ * <ButtonRelease> event.
+ *
+ * TODO: Handle "chords" properly (e.g., <B1-ButtonPress-2>)
+ */
+/*
+ * Copyright (c) 2004, Joe English
+ *
+ * ttk::treeview widget implementation.
+ */
+/*
+ * Copyright (c) 2003, Joe English
+ *
+ * Core widget utilities.
+ */
+/*
+ * Copyright (c) 2003, Joe English
+ * Helper routines for widget implementations.
+ */
+/*
+ * tkUnixMenubu.c --
+ *
+ *	This file implements the Unix specific portion of the menubutton
+ *	widget.
+ *
+ * Copyright (c) 1996-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkUnixScale.c --
+ *
+ *	This file implements the X specific portion of the scale widget.
+ *
+ * Copyright (c) 1996 Sun Microsystems, Inc.
+ * Copyright (c) 1998-2000 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWin.h --
+ *
+ *	Declarations of public types and interfaces that are only
+ *	available under Windows.
+ *
+ * Copyright (c) 1996-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution
+ * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWin32Dll.c --
+ *
+ *	This file contains a stub dll entry point.
+ *
+ * Copyright (c) 1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWin3d.c --
+ *
+ *	This file contains the platform specific routines for drawing 3D
+ *	borders in the Windows 95 style.
+ *
+ * Copyright (c) 1996 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinButton.c --
+ *
+ *	This file implements the Windows specific portion of the button
+ *	widgets.
+ *
+ * Copyright (c) 1996-1998 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution
+ * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinClipboard.c --
+ *
+ *	This file contains functions for managing the clipboard.
+ *
+ * Copyright (c) 1995-1997 Sun Microsystems, Inc.
+ * Copyright (c) 1998-2000 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinColor.c --
+ *
+ *	Functions to map color names to system color values.
+ *
+ * Copyright (c) 1995 Sun Microsystems, Inc.
+ * Copyright (c) 1994 Software Research Associates, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinConfig.c --
+ *
+ *	This module implements the Windows system defaults for the
+ *	configuration package.
+ *
+ * Copyright (c) 1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinCursor.c --
+ *
+ *	This file contains Win32 specific cursor related routines.
+ *
+ * Copyright (c) 1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinDefault.h --
+ *
+ *	This file defines the defaults for all options for all of
+ *	the Tk widgets.
+ *
+ * Copyright (c) 1995-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution
+ * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinDialog.c --
+ *
+ *	Contains the Windows implementation of the common dialog boxes.
+ *
+ * Copyright (c) 1996-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinDraw.c --
+ *
+ *	This file contains the Xlib emulation functions pertaining to actually
+ *	drawing objects on a window.
+ *
+ * Copyright (c) 1995 Sun Microsystems, Inc.
+ * Copyright (c) 1994 Software Research Associates, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinEmbed.c --
+ *
+ *	This file contains platform specific procedures for Windows platforms
+ *	to provide basic operations needed for application embedding (where
+ *	one application can use as its main window an internal window from
+ *	another application).
+ *
+ * Copyright (c) 1996-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinFont.c --
+ *
+ *	Contains the Windows implementation of the platform-independent font
+ *	package interface.
+ *
+ * Copyright (c) 1994 Software Research Associates, Inc.
+ * Copyright (c) 1995-1997 Sun Microsystems, Inc.
+ * Copyright (c) 1998-1999 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinImage.c --
+ *
+ *	This file contains routines for manipulation full-color images.
+ *
+ * Copyright (c) 1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution
+ * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ *----------------------------------------------------------------------
+ *
+ * XGetImageZPixmap --
+ *
+ *	This function copies data from a pixmap or window into an XImage. This
+ *	handles the ZPixmap case only.
+ *
+ * Results:
+ *	Returns a newly allocated image containing the data from the given
+ *	rectangle of the given drawable.
+ *
+ * Side effects:
+ *	None.
+ *
+ * This procedure is adapted from the XGetImage implementation in TkNT. That
+ * code is Copyright (c) 1994 Software Research Associates, Inc.
+ *
+ *----------------------------------------------------------------------
+ */
+/*
+ * tkWinInit.c --
+ *
+ *	This file contains Windows-specific interpreter initialization
+ *	functions.
+ *
+ * Copyright (c) 1995-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution
+ * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinInt.h --
+ *
+ *	This file contains declarations that are shared among the
+ *	Windows-specific parts of Tk, but aren't used by the rest of Tk.
+ *
+ * Copyright (c) 1995-1997 Sun Microsystems, Inc.
+ * Copyright (c) 1998-2000 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinKey.c --
+ *
+ *	This file contains X emulation routines for keyboard related
+ *	functions.
+ *
+ * Copyright (c) 1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinMenu.c --
+ *
+ *	This module implements the Windows platform-specific features of
+ *	menus.
+ *
+ * Copyright (c) 1996-1998 Sun Microsystems, Inc.
+ * Copyright (c) 1998-1999 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinPixmap.c --
+ *
+ *	This file contains the Xlib emulation functions pertaining to creating
+ *	and destroying pixmaps.
+ *
+ * Copyright (c) 1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinPointer.c --
+ *
+ *	Windows specific mouse tracking code.
+ *
+ * Copyright (c) 1995-1997 Sun Microsystems, Inc.
+ * Copyright (c) 1998-1999 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinPort.h --
+ *
+ *	This header file handles porting issues that occur because of
+ *	differences between Windows and Unix. It should be the only
+ *	file that contains #ifdefs to handle different flavors of OS.
+ *
+ * Copyright (c) 1995-1996 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution
+ * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinRegion.c --
+ *
+ *	Tk Region emulation code.
+ *
+ * Copyright (c) 1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinScrollbar.c --
+ *
+ *	This file implements the Windows specific portion of the scrollbar
+ *	widget.
+ *
+ * Copyright (c) 1996 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinSend.c --
+ *
+ *	This file provides functions that implement the "send" command,
+ *	allowing commands to be passed from interpreter to interpreter.
+ *
+ * Copyright (c) 1997 Sun Microsystems, Inc.
+ * Copyright (c) 2003 Pat Thoyts <patthoyts@users.sourceforge.net>
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinSendCom.c --
+ *
+ *	This file provides support functions that implement the Windows "send"
+ *	command using COM interfaces, allowing commands to be passed from
+ *	interpreter to interpreter. See also tkWinSend.c, where most of the
+ *	interesting functions are.
+ *
+ * We implement a COM class for use in registering Tcl interpreters with the
+ * system's Running Object Table. This class implements an IDispatch interface
+ * with the following method:
+ *	Send(String cmd) As String
+ * In other words the Send methods takes a string and evaluates this in the
+ * Tcl interpreter. The result is returned as another string.
+ *
+ * Copyright (C) 2002 Pat Thoyts <patthoyts@users.sourceforge.net>
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinSendCom.h --
+ *
+ *	This file provides procedures that implement the Windows "send"
+ *	command, allowing commands to be passed from interpreter to
+ *	interpreter.
+ *
+ * Copyright (C) 2002 Pat Thoyts <patthoyts@users.sourceforge.net>
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinWindow.c --
+ *
+ *	Xlib emulation routines for Windows related to creating, displaying
+ *	and destroying windows.
+ *
+ * Copyright (c) 1995-1997 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinWm.c --
+ *
+ *	This module takes care of the interactions between a Tk-based
+ *	application and the window manager. Among other things, it implements
+ *	the "wm" command and passes geometry information to the window
+ *	manager.
+ *
+ * Copyright (c) 1995-1997 Sun Microsystems, Inc.
+ * Copyright (c) 1998-2000 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * tkWinX.c --
+ *
+ *	This file contains Windows emulation procedures for X routines.
+ *
+ * Copyright (c) 1995-1996 Sun Microsystems, Inc.
+ * Copyright (c) 1994 Software Research Associates, Inc.
+ * Copyright (c) 1998-2000 Scriptics Corporation.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/* winTheme.c - Copyright (C) 2004 Pat Thoyts <patthoyts@users.sf.net>
+ */
+/*
+ * Tk theme engine which uses the Windows XP "Visual Styles" API
+ * Adapted from Georgios Petasis' XP theme patch.
+ *
+ * Copyright (c) 2003 Georgios Petasis, petasis@iit.demokritos.gr.
+ * Copyright (c) 2003 Joe English
+ * Copyright (c) 2003 Pat Thoyts
+ *
+ * See the file "license.terms" for information on usage and redistribution
+ * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ *
+ * See also:
+ *
+ * <URL: http://msdn.microsoft.com/library/en-us/
+ *  	shellcc/platform/commctls/userex/refentry.asp >
+ */
+/***********************************************************
+
+Copyright 1988, 1998  The Open Group
+
+Permission to use, copy, modify, distribute, and sell this software and its
+documentation for any purpose is hereby granted without fee, provided that
+the above copyright notice appear in all copies and that both that
+copyright notice and this permission notice appear in supporting
+documentation.
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+OPEN GROUP BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of The Open Group shall not be
+used in advertising or otherwise to promote the sale, use or other dealings
+in this Software without prior written authorization from The Open Group.
+
+
+Copyright 1988 by Digital Equipment Corporation, Maynard, Massachusetts.
+
+                        All Rights Reserved
+
+Permission to use, copy, modify, and distribute this software and its
+documentation for any purpose and without fee is hereby granted,
+provided that the above copyright notice appear in all copies and that
+both that copyright notice and this permission notice appear in
+supporting documentation, and that the name of Digital not be
+used in advertising or publicity pertaining to distribution of the
+software without specific, written prior permission.
+
+DIGITAL DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING
+ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO EVENT SHALL
+DIGITAL BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR
+ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS
+SOFTWARE.
+
+******************************************************************/
+/*
+
+Copyright 1987, 1998  The Open Group
+
+Permission to use, copy, modify, distribute, and sell this software and its
+documentation for any purpose is hereby granted without fee, provided that
+the above copyright notice appear in all copies and that both that
+copyright notice and this permission notice appear in supporting
+documentation.
+
+The above copyright notice and this permission notice shall be included
+in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE OPEN GROUP BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of The Open Group shall
+not be used in advertising or otherwise to promote the sale, use or
+other dealings in this Software without prior written authorization
+from The Open Group.
+
+Copyright 1987 by Digital Equipment Corporation, Maynard, Massachusetts,
+
+                        All Rights Reserved
+
+Permission to use, copy, modify, and distribute this software and its
+documentation for any purpose and without fee is hereby granted,
+provided that the above copyright notice appear in all copies and that
+both that copyright notice and this permission notice appear in
+supporting documentation, and that the names of Hewlett Packard
+or Digital not be
+used in advertising or publicity pertaining to distribution of the
+software without specific, written prior permission.
+
+DIGITAL DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING
+ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO EVENT SHALL
+DIGITAL BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR
+ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS
+SOFTWARE.
+
+HEWLETT-PACKARD MAKES NO WARRANTY OF ANY KIND WITH REGARD
+TO THIS SOFTWARE, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE.  Hewlett-Packard shall not be liable for errors
+contained herein or direct, indirect, special, incidental or
+consequential damages in connection with the furnishing,
+performance, or use of this material.
+
+*/
+/*
+ * Copyright (c) 1991, Oracle and/or its affiliates.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
+ */
+/************************************************************
+
+Copyright 1991, 1998  The Open Group
+
+Permission to use, copy, modify, distribute, and sell this software and its
+documentation for any purpose is hereby granted without fee, provided that
+the above copyright notice appear in all copies and that both that
+copyright notice and this permission notice appear in supporting
+documentation.
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+OPEN GROUP BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of The Open Group shall not be
+used in advertising or otherwise to promote the sale, use or other dealings
+in this Software without prior written authorization from The Open Group.
+
+***********************************************************/
+/***********************************************************
+
+Copyright 1987, 1998  The Open Group
+
+Permission to use, copy, modify, distribute, and sell this software and its
+documentation for any purpose is hereby granted without fee, provided that
+the above copyright notice appear in all copies and that both that
+copyright notice and this permission notice appear in supporting
+documentation.
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+OPEN GROUP BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of The Open Group shall not be
+used in advertising or otherwise to promote the sale, use or other dealings
+in this Software without prior written authorization from The Open Group.
+
+
+Copyright 1987 by Digital Equipment Corporation, Maynard, Massachusetts.
+
+                        All Rights Reserved
+
+Permission to use, copy, modify, and distribute this software and its
+documentation for any purpose and without fee is hereby granted,
+provided that the above copyright notice appear in all copies and that
+both that copyright notice and this permission notice appear in
+supporting documentation, and that the name of Digital not be
+used in advertising or publicity pertaining to distribution of the
+software without specific, written prior permission.
+
+DIGITAL DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING
+ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO EVENT SHALL
+DIGITAL BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR
+ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS
+SOFTWARE.
+
+******************************************************************/
+/*
+ *
+Copyright 1989, 1991, 1998  The Open Group
+
+Permission to use, copy, modify, distribute, and sell this software and its
+documentation for any purpose is hereby granted without fee, provided that
+the above copyright notice appear in all copies and that both that
+copyright notice and this permission notice appear in supporting
+documentation.
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+OPEN GROUP BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of The Open Group shall not be
+used in advertising or otherwise to promote the sale, use or other dealings
+in this Software without prior written authorization from The Open Group.
+ *
+ */
+/*
+
+Copyright 1985, 1986, 1987, 1991, 1998  The Open Group
+
+Permission to use, copy, modify, distribute, and sell this software and its
+documentation for any purpose is hereby granted without fee, provided that
+the above copyright notice appear in all copies and that both that
+copyright notice and this permission notice appear in supporting
+documentation.
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+OPEN GROUP BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of The Open Group shall not be
+used in advertising or otherwise to promote the sale, use or other dealings
+in this Software without prior written authorization from The Open Group.
+
+*/
+/******************************************************************
+Copyright 1987 by Apollo Computer Inc., Chelmsford, Massachusetts.
+Copyright 1989 by Hewlett-Packard Company.
+
+                        All Rights Reserved
+
+Permission to use, duplicate, change, and distribute this software and
+its documentation for any purpose and without fee is granted, provided
+that the above copyright notice appear in such copy and that this
+copyright notice appear in all supporting documentation, and that the
+names of Apollo Computer Inc., the Hewlett-Packard Company, or the X
+Consortium not be used in advertising or publicity pertaining to
+distribution of the software without written prior permission.
+
+HEWLETT-PACKARD MAKES NO WARRANTY OF ANY KIND WITH REGARD
+TO THIS SOFTWARE, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE.  Hewlett-Packard shall not be liable for errors
+contained herein or direct, indirect, special, incidental or
+consequential damages in connection with the furnishing,
+performance, or use of this material.
+
+This software is not subject to any license of the American
+Telephone and Telegraph Company or of the Regents of the
+University of California.
+******************************************************************/
+/*
+
+Copyright 1987, 1998  The Open Group
+
+Permission to use, copy, modify, distribute, and sell this software and its
+documentation for any purpose is hereby granted without fee, provided that
+the above copyright notice appear in all copies and that both that
+copyright notice and this permission notice appear in supporting
+documentation.
+
+The above copyright notice and this permission notice shall be included
+in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE OPEN GROUP BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of The Open Group shall
+not be used in advertising or otherwise to promote the sale, use or
+other dealings in this Software without prior written authorization
+from The Open Group.
+
+*/
+/***********************************************************
+Copyright 1987, 1994, 1998  The Open Group
+
+Permission to use, copy, modify, distribute, and sell this software and its
+documentation for any purpose is hereby granted without fee, provided that
+the above copyright notice appear in all copies and that both that
+copyright notice and this permission notice appear in supporting
+documentation.
+
+The above copyright notice and this permission notice shall be included
+in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE OPEN GROUP BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of The Open Group shall
+not be used in advertising or otherwise to promote the sale, use or
+other dealings in this Software without prior written authorization
+from The Open Group.
+
+
+Copyright 1987 by Digital Equipment Corporation, Maynard, Massachusetts
+
+                        All Rights Reserved
+
+Permission to use, copy, modify, and distribute this software and its
+documentation for any purpose and without fee is hereby granted,
+provided that the above copyright notice appear in all copies and that
+both that copyright notice and this permission notice appear in
+supporting documentation, and that the name of Digital not be
+used in advertising or publicity pertaining to distribution of the
+software without specific, written prior permission.
+
+DIGITAL DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING
+ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO EVENT SHALL
+DIGITAL BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR
+ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS
+SOFTWARE.
+
+******************************************************************/
+/* U+00A9 COPYRIGHT SIGN */
+/* U+2117 SOUND RECORDING COPYRIGHT */
+/*
+ * xbytes.h --
+ *
+ *	Declaration of table to reverse bit order of bytes.
+ *
+ * Copyright (c) 1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * xcolors.c --
+ *
+ *	This file contains the routines used to map from X color names to RGB
+ *	and pixel values.
+ *
+ * Copyright (c) 1996 Sun Microsystems, Inc.
+ * Copyright (c) 2012 Jan Nijtmans
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * xdraw.c --
+ *
+ *	This file contains generic procedures related to X drawing primitives.
+ *
+ * Copyright (c) 1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * xgc.c --
+ *
+ *	This file contains generic routines for manipulating X graphics
+ *	contexts.
+ *
+ * Copyright (c) 1995-1996 Sun Microsystems, Inc.
+ * Copyright (c) 2002-2009 Daniel A. Steffen <das@users.sourceforge.net>
+ * Copyright 2008-2009, Apple Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * ximage.c --
+ *
+ *	X bitmap and image routines.
+ *
+ * Copyright (c) 1995 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+/*
+ * xutil.c --
+ *
+ *	This function contains generic X emulation routines.
+ *
+ * Copyright (c) 1995-1996 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution of
+ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
+ */
+# bgerror.tcl --
+#
+#	Implementation of the bgerror procedure.  It posts a dialog box with
+#	the error message and gives the user a chance to see a more detailed
+#	stack trace, and possible do something more interesting with that
+#	trace (like save it to a log).  This is adapted from work done by
+#	Donal K. Fellows.
+#
+# Copyright (c) 1998-2000 by Ajuba Solutions.
+# Copyright (c) 2007 by ActiveState Software Inc.
+# Copyright (c) 2007 Daniel A. Steffen <das@users.sourceforge.net>
+# Copyright (c) 2009 Pat Thoyts <patthoyts@users.sourceforge.net>
+
+
+# button.tcl --
+#
+# This file defines the default bindings for Tk label, button,
+# checkbutton, and radiobutton widgets and provides procedures
+# that help in implementing those bindings.
+#
+# Copyright (c) 1992-1994 The Regents of the University of California.
+# Copyright (c) 1994-1996 Sun Microsystems, Inc.
+# Copyright (c) 2002 ActiveState Corporation.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+#-------------------------------------------------------------------------
+# The code below creates the default class bindings for buttons.
+#-------------------------------------------------------------------------
+
+
+# choosedir.tcl --
+#
+#	Choose directory dialog implementation for Unix/Mac.
+#
+# Copyright (c) 1998-2000 by Scriptics Corporation.
+# All rights reserved.
+
+# Make sure the tk::dialog namespace, in which all dialogs should live, exists
+
+# clrpick.tcl --
+#
+#	Color selection dialog for platforms that do not support a
+#	standard color selection dialog.
+#
+# Copyright (c) 1996 Sun Microsystems, Inc.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+# ToDo:
+#
+#	(1): Find out how many free colors are left in the colormap and
+#	     don't allocate too many colors.
+#	(2): Implement HSV color selection.
+#
+
+# Make sure namespaces exist
+
+# comdlg.tcl --
+#
+#	Some functions needed for the common dialog boxes. Probably need to go
+#	in a different file.
+#
+# Copyright (c) 1996 Sun Microsystems, Inc.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+# tclParseConfigSpec --
+#
+#	Parses a list of "-option value" pairs. If all options and
+#	values are legal, the values are stored in
+#	$data($option). Otherwise an error message is returned. When
+#	an error happens, the data() array may have been partially
+#	modified, but all the modified members of the data(0 array are
+#	guaranteed to have valid values. This is different than
+#	Tk_ConfigureWidget() which does not modify the value of a
+#	widget record if any error occurs.
+#
+# Arguments:
+#
+# w = widget record to modify. Must be the pathname of a widget.
+#
+# specs = {
+#    {-commandlineswitch resourceName ResourceClass defaultValue verifier}
+#    {....}
+# }
+#
+# flags = a list of flags. Currently supported flags are:
+#     DONTSETDEFAULTS = skip default values setting
+#
+# argList = The list of  "-option value" pairs.
+#
+
+# console.tcl --
+#
+# This code constructs the console window for an application.  It
+# can be used by non-unix systems that do not have built-in support
+# for shells.
+#
+# Copyright (c) 1995-1997 Sun Microsystems, Inc.
+# Copyright (c) 1998-2000 Ajuba Solutions.
+# Copyright (c) 2007-2008 Daniel A. Steffen <das@users.sourceforge.net>
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+# TODO: history - remember partially written command
+
+
+# dialog.tcl --
+#
+# This file defines the procedure tk_dialog, which creates a dialog
+# box containing a bitmap, a message, and one or more buttons.
+#
+# Copyright (c) 1992-1993 The Regents of the University of California.
+# Copyright (c) 1994-1997 Sun Microsystems, Inc.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+#
+# ::tk_dialog:
+#
+# This procedure displays a dialog box, waits for a button in the dialog
+# to be invoked, then returns the index of the selected button.  If the
+# dialog somehow gets destroyed, -1 is returned.
+#
+# Arguments:
+# w -		Window to use for dialog top-level.
+# title -	Title to display in dialog's decorative frame.
+# text -	Message to display in dialog.
+# bitmap -	Bitmap to display in dialog (empty string means none).
+# default -	Index of button that is to display the default ring
+#		(-1 means none).
+# args -	One or more strings to display in buttons across the
+#		bottom of the dialog box.
+
+
+# entry.tcl --
+#
+# This file defines the default bindings for Tk entry widgets and provides
+# procedures that help in implementing those bindings.
+#
+# Copyright (c) 1992-1994 The Regents of the University of California.
+# Copyright (c) 1994-1997 Sun Microsystems, Inc.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+#-------------------------------------------------------------------------
+# Elements of tk::Priv that are used in this file:
+#
+# afterId -		If non-null, it means that auto-scanning is underway
+#			and it gives the "after" id for the next auto-scan
+#			command to be executed.
+# mouseMoved -		Non-zero means the mouse has moved a significant
+#			amount since the button went down (so, for example,
+#			start dragging out a selection).
+# pressX -		X-coordinate at which the mouse button was pressed.
+# selectMode -		The style of selection currently underway:
+#			char, word, or line.
+# x, y -		Last known mouse coordinates for scanning
+#			and auto-scanning.
+# data -		Used for Cut and Copy
+#-------------------------------------------------------------------------
+
+#-------------------------------------------------------------------------
+# The code below creates the default class bindings for entries.
+#-------------------------------------------------------------------------
+
+# focus.tcl --
+#
+# This file defines several procedures for managing the input
+# focus.
+#
+# Copyright (c) 1994-1995 Sun Microsystems, Inc.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+# ::tk_focusNext --
+# This procedure returns the name of the next window after "w" in
+# "focus order" (the window that should receive the focus next if
+# Tab is typed in w).  "Next" is defined by a pre-order search
+# of a top-level and its non-top-level descendants, with the stacking
+# order determining the order of siblings.  The "-takefocus" options
+# on windows determine whether or not they should be skipped.
+#
+# Arguments:
+# w -		Name of a window.
+
+
+# fontchooser.tcl -
+#
+#	A themeable Tk font selection dialog. See TIP #324.
+#
+# Copyright (C) 2008 Keith Vetter
+# Copyright (C) 2008 Pat Thoyts <patthoyts@users.sourceforge.net>
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+
+
+# iconlist.tcl
+#
+#	Implements the icon-list megawidget used in the "Tk" standard file
+#	selection dialog boxes.
+#
+# Copyright (c) 1994-1998 Sun Microsystems, Inc.
+# Copyright (c) 2009 Donal K. Fellows
+#
+# See the file "license.terms" for information on usage and redistribution of
+# this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+# API Summary:
+#	tk::IconList <path> ?<option> <value>? ...
+#	<path> add <imageName> <itemList>
+#	<path> cget <option>
+#	<path> configure ?<option>? ?<value>? ...
+#	<path> deleteall
+#	<path> destroy
+#	<path> get <itemIndex>
+#	<path> index <index>
+#	<path> invoke
+#	<path> see <index>
+#	<path> selection anchor ?<int>?
+#	<path> selection clear <first> ?<last>?
+#	<path> selection get
+#	<path> selection includes <item>
+#	<path> selection set <first> ?<last>?
+
+# icons.tcl --
+#
+#	A set of stock icons for use in Tk dialogs. The icons used here
+#	were provided by the Tango Desktop project which provides a
+#	unified set of high quality icons licensed under the
+#	Creative Commons Attribution Share-Alike license
+#	(https://creativecommons.org/licenses/by-sa/3.0/)
+#
+#	See http://tango.freedesktop.org/Tango_Desktop_Project
+#
+# Copyright (c) 2009 Pat Thoyts <patthoyts@users.sourceforge.net>
+
+
+# listbox.tcl --
+#
+# This file defines the default bindings for Tk listbox widgets
+# and provides procedures that help in implementing those bindings.
+#
+# Copyright (c) 1994 The Regents of the University of California.
+# Copyright (c) 1994-1995 Sun Microsystems, Inc.
+# Copyright (c) 1998 by Scriptics Corporation.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+
+#--------------------------------------------------------------------------
+# tk::Priv elements used in this file:
+#
+# afterId -		Token returned by "after" for autoscanning.
+# listboxPrev -	The last element to be selected or deselected
+#			during a selection operation.
+# listboxSelection -	All of the items that were selected before the
+#			current selection operation (such as a mouse
+#			drag) started;  used to cancel an operation.
+#--------------------------------------------------------------------------
+
+#-------------------------------------------------------------------------
+# The code below creates the default class bindings for listboxes.
+#-------------------------------------------------------------------------
+
+# Note: the check for existence of %W below is because this binding
+# is sometimes invoked after a window has been deleted (e.g. because
+# there is a double-click binding on the widget that deletes it).  Users
+# can put "break"s in their bindings to avoid the error, but this check
+# makes that unnecessary.
+
+
+# megawidget.tcl
+#
+#	Basic megawidget support classes. Experimental for any use other than
+#	the ::tk::IconList megawdget, which is itself only designed for use in
+#	the Unix file dialogs.
+#
+# Copyright (c) 2009-2010 Donal K. Fellows
+#
+# See the file "license.terms" for information on usage and redistribution of
+# this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+
+# menu.tcl --
+#
+# This file defines the default bindings for Tk menus and menubuttons.
+# It also implements keyboard traversal of menus and implements a few
+# other utility procedures related to menus.
+#
+# Copyright (c) 1992-1994 The Regents of the University of California.
+# Copyright (c) 1994-1997 Sun Microsystems, Inc.
+# Copyright (c) 1998-1999 Scriptics Corporation.
+# Copyright (c) 2007 Daniel A. Steffen <das@users.sourceforge.net>
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+#-------------------------------------------------------------------------
+# Elements of tk::Priv that are used in this file:
+#
+# cursor -		Saves the -cursor option for the posted menubutton.
+# focus -		Saves the focus during a menu selection operation.
+#			Focus gets restored here when the menu is unposted.
+# grabGlobal -		Used in conjunction with tk::Priv(oldGrab):  if
+#			tk::Priv(oldGrab) is non-empty, then tk::Priv(grabGlobal)
+#			contains either an empty string or "-global" to
+#			indicate whether the old grab was a local one or
+#			a global one.
+# inMenubutton -	The name of the menubutton widget containing
+#			the mouse, or an empty string if the mouse is
+#			not over any menubutton.
+# menuBar -		The name of the menubar that is the root
+#			of the cascade hierarchy which is currently
+#			posted. This is null when there is no menu currently
+#			being pulled down from a menu bar.
+# oldGrab -		Window that had the grab before a menu was posted.
+#			Used to restore the grab state after the menu
+#			is unposted.  Empty string means there was no
+#			grab previously set.
+# popup -		If a menu has been popped up via tk_popup, this
+#			gives the name of the menu.  Otherwise this
+#			value is empty.
+# postedMb -		Name of the menubutton whose menu is currently
+#			posted, or an empty string if nothing is posted
+#			A grab is set on this widget.
+# relief -		Used to save the original relief of the current
+#			menubutton.
+# window -		When the mouse is over a menu, this holds the
+#			name of the menu;  it's cleared when the mouse
+#			leaves the menu.
+# tearoff -		Whether the last menu posted was a tearoff or not.
+#			This is true always for unix, for tearoffs for Mac
+#			and Windows.
+# activeMenu -		This is the last active menu for use
+#			with the <<MenuSelect>> virtual event.
+# activeItem -		This is the last active menu item for
+#			use with the <<MenuSelect>> virtual event.
+#-------------------------------------------------------------------------
+
+#-------------------------------------------------------------------------
+# Overall note:
+# This file is tricky because there are five different ways that menus
+# can be used:
+#
+# 1. As a pulldown from a menubutton. In this style, the variable
+#    tk::Priv(postedMb) identifies the posted menubutton.
+# 2. As a torn-off menu copied from some other menu.  In this style
+#    tk::Priv(postedMb) is empty, and menu's type is "tearoff".
+# 3. As an option menu, triggered from an option menubutton.  In this
+#    style tk::Priv(postedMb) identifies the posted menubutton.
+# 4. As a popup menu.  In this style tk::Priv(postedMb) is empty and
+#    the top-level menu's type is "normal".
+# 5. As a pulldown from a menubar. The variable tk::Priv(menubar) has
+#    the owning menubar, and the menu itself is of type "normal".
+#
+# The various binding procedures use the  state described above to
+# distinguish the various cases and take different actions in each
+# case.
+#-------------------------------------------------------------------------
+
+#-------------------------------------------------------------------------
+# The code below creates the default class bindings for menus
+# and menubuttons.
+#-------------------------------------------------------------------------
+
+
+# msgbox.tcl --
+#
+#	Implements messageboxes for platforms that do not have native
+#	messagebox support.
+#
+# Copyright (c) 1994-1997 Sun Microsystems, Inc.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+# Ensure existence of ::tk::dialog namespace
+#
+
+# obsolete.tcl --
+#
+# This file contains obsolete procedures that people really shouldn't
+# be using anymore, but which are kept around for backward compatibility.
+#
+# Copyright (c) 1994 The Regents of the University of California.
+# Copyright (c) 1994 Sun Microsystems, Inc.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+# The procedures below are here strictly for backward compatibility with
+# Tk version 3.6 and earlier.  The procedures are no longer needed, so
+# they are no-ops.  You should not use these procedures anymore, since
+# they may be removed in some future release.
+
+
+# optMenu.tcl --
+#
+# This file defines the procedure tk_optionMenu, which creates
+# an option button and its associated menu.
+#
+# Copyright (c) 1994 The Regents of the University of California.
+# Copyright (c) 1994 Sun Microsystems, Inc.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+# ::tk_optionMenu --
+# This procedure creates an option button named $w and an associated
+# menu.  Together they provide the functionality of Motif option menus:
+# they can be used to select one of many values, and the current value
+# appears in the global variable varName, as well as in the text of
+# the option menubutton.  The name of the menu is returned as the
+# procedure's result, so that the caller can use it to change configuration
+# options on the menu or otherwise manipulate it.
+#
+# Arguments:
+# w -			The name to use for the menubutton.
+# varName -		Global variable to hold the currently selected value.
+# firstValue -		First of legal values for option (must be >= 1).
+# args -		Any number of additional values.
+
+
+# palette.tcl --
+#
+# This file contains procedures that change the color palette used
+# by Tk.
+#
+# Copyright (c) 1995-1997 Sun Microsystems, Inc.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+# ::tk_setPalette --
+# Changes the default color scheme for a Tk application by setting
+# default colors in the option database and by modifying all of the
+# color options for existing widgets that have the default value.
+#
+# Arguments:
+# The arguments consist of either a single color name, which
+# will be used as the new background color (all other colors will
+# be computed from this) or an even number of values consisting of
+# option names and values.  The name for an option is the one used
+# for the option database, such as activeForeground, not -activeforeground.
+
+
+# safetk.tcl --
+#
+# Support procs to use Tk in safe interpreters.
+#
+# Copyright (c) 1997 Sun Microsystems, Inc.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+
+# see safetk.n for documentation
+
+#
+#
+# Note: It is now ok to let untrusted code being executed
+#       between the creation of the interp and the actual loading
+#       of Tk in that interp because the C side Tk_Init will
+#       now look up the parent interp and ask its safe::TkInit
+#       for the actual parameters to use for it's initialization (if allowed),
+#       not relying on the child state.
+#
+
+# We use opt (optional arguments parsing)
+
+# scale.tcl --
+#
+# This file defines the default bindings for Tk scale widgets and provides
+# procedures that help in implementing the bindings.
+#
+# Copyright (c) 1994 The Regents of the University of California.
+# Copyright (c) 1994-1995 Sun Microsystems, Inc.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+#-------------------------------------------------------------------------
+# The code below creates the default class bindings for entries.
+#-------------------------------------------------------------------------
+
+# Standard Motif bindings:
+
+
+# scrlbar.tcl --
+#
+# This file defines the default bindings for Tk scrollbar widgets.
+# It also provides procedures that help in implementing the bindings.
+#
+# Copyright (c) 1994 The Regents of the University of California.
+# Copyright (c) 1994-1996 Sun Microsystems, Inc.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+#-------------------------------------------------------------------------
+# The code below creates the default class bindings for scrollbars.
+#-------------------------------------------------------------------------
+
+# Standard Motif bindings:
+
+# spinbox.tcl --
+#
+# This file defines the default bindings for Tk spinbox widgets and provides
+# procedures that help in implementing those bindings.  The spinbox builds
+# off the entry widget, so it can reuse Entry bindings and procedures.
+#
+# Copyright (c) 1992-1994 The Regents of the University of California.
+# Copyright (c) 1994-1997 Sun Microsystems, Inc.
+# Copyright (c) 1999-2000 Jeffrey Hobbs
+# Copyright (c) 2000 Ajuba Solutions
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+#-------------------------------------------------------------------------
+# Elements of tk::Priv that are used in this file:
+#
+# afterId -		If non-null, it means that auto-scanning is underway
+#			and it gives the "after" id for the next auto-scan
+#			command to be executed.
+# mouseMoved -		Non-zero means the mouse has moved a significant
+#			amount since the button went down (so, for example,
+#			start dragging out a selection).
+# pressX -		X-coordinate at which the mouse button was pressed.
+# selectMode -		The style of selection currently underway:
+#			char, word, or line.
+# x, y -		Last known mouse coordinates for scanning
+#			and auto-scanning.
+# data -		Used for Cut and Copy
+#-------------------------------------------------------------------------
+
+# Initialize namespace
+
+# tearoff.tcl --
+#
+# This file contains procedures that implement tear-off menus.
+#
+# Copyright (c) 1994 The Regents of the University of California.
+# Copyright (c) 1994-1997 Sun Microsystems, Inc.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+# ::tk::TearoffMenu --
+# Given the name of a menu, this procedure creates a torn-off menu
+# that is identical to the given menu (including nested submenus).
+# The new torn-off menu exists as a toplevel window managed by the
+# window manager.  The return value is the name of the new menu.
+# The window is created at the point specified by x and y
+#
+# Arguments:
+# w -			The menu to be torn-off (duplicated).
+# x -			x coordinate where window is created
+# y -			y coordinate where window is created
+
+
+# text.tcl --
+#
+# This file defines the default bindings for Tk text widgets and provides
+# procedures that help in implementing the bindings.
+#
+# Copyright (c) 1992-1994 The Regents of the University of California.
+# Copyright (c) 1994-1997 Sun Microsystems, Inc.
+# Copyright (c) 1998 by Scriptics Corporation.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+#-------------------------------------------------------------------------
+# Elements of ::tk::Priv that are used in this file:
+#
+# afterId -		If non-null, it means that auto-scanning is underway
+#			and it gives the "after" id for the next auto-scan
+#			command to be executed.
+# char -		Character position on the line;  kept in order
+#			to allow moving up or down past short lines while
+#			still remembering the desired position.
+# mouseMoved -		Non-zero means the mouse has moved a significant
+#			amount since the button went down (so, for example,
+#			start dragging out a selection).
+# prevPos -		Used when moving up or down lines via the keyboard.
+#			Keeps track of the previous insert position, so
+#			we can distinguish a series of ups and downs, all
+#			in a row, from a new up or down.
+# selectMode -		The style of selection currently underway:
+#			char, word, or line.
+# x, y -		Last known mouse coordinates for scanning
+#			and auto-scanning.
+#
+#-------------------------------------------------------------------------
+
+#-------------------------------------------------------------------------
+# The code below creates the default class bindings for text widgets.
+#-------------------------------------------------------------------------
+
+
+
+# Standard Motif bindings:
+
+
+# tk.tcl --
+#
+# Initialization script normally executed in the interpreter for each Tk-based
+# application.  Arranges class bindings for widgets.
+#
+# Copyright (c) 1992-1994 The Regents of the University of California.
+# Copyright (c) 1994-1996 Sun Microsystems, Inc.
+# Copyright (c) 1998-2000 Ajuba Solutions.
+#
+# See the file "license.terms" for information on usage and redistribution of
+# this file, and for a DISCLAIMER OF ALL WARRANTIES.
+
+# Verify that we have Tk binary and script components from the same release
+
+# tkfbox.tcl --
+#
+#	Implements the "TK" standard file selection dialog box.  This dialog
+#	box is used on the Unix platforms whenever the tk_strictMotif flag is
+#	not set.
+#
+#	The "TK" standard file selection dialog box is similar to the file
+#	selection dialog box on Win95(TM).  The user can navigate the
+#	directories by clicking on the folder icons or by selecting the
+#	"Directory" option menu.  The user can select files by clicking on the
+#	file icons or by entering a filename in the "Filename:" entry.
+#
+# Copyright (c) 1994-1998 Sun Microsystems, Inc.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+
+#
+# DERIVED FROM: tk/library/entry.tcl r1.22
+#
+# Copyright (c) 1992-1994 The Regents of the University of California.
+# Copyright (c) 1994-1997 Sun Microsystems, Inc.
+# Copyright (c) 2004, Joe English
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+
+
+# scale.tcl - Copyright (C) 2004 Pat Thoyts <patthoyts@users.sourceforge.net>
+#
+# Bindings for the TScale widget
+
+
+# unsupported.tcl --
+#
+# Commands provided by Tk without official support.  Use them at your
+# own risk.  They may change or go away without notice.
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+
+# ----------------------------------------------------------------------
+# Unsupported compatibility interface for folks accessing Tk's private
+# commands and variable against recommended usage.
+# ----------------------------------------------------------------------
+
+
+# xmfbox.tcl --
+#
+#	Implements the "Motif" style file selection dialog for the
+#	Unix platform. This implementation is used only if the
+#	"::tk_strictMotif" flag is set.
+#
+# Copyright (c) 1996 Sun Microsystems, Inc.
+# Copyright (c) 1998-2000 Scriptics Corporation
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+
+
+README - images directory
+
+This directory includes images for the Tcl Logo and the Tcl Powered
+Logo.  Please feel free to use the Tcl Powered Logo on any of your
+products that employ the use of Tcl or Tk.  The Tcl logo may also be
+used to promote Tcl in your product documentation, web site or other
+places you so desire.
+

@@ -66,7 +66,7 @@ def seed(bg, surf, rais, strong, txt, sec, muted, acc, on_acc, border, texture, 
                 INPUT_PLACEHOLDER=muted, FOLDER_ICON=sec, ART_WALL_FRONT=rais, ART_WALL_SIDE=surf)
 
 
-# The six unique themes (owner 2026-09-26; concept mockups scratch/theme/concepts/render.py). Each seed is that
+# The six unique themes. Each seed is that
 # concept's own colours; fit() then moves any foreground that misses a contrast rule.
 EXPLICIT += [
     ('hi-fi', {   # 1980s hi-fi deck: warm brown case / cream faceplate, amber LCD

@@ -8,6 +8,7 @@
 #include "config.h"
 #include "i18n.h"
 #include "theme_model.h"
+#include "fontft.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -102,25 +103,14 @@ static const uint32_t DEFAULT_DARK[THEME_CLR_COUNT] = {
     [THEME_CLR_FIXED_QR_LIGHT]         = 0xFFFFFF,
     [THEME_CLR_FIXED_DEBUG_TOUCH]      = 0x00FF66,
     [THEME_CLR_FIXED_SPLASH_BG]        = 0x07080A,
-    [THEME_CLR_FIXED_SPLASH_RING]      = 0x0B0C0F,
-    [THEME_CLR_FIXED_SPLASH_1]         = 0xD9DCE2,
-    [THEME_CLR_FIXED_SPLASH_2]         = 0x9EA3AD,
-    [THEME_CLR_FIXED_SPLASH_WELL]      = 0x0C0D10,
     [THEME_CLR_FIXED_SPLASH_SPINDLE]   = 0x1D1F24,
     [THEME_CLR_FIXED_SPLASH_HUB_LINE]  = 0x787D87,
     [THEME_CLR_FIXED_SPLASH_HOLE]      = 0x050506,
-    [THEME_CLR_FIXED_SPLASH_MARK]      = 0x2C3038,
     [THEME_CLR_FIXED_SPLASH_BAND_1]    = 0xFF5D7E,
     [THEME_CLR_FIXED_SPLASH_BAND_2]    = 0xFFC15D,
     [THEME_CLR_FIXED_SPLASH_BAND_3]    = 0x9CF07A,
     [THEME_CLR_FIXED_SPLASH_BAND_4]    = 0x5DC8FF,
     [THEME_CLR_FIXED_SPLASH_BAND_5]    = 0x9A73FF,
-    [THEME_CLR_FIXED_SPLASH_BLACK_HI]  = 0x4A4C51,
-    [THEME_CLR_FIXED_SPLASH_BLACK_LO]  = 0x232428,
-    [THEME_CLR_FIXED_SPLASH_TURQ_HI]   = 0x9FE0E8,
-    [THEME_CLR_FIXED_SPLASH_TURQ_LO]   = 0x5AB3BF,
-    [THEME_CLR_FIXED_SPLASH_PINK_HI]   = 0xF4C8C8,
-    [THEME_CLR_FIXED_SPLASH_PINK_LO]   = 0xDA9CA2,
     [THEME_CLR_FIXED_SPLASH_3]         = 0xF6F2F8,
 };
 
@@ -202,25 +192,14 @@ static const uint32_t DEFAULT_LIGHT[THEME_CLR_COUNT] = {
     [THEME_CLR_FIXED_QR_LIGHT]         = 0xFFFFFF,
     [THEME_CLR_FIXED_DEBUG_TOUCH]      = 0x00FF66,
     [THEME_CLR_FIXED_SPLASH_BG]        = 0x07080A,
-    [THEME_CLR_FIXED_SPLASH_RING]      = 0x0B0C0F,
-    [THEME_CLR_FIXED_SPLASH_1]         = 0xD9DCE2,
-    [THEME_CLR_FIXED_SPLASH_2]         = 0x9EA3AD,
-    [THEME_CLR_FIXED_SPLASH_WELL]      = 0x0C0D10,
     [THEME_CLR_FIXED_SPLASH_SPINDLE]   = 0x1D1F24,
     [THEME_CLR_FIXED_SPLASH_HUB_LINE]  = 0x787D87,
     [THEME_CLR_FIXED_SPLASH_HOLE]      = 0x050506,
-    [THEME_CLR_FIXED_SPLASH_MARK]      = 0x2C3038,
     [THEME_CLR_FIXED_SPLASH_BAND_1]    = 0xFF5D7E,
     [THEME_CLR_FIXED_SPLASH_BAND_2]    = 0xFFC15D,
     [THEME_CLR_FIXED_SPLASH_BAND_3]    = 0x9CF07A,
     [THEME_CLR_FIXED_SPLASH_BAND_4]    = 0x5DC8FF,
     [THEME_CLR_FIXED_SPLASH_BAND_5]    = 0x9A73FF,
-    [THEME_CLR_FIXED_SPLASH_BLACK_HI]  = 0x4A4C51,
-    [THEME_CLR_FIXED_SPLASH_BLACK_LO]  = 0x232428,
-    [THEME_CLR_FIXED_SPLASH_TURQ_HI]   = 0x9FE0E8,
-    [THEME_CLR_FIXED_SPLASH_TURQ_LO]   = 0x5AB3BF,
-    [THEME_CLR_FIXED_SPLASH_PINK_HI]   = 0xF4C8C8,
-    [THEME_CLR_FIXED_SPLASH_PINK_LO]   = 0xDA9CA2,
     [THEME_CLR_FIXED_SPLASH_3]         = 0xF6F2F8,
 };
 
@@ -228,11 +207,11 @@ static const uint32_t DEFAULT_LIGHT[THEME_CLR_COUNT] = {
 
 typedef struct { const char *name; const uint32_t *dark, *light; } theme_preset_t;
 static const theme_preset_t PRESETS[] = {
-    { "Default", DEFAULT_DARK, DEFAULT_LIGHT },
+    { "halo", DEFAULT_DARK, DEFAULT_LIGHT },
     THEME_PRESETS_GENERATED
 };
 _Static_assert(sizeof PRESETS / sizeof PRESETS[0] == THEME_PRESET_COUNT, "THEME_PRESET_COUNT (theme.h) is stale");
-const char *const theme_preset_names[THEME_PRESET_COUNT] = { "Default", THEME_PRESET_NAMES_GENERATED };
+const char *const theme_preset_names[THEME_PRESET_COUNT] = { "halo", THEME_PRESET_NAMES_GENERATED };
 static int g_preset;
 static uint32_t g_custom[2][THEME_CLR_COUNT];      /* the saved custom theme, fixed roles filled from Default */
 static int g_custom_on, g_custom_fixed_accent;
@@ -241,25 +220,28 @@ static unsigned g_traits;
 /* the active theme's fonts, as copies whose fallback is the matching international/CJK chain (symbols, accents, CJK):
  * text a face lacks renders in the chain instead of disappearing */
 static lv_font_t g_tf[THEME_FONT_COUNT];
+static lv_font_t g_tf_ft[THEME_FONT_COUNT];
 static const lv_font_t *g_tfp[THEME_FONT_COUNT];
-static int role_px(int role){
-    static const unsigned char PX[THEME_FONT_COUNT] = {
-        [THEME_FONT_UI_10] = 10, [THEME_FONT_UI_12] = 12, [THEME_FONT_UI_14] = 14, [THEME_FONT_UI_16] = 16,
-        [THEME_FONT_UI_18] = 18, [THEME_FONT_UI_20] = 20, [THEME_FONT_UI_22] = 22, [THEME_FONT_UI_24] = 24,
-        [THEME_FONT_UI_28] = 28, [THEME_FONT_UI_32] = 32, [THEME_FONT_UI_36] = 36, [THEME_FONT_UI_40] = 40,
-        [THEME_FONT_USER_14] = 14, [THEME_FONT_USER_16] = 16, [THEME_FONT_USER_18] = 18, [THEME_FONT_USER_20] = 20,
-        [THEME_FONT_HEADER] = 28, [THEME_FONT_CLOCK] = 28, [THEME_FONT_SAVER_CLOCK] = 40, [THEME_FONT_DATE] = 18,
-        [THEME_FONT_ICON_20] = 20, [THEME_FONT_ICON_28] = 28, [THEME_FONT_HEADER_SM] = 22 };
-    return PX[role];
-}
 static void theme_fonts_install(void){
     for(int r = 0; r < THEME_FONT_COUNT; r++){
         g_tfp[r] = NULL;
-        if(!g_def || !g_def->font[r]) continue;
-        int px = role_px(r);
-        g_tf[r] = *g_def->font[r];
-        /* the chain of the role's size (the largest chain is 20 px); 12 px and under: Montserrat 12 (symbols) */
-        g_tf[r].fallback = px <= 12 ? &lv_font_montserrat_12 : ui_font_cjk(px > 20 ? 20 : px);
+        if(!g_def || !g_def->font[r].face) continue;
+        int px = g_def->font[r].px;
+        g_tf[r] = *g_def->font[r].face;
+        if(r == THEME_FONT_ICON_20 || r == THEME_FONT_ICON_28) {
+            g_tfp[r] = &g_tf[r];
+            continue;
+        }
+        /* Standard text sizes keep the Montserrat/intl head for missing symbols.
+         * Special face sizes have no Montserrat peer, so use TTC then compiled CJK. */
+        if(px == 10 || px == 12 || px == 14 || px == 16 || px == 18 || px == 20 ||
+           px == 22 || px == 24 || px == 28 || px == 32 || px == 36 || px == 40)
+            g_tf[r].fallback = ui_font_cjk(px);
+        else {
+            const lv_font_t *ft = fontft_font(px);
+            if(ft) { g_tf_ft[r] = *ft; g_tf_ft[r].fallback = ui_font_cjk(16); }
+            g_tf[r].fallback = ft ? &g_tf_ft[r] : ui_font_cjk(16);
+        }
         g_tfp[r] = &g_tf[r];
     }
     /* a text size the theme's set lacks takes the theme's nearest own face: otherwise Default's face shows through
@@ -363,8 +345,21 @@ lv_color_t theme_color(theme_color_role_t role){ return lv_color_hex(theme_rgb(r
 lv_color_t theme_color_from_rgb(uint32_t rgb){ return lv_color_hex(rgb & 0xFFFFFFu); }
 
 const lv_font_t *theme_font_base(int px){
-    return px >= 20 ? &lv_font_montserrat_20 : px >= 18 ? &lv_font_montserrat_18 : px >= 16 ? &lv_font_montserrat_16
-                    : &lv_font_montserrat_14;
+    switch(px) {
+    case 10: return &lv_font_montserrat_10;
+    case 12: return &lv_font_montserrat_12;
+    case 14: return &lv_font_montserrat_14;
+    case 16: return &lv_font_montserrat_16;
+    case 18: return &lv_font_montserrat_18;
+    case 20: return &lv_font_montserrat_20;
+    case 22: return &lv_font_montserrat_22;
+    case 24: return &lv_font_montserrat_24;
+    case 28: return &lv_font_montserrat_28;
+    case 32: return &lv_font_montserrat_32;
+    case 36: return &lv_font_montserrat_36;
+    case 40: return &lv_font_montserrat_40;
+    default: return &lv_font_montserrat_16;
+    }
 }
 int theme_trait(theme_trait_t t){ return (unsigned)t < THEME_TRAIT_COUNT && (g_traits >> t & 1u); }
 
@@ -389,7 +384,29 @@ void theme_list_row(lv_obj_t *row){
             lv_obj_set_style_text_color(c, TC(ACCENT_PRIMARY), 0);
     }
 }
-char *theme_upper(char *dst, int cap, const char *src){
+/* Case of one two-byte UTF-8 letter: Latin-1, Latin Extended-A and Cyrillic, the scripts of the UI languages and of
+ * most tags. Every pair maps two bytes to two bytes, so a case change never changes the length. 0 = no other case. */
+static unsigned case2(unsigned cp, int upper){
+    if(upper){
+        if(cp >= 0xE0 && cp <= 0xFE && cp != 0xF7) return cp - 0x20;
+        if(cp == 0xFF) return 0x178;
+        if(cp >= 0x430 && cp <= 0x44F) return cp - 0x20;
+        if(cp >= 0x450 && cp <= 0x45F) return cp - 0x50;
+    } else {
+        if(cp >= 0xC0 && cp <= 0xDE && cp != 0xD7) return cp + 0x20;
+        if(cp == 0x178) return 0xFF;
+        if(cp >= 0x410 && cp <= 0x42F) return cp + 0x20;
+        if(cp >= 0x400 && cp <= 0x40F) return cp + 0x50;
+    }
+    /* Latin Extended-A: upper/lower pairs, lower odd in 0100-0137 and 014A-0177, even in 0139-0148 and 0179-017E */
+    int odd_lower = (cp >= 0x100 && cp <= 0x137) || (cp >= 0x14A && cp <= 0x177);
+    int even_lower = (cp >= 0x139 && cp <= 0x148) || (cp >= 0x179 && cp <= 0x17E);
+    if(cp == 0x130 || cp == 0x131) return 0;            /* dotted/dotless i are not a pair */
+    if(odd_lower) return ((cp & 1) == (unsigned)upper) ? (upper ? cp - 1 : cp + 1) : 0;
+    if(even_lower) return ((cp & 1) != (unsigned)upper) ? (upper ? cp - 1 : cp + 1) : 0;
+    return 0;
+}
+static char *theme_case_copy(char *dst, int cap, const char *src, int upper){
     if(!dst || cap <= 0) return dst;
     int n = 0;
     if(src) while(src[n]){
@@ -399,17 +416,20 @@ char *theme_upper(char *dst, int cap, const char *src){
             if(((unsigned char)src[n + k] & 0xC0) != 0x80){ len = 1; break; }   /* string ends early): one byte */
         if(n + len > cap - 1) break;                   /* would not fit whole: stop at the character boundary */
         for(int k = 0; k < len && src[n + k]; k++) dst[n + k] = src[n + k];
-        if(len == 1 && c >= 'a' && c <= 'z') dst[n] = (char)(c - 32);
+        if(len == 1 && upper && c >= 'a' && c <= 'z') dst[n] = (char)(c - 32);
+        else if(len == 1 && !upper && c >= 'A' && c <= 'Z') dst[n] = (char)(c + 32);
+        else if(len == 2){
+            unsigned cp = ((c & 0x1F) << 6) | ((unsigned char)src[n + 1] & 0x3F);
+            unsigned to = case2(cp, upper);
+            if(to){ dst[n] = (char)(0xC0 | (to >> 6)); dst[n + 1] = (char)(0x80 | (to & 0x3F)); }
+        }
         n += len;
     }
     dst[n] = 0;
     return dst;
 }
-char *theme_lower(char *dst, int cap, const char *src){
-    theme_upper(dst, cap, src);                       /* same UTF-8-safe copy and truncation */
-    for(char *p = dst; p && *p; p++) if(*p >= 'A' && *p <= 'Z' && (unsigned char)*p < 0x80) *p = (char)(*p + 32);
-    return dst;
-}
+char *theme_upper(char *dst, int cap, const char *src){ return theme_case_copy(dst, cap, src, 1); }
+char *theme_lower(char *dst, int cap, const char *src){ return theme_case_copy(dst, cap, src, 0); }
 void theme_case_text(lv_obj_t *label, const char *text){   /* the theme's case only (dates, captions) */
     if(!label) return;
     theme_case_t c = g_def ? g_def->title_case : THEME_CASE_KEEP;
@@ -438,7 +458,11 @@ static void title_face(lv_obj_t *l, const char *text){
     lv_obj_update_layout(l);
     int room = lv_obj_get_content_width(l);
     if(room <= 0) return;
-    char m[168]; lv_snprintf(m, sizeof m, "%s%s", theme_kit()->title ? "~/" : "", text);
+    /* Terminal alone uses a path form, including its 160-byte limit and underscores. */
+    char m[160];
+    int terminal = !strcmp(theme_kit()->id, "terminal");
+    lv_snprintf(m, sizeof m, "%s%s", terminal ? "~/" : "", text);
+    if(terminal) for(int i = 2; m[i]; i++) if(m[i] == ' ') m[i] = '_';
     const lv_font_t *f = hf;
     for(int k = 0; k < 4; k++){
         lv_point_t sz; lv_text_get_size(&sz, m, f, lv_obj_get_style_text_letter_space(l, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
@@ -559,24 +583,30 @@ static theme_font_role_t sized_role(theme_font_role_t r){
 /* Default theme, a language that is not English: Montserrat has neither accents nor Cyrillic nor CJK, so its text
  * sizes get the same fallback chain the user-text fonts use (mutable copies; .fallback cannot be set on the const ones) */
 static const lv_font_t *lang_font(int px, const lv_font_t *base){
-    static lv_font_t c[8]; static const lv_font_t *b[8];
-    for(int i = 0; i < 8; i++){
-        if(b[i] == base) return &c[i];
-        if(!b[i]){ b[i] = base; c[i] = *base; c[i].fallback = ui_font_cjk(px < 14 ? 14 : px > 20 ? 20 : px); return &c[i]; }
-    }
-    return base;
+    static lv_font_t c[41];
+    if(!c[px].get_glyph_dsc) { c[px] = *base; c[px].fallback = ui_font_cjk(px); }
+    return &c[px];
 }
 const lv_font_t *theme_font(theme_font_role_t role){
     role = sized_role(role);
     if((unsigned)role < THEME_FONT_COUNT && g_tfp[role]) return g_tfp[role];
     if(i18n_needs_fallback_font()){
         switch(role){
+        case THEME_FONT_UI_10: return lang_font(10, &lv_font_montserrat_10);
         case THEME_FONT_UI_12: return lang_font(12, &lv_font_montserrat_12);
         case THEME_FONT_UI_14: return lang_font(14, &lv_font_montserrat_14);
         case THEME_FONT_UI_16: return lang_font(16, &lv_font_montserrat_16);
         case THEME_FONT_UI_18: return lang_font(18, &lv_font_montserrat_18);
         case THEME_FONT_UI_20: return lang_font(20, &lv_font_montserrat_20);
+        case THEME_FONT_UI_22: return lang_font(22, &lv_font_montserrat_22);
         case THEME_FONT_UI_24: return lang_font(24, &lv_font_montserrat_24);
+        case THEME_FONT_UI_28: return lang_font(28, &lv_font_montserrat_28);
+        case THEME_FONT_UI_32: return lang_font(32, &lv_font_montserrat_32);
+        case THEME_FONT_UI_36: return lang_font(36, &lv_font_montserrat_36);
+        case THEME_FONT_UI_40: return lang_font(40, &lv_font_montserrat_40);
+        case THEME_FONT_CLOCK: return lang_font(28, &lv_font_montserrat_28);
+        case THEME_FONT_SAVER_CLOCK: return lang_font(40, &lv_font_montserrat_40);
+        case THEME_FONT_DATE: return lang_font(14, &lv_font_montserrat_14);
         default: break;
         }
     }
@@ -598,6 +628,7 @@ const lv_font_t *theme_font(theme_font_role_t role){
     case THEME_FONT_USER_18: return ui_font_cjk(18);
     case THEME_FONT_USER_20: return ui_font_cjk(20);
     case THEME_FONT_HEADER: return ui_font_cjk(18);
+    case THEME_FONT_HEADER_SM: return ui_font_cjk(16);
     case THEME_FONT_CLOCK: return &lv_font_montserrat_28;
     case THEME_FONT_SAVER_CLOCK: return &lv_font_montserrat_40;
     case THEME_FONT_DATE: return &lv_font_montserrat_14;
@@ -652,13 +683,14 @@ lv_color_t theme_accent_from_hsv(uint16_t h, uint8_t s, uint8_t v){
 /* ---- LVGL's built-in theme ---------------------------------------------------------------------------------------
  * LVGL styles every widget with its default theme before the app touches it. Screens that do not restyle a widget
  * (switches, the text-entry cursor/placeholder, plain buttons) would keep LVGL's own colours in every palette, so an
- * overlay theme on top of it re-colours exactly those parts from roles. Only colours: sizes, radii, animations stay
- * LVGL's. Screen-local styles still win over these (they are theme styles). */
+ * overlay theme on top of it re-colours exactly those parts from roles. It also sets a chained inherited font on
+ * screen roots. Sizes, radii and animations stay LVGL's; screen-local styles still win. */
 static lv_theme_t g_lv_overlay;
 static lv_style_t st_sw_main, st_sw_on, st_sw_knob, st_ta_cursor, st_ta_placeholder, st_btn, st_btn_checked,
-                  st_primary_bg, st_arc_track, st_arc_indic;
+                  st_primary_bg, st_arc_track, st_arc_indic, st_screen_font;
 static void overlay_apply(lv_theme_t *th, lv_obj_t *obj){
     (void)th;
+    if(!lv_obj_get_parent(obj)) lv_obj_add_style(obj, &st_screen_font, 0);
 #if LV_USE_SWITCH
     if(lv_obj_check_type(obj, &lv_switch_class)){
         lv_obj_add_style(obj, &st_sw_main, 0);
@@ -719,10 +751,16 @@ static void theme_install_lvgl(void){
     lv_style_init(&st_primary_bg);     lv_style_set_bg_color(&st_primary_bg, TC(WIDGET_PRIMARY));
     lv_style_init(&st_arc_track);      lv_style_set_arc_color(&st_arc_track, TC(WIDGET_TRACK));
     lv_style_init(&st_arc_indic);      lv_style_set_arc_color(&st_arc_indic, TC(WIDGET_PRIMARY));
-    g_lv_overlay = *base;                        /* same fonts + primary/secondary as the base */
+    lv_style_init(&st_screen_font);
+    lv_style_set_text_font(&st_screen_font, ui_font_cjk(16));
+    g_lv_overlay = *base;
+    g_lv_overlay.font_normal = ui_font_cjk(16);
     lv_theme_set_parent(&g_lv_overlay, base);
     lv_theme_set_apply_cb(&g_lv_overlay, overlay_apply);
     lv_display_set_theme(d, &g_lv_overlay);
+    lv_obj_set_style_text_font(lv_layer_top(), ui_font_cjk(16), 0);
+    lv_obj_set_style_text_font(lv_layer_sys(), ui_font_cjk(16), 0);
+    lv_obj_set_style_text_font(lv_screen_active(), ui_font_cjk(16), 0);
 }
 
 /* the active preset's component kit (theme_kit.h); presets without their own kit use Default's builders */
