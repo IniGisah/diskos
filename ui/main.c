@@ -54,39 +54,14 @@ void library_jump_cancel(void);
 
 static lv_indev_t *g_touch = NULL;
 
-/* Synthesize a power button press on /dev/input/event0 to synchronize
- * mq_player's internal screen_on state without touching /proc/<pid>/mem.
- * Writing standard Linux input_events to evdev dispatches through
- * input_inject_event to all listeners (including mq_player), exactly matching
- * physical hardware button presses. */
-static void inject_power_key(void) {
-    int fd = open("/dev/input/event0", O_WRONLY | O_NONBLOCK);
-    if(fd >= 0) {
-        struct input_event ev[4] = {
-            {.type = EV_KEY, .code = 259, .value = 1},
-            {.type = EV_SYN, .code = SYN_REPORT, .value = 0},
-            {.type = EV_KEY, .code = 259, .value = 0},
-            {.type = EV_SYN, .code = SYN_REPORT, .value = 0},
-        };
-        write(fd, &ev[0], sizeof(ev[0]) * 2);
-        usleep(50000); /* 50ms press duration for reliable debounce detection */
-        write(fd, &ev[2], sizeof(ev[0]) * 2);
-        close(fd);
-    }
-}
-
 /* Real hardware screen turn-off matching stock firmware (0x4de1bc):
- * 1. mq_player: Inject KEY_POWER on auto-sleep so the player transitions to screen_on=0.
- * 2. Backlight: Cut power rail (bl_power=4) and set brightness 0.
- * 3. 120ms delay: ST77916 power sequencing timing required by panel controller.
- * 4. ST77916: Enter sleep mode (0x2000ef01 SUSPEND_CMD).
- * 5. CST816T: Deep hardware sleep (0x2000ef03, 0mA) unless Touch to Wake is enabled on auto-sleep.
- * 6. Touch indev: Disabled in LVGL so dark screen never registers blind clicks.
+ * 1. Backlight: Cut power rail (bl_power=4) and set brightness 0.
+ * 2. 120ms delay: ST77916 power sequencing timing required by panel controller.
+ * 3. ST77916: Enter sleep mode (0x2000ef01 SUSPEND_CMD).
+ * 4. CST816T: Deep hardware sleep (0x2000ef03, 0mA) unless Touch to Wake is enabled on auto-sleep.
+ * 5. Touch indev: Disabled in LVGL so dark screen never registers blind clicks.
  */
 static void hardware_screen_sleep(int is_auto_sleep) {
-    if(is_auto_sleep) {
-        inject_power_key();
-    }
     int touch_wake_ok = cfg_get_int("touch_wake", 0);
     ui_backlight(0);
     usleep(120000); /* 120ms stock panel power sequencing delay */
@@ -3963,14 +3938,17 @@ int main(int argc, char **argv){
                 switch(screen_frame_step(on, bl_state, &pk.player_off, poweroff_inhibit)){
                 case SF_INJECT: inject_pending = 1; inject_for = sq; inject_gen = gen; inject_due = lv_tick_get() + 300; break;
                 case SF_OFF:      /* the player slept its panel: power the rail down to match */
-                    ui_backlight(0); bl_state = 2; g_screen_off = 1;
+                    draw_set_dark(1);
+                    bl_state = 2; g_screen_off = 1; manual_btn_off = 1;
+                    hardware_screen_sleep(0);
                     mclock_sync(0);
                     kit_cursor_sync(0);
                     if(screen_current() == SCR_SAVER) screen_back();
                     break;
                 case SF_WAKE:     /* the player woke its panel: light it at the user's level */
-                    wake_backlight(ui_effective_brightness());
-                    bl_state = 0; g_screen_off = 0; last_activity = lv_tick_get();
+                    hardware_screen_wake(ui_effective_brightness());
+                    bl_state = 0; g_screen_off = 0; manual_btn_off = 0; last_activity = lv_tick_get();
+                    draw_set_dark(0);
                     if(screen_current() == SCR_SAVER) screen_back();
                     break;
                 default: break;
