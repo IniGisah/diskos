@@ -1,3 +1,14 @@
 # Additional Source Han glyphs required by reported music metadata.
 # Keep the existing CJK fallback; this subset fills verified coverage gaps.
 妖帝曼汝珠華衍贈
+# Interface-language glyphs (i18n/strings.tsv: Chinese, Japanese, Korean labels + the language names). Regenerate the list
+# by collecting missing code points from the translation columns; the font uses the stock Source Han Sans face (OFL).
+・个义乐书于亮仅从关创匯区单厂历后启啟器固图圖复夹夾导封尋屏幕序库应开强循応恢憶戶户扫拟按捷掃援搜播收數无显暂暫术极样檔
+檢歴氣没淺添溫滑滤濾牙环登益盘睡碌碟磁磚秒章简粉紅索綠編縫繁线结络续绿缓编缝网胶膠艺蓝藍藏號螢衡観观视訂詞认设词试语请调
+贴跳輯轉转辑输还连选鐘钟长閒闭闲间随韌頁順預顏页项顺频题颜黑默가간강검게겨경고곡국그근글기길김꺼꼴끄끊끔끝나날낮네노높눌
+는니닐다대더도돌동됨두둡뒤드든등디라래랙러런레력로록료루륨르른를리마만많머먼멀메면모목미및바반밝밸버번범변별보복본볼부북
+분브블빠사삭상새색생서설성세셔션소속수순스습시씨아안않애앨야양어언없에연오온옵와외요용우워원웨위유으을음이인일입있자작장
+재저적전정제져조족종중즐지직짐짜차찾책챕청체초최추출충취치캐커컬켜켬퀄크타터털테템통투트티팅파펌폴프플필하한할함항해호홈
+홍화후휴旧标签
+# Old tags setting (2026-10-09)
+、。いにはキグスタャリルン以再判动動古套字定尔庫或描文新本樂標欧歐测測爾猜用籤自舊西適里重音감또럽려릴문키태텍：

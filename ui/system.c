@@ -264,7 +264,7 @@ int sys_fetch_latest(char *tag, size_t n){
  * diskos.conf entirely. */
 static const char *const RESET_KEYS[] = {
     "brightness", "swipe_thresh", "saver_idx", "saver_style", "screenoff_idx",
-    "anim", "time_24h", "disc_colour", "accent_mode", "accent_color", "np_style", "theme_preset", "theme_variant",
+    "anim", "time_24h", "accent_mode", "accent_color", "np_style", "theme_preset", "theme_variant",
     "outdoor", "boot_default", "weather_on", "weather_loc", "artcache", "sleep_idx", "sleep_action", "idle_off_idx",
     "qs_transport", "track_numbers", "album_view", "online_art", "online_lyrics", NULL
 };
@@ -484,19 +484,26 @@ static void chk_tick(lv_timer_t *t){
  * boot's trial counter keeps running and rolls it back. The identity checks (running exe hash, run + launched files) are
  * in ota_health_write / ota_revert_write. */
 #define OTA_HEALTH_MIN_MS 180000
-static struct { uint32_t t0; _Atomic int play, ok, asked; char ver[24]; } g_hl;
+#define OTA_HEALTH_RETRY_MS 30000     /* a failed save of the proof (storage full or busy) is tried again this often, */
+#define OTA_HEALTH_TRIES 10           /* this many times in all: each try hashes the running build */
+static struct { uint32_t t0, tw; int tries; _Atomic int play, ok, asked, busy, saved; char ver[24]; } g_hl;
 static lv_timer_t *g_hl_tm;
-static void *ota_health_thread(void *a){ (void)a; ota_health_write(&OTA_DEV); return NULL; }
+static void *ota_health_thread(void *a){
+    (void)a;
+    if(ota_health_write(&OTA_DEV)) atomic_store(&g_hl.saved, 1);
+    atomic_store(&g_hl.busy, 0);
+    return NULL;
+}
 static void cb_keep(lv_event_t *e){
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if(!ota_health_write(&OTA_DEV)){ ui_toast(tr("Couldn't save your choice. Try again.")); return; }
     modal_close();
-    if(!ota_health_write(&OTA_DEV)) ui_toast(tr("Couldn't save your choice. Try again."));
 }
 static void cb_goback(lv_event_t *e){
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if(!ota_revert_write(&OTA_DEV)){ ui_toast(tr("Couldn't save your choice. Try again.")); return; }
     modal_close();
-    if(ota_revert_write(&OTA_DEV)) settings_restart_prompt(tr("Restart to go back to the previous version."));
-    else ui_toast(tr("Couldn't save your choice. Try again."));
+    settings_restart_prompt(tr("Restart to go back to the previous version."));
 }
 static void ota_keep_prompt(void){
     char t[64]; snprintf(t, sizeof t, tr("Keep diskOS %s?"), g_hl.ver);
@@ -506,14 +513,21 @@ static void ota_keep_prompt(void){
     modal_pill(c,  58, tr("Keep"), THEME_CLR_ACCENT_EMPHASIS, cb_keep, "system.ota_keep");
 }
 static void ota_health_cb(lv_timer_t *t){
+    if(atomic_load(&g_hl.busy)) return;                                     /* a save is still running */
+    if(atomic_load(&g_hl.saved) || g_hl.tries >= OTA_HEALTH_TRIES){ lv_timer_delete(t); g_hl_tm = NULL; return; }
     if(lv_tick_elaps(g_hl.t0) < OTA_HEALTH_MIN_MS) return;
+    if(!atomic_load(&g_hl.ok) && ota_trial_decided(&OTA_DEV)){ lv_timer_delete(t); g_hl_tm = NULL; return; }
     if(!atomic_load(&g_hl.ok) && atomic_load(&g_hl.play) && ota_pcm_running(&OTA_DEV)) atomic_store(&g_hl.ok, 1);
     if(atomic_load(&g_hl.ok)){
+        if(g_hl.tries && lv_tick_elaps(g_hl.tw) < OTA_HEALTH_RETRY_MS) return;
         pthread_t th;
+        g_hl.tries++; g_hl.tw = lv_tick_get(); atomic_store(&g_hl.busy, 1);
         if(pthread_create(&th, NULL, ota_health_thread, NULL) == 0) pthread_detach(th);
-        lv_timer_delete(t); g_hl_tm = NULL;
+        else atomic_store(&g_hl.busy, 0);
         return;
     }
+    /* Let an existing dialog or update job finish before asking: its result must not replace Keep. */
+    if(g_m || atomic_load(&g_chk.state) != 0 || atomic_load(&g_dl.state) != 0) return;
     if(atomic_load(&g_hl.asked)) return;
     atomic_store(&g_hl.asked, 1);
     ota_keep_prompt();
@@ -522,6 +536,7 @@ static void ota_health_cb(lv_timer_t *t){
 void system_ota_note_playback(void){ atomic_store(&g_hl.play, 1); }
 void system_ota_health_init(void){
     if(!ota_trial_version(&OTA_DEV, g_hl.ver, sizeof g_hl.ver)) return;     /* only a trial build has anything to prove */
+    if(ota_trial_decided(&OTA_DEV)) return;
     g_hl.t0 = lv_tick_get();
     g_hl_tm = lv_timer_create(ota_health_cb, 2000, NULL);
 }

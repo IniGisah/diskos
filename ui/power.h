@@ -2,7 +2,7 @@
 /* Copyright (C) 2026 diskOS contributors */
 /* Power settings and the SD-safe shutdown, on top of the stock V2.57 player's own backends.
  *
- * Stock facts (V2.57 mq_player / mq_ui; evidence in the report and tests/release/test_parity_power.py):
+ * Stock facts (V2.57 mq_player / mq_ui):
  *   0806  Sleep timer, seconds, runtime only. The player's 1 s thread shuts the device down (its power-off routine at
  *         0x4e6f0c, ending in `poweroff -f`) once the timer has counted past the value.
  *   0664  Idle poweroff, seconds (SYSCONFIG.POWER_SAVE). Stock menu: Off, 5, 10, 30, 60, 90, 120 minutes.

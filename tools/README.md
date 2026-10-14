@@ -5,7 +5,7 @@ hot-reload it, and capture screenshots. These are the scripts we use for day-to-
 full workflow (including building the binary) is in [`../docs/DEV_WORKFLOW.md`](../docs/DEV_WORKFLOW.md).
 
 If you are an agent or a new contributor picking this up cold, read the **Device rules** section
-first. A couple of the device's behaviors are non-obvious and easy to get wrong.
+first.
 
 ## Contents
 | Script | What it does |
@@ -31,25 +31,29 @@ export DISKOS_PW=xxxxxxxxxx         # from Debug Mode
 
 ## Deploy + hot-reload
 ```sh
-# from the ui/ build directory, after producing mq_ui:
-DISKOS_IP=... DISKOS_PW=... ./diskos-deploy.sh ./mq_ui
+# from the repository root, after producing ui/mq_ui:
+DISKOS_IP=... DISKOS_PW=... ./tools/diskos-deploy.sh ./ui/mq_ui
 ```
 It streams the binary to a staging path, verifies the md5, moves it into place, and relaunches it
-detached. A hand-deployed binary reverts to the flashed build on the next reboot (that is intentional;
-it means you can always get back to a known-good state by rebooting). To make a build permanent, flash
-it with the installer (`--ui path/to/mq_ui`).
+detached. See [Device rules](#device-rules-read-before-poking-around) for reboot behavior.
+To make a build permanent, flash it with the installer (`--ui path/to/mq_ui`).
 
 ## Screenshot
+
+Run these screenshot and touch examples from `tools/`.
 ```sh
 DISKOS_IP=... DISKOS_PW=... ./diskos-shot.sh home.png
 ```
-The panel is 360x360, 32bpp BGRA, mounted rotated 180 degrees. The script reads `/dev/fb0` (one frame
-is 518400 bytes), reinterprets it as BGRA, rotates 180, and saves a PNG.
+The panel is 360x360, 32bpp BGRA, mounted rotated 180 degrees. The script reads the
+first page of `/dev/fb0` (518400 bytes), reinterprets it as BGRA,
+rotates 180, and saves a PNG. It does not follow the active framebuffer page or the Screen
+Rotation setting; a capture can show an older page or a different orientation.
 
 ## Driving the touchscreen (agent navigation)
 This lets an agent navigate the UI: capture a screenshot, read the coordinate of the thing to touch,
 and tap it. Coordinates are screen coordinates (0..359, top-left origin) matching the upright PNG from
-`diskos-shot.sh`; the injector applies the 180-degree panel rotation for you.
+`diskos-shot.sh`; the injector applies the 180-degree panel rotation for you. Use the default
+Screen Rotation setting; the injector does not read that setting.
 
 Build the injector once (any host with the Docker builder), then push it to the device:
 ```sh
@@ -79,7 +83,7 @@ Notes and limits:
   so this tool cannot press them; it only drives touch.
 - Taps reliably wake the screen and drive list rows and swipe navigation. A small non-list button can
   occasionally be missed if press and release fall in one UI input-read cycle (the tap holds contact
-  ~90ms to avoid this). If a control resists, use a list-row equivalent or a swipe.
+  ~220 ms to avoid this). If a control resists, use a list-row equivalent or a swipe.
 - On the round screen, a horizontal swipe changes pages; `y` near the center avoids the seek ring on
   Now Playing.
 
@@ -92,13 +96,14 @@ Notes and limits:
   `mq_ui` and do not immediately relaunch a **detached** replacement, it respawns the stock
   `/usr/bin/mq_ui`. `diskos-deploy.sh` handles this (relaunch with `setsid </dev/null`, then prune any
   stock instance). To return to stock on purpose, just `killall mq_ui` and let the watchdog respawn it.
-- **Hand-deploys are not persistent.** The S97 boot hook verifies `/usr/data/mq_ui` against a
-  read-only manifest and restores the flashed build on reboot. Iterate freely; reboot to reset.
+- **Hand-deploys are not persistent.** The S97 boot hook checks `/usr/data/mq_ui`
+  against the selected signed update or the read-only flashed manifest and restores that build
+  on reboot. Iterate freely; reboot to reset.
 
 ## Debugging playback / IPC
 - Player log: `/usr/data/fiio/log/fiio_player.log`
-- PCM state: `/proc/asound/card*/pcm*p/sub*/status` (`RUNNING` means audio is actually playing)
-- Send a raw `/player` command frame: `/usr/data/psend <FRAME>` (on the device)
+- PCM state: `/proc/asound/card*/pcm*p/sub*/status` (`RUNNING` means the PCM stream is active; it does not establish audible output)
+- Raw `/player` frames require a separately installed sender; the release does not bundle one.
 
 ## Notes
 - The device is 2.4 GHz Wi-Fi only; SSH can blip occasionally. The scripts use short connect timeouts;

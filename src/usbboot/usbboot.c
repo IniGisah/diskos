@@ -22,7 +22,19 @@
  *
  ****************************************************************************/
 
+#define _POSIX_C_SOURCE 200809L
+#if defined(_WIN32) && !defined(_WIN32_WINNT)
+#define _WIN32_WINNT 0x0a00
+#endif
 #include <libusb.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <setupapi.h>
+#include <winusb.h>
+#include <wchar.h>
+#else
+#include <time.h>
+#endif
 #include <getopt.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -30,6 +42,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stddef.h>
 
 #define VR_GET_CPU_INFO     0
 #define VR_SET_DATA_ADDRESS 1
@@ -120,7 +133,7 @@ long g_read_ops = -1;   /* read-op override; -1 = default (g_med<<16). Decouples
 int g_handshake = 1;    /* do the cloner's VR_READ post-handshake (bReq 0x19 read 8B, then trailing GET_ACK) */
 int g_strcmd = 0;       /* cloner string protocol: send "cmd:read,..." via VR_UPDATE_CFG+bulk before VR_READ */
 const char *g_cfg1 = NULL, *g_cfg2 = NULL;   /* captured SFC-NAND enable blobs to replay verbatim */
-int g_cmd_retries = 1;  /* retry vendor/bulk transfers N times on error (env USBBOOT_RETRIES) for a flaky link */
+int g_cmd_retries = 1;  /* retry non-start vendor controls N times on error (env USBBOOT_RETRIES) for a flaky link */
 int g_cmd_to = 1000;    /* per-attempt control timeout ms (env USBBOOT_TIMEOUT) */
 
 /* Utility functions */
@@ -146,26 +159,138 @@ void verbose(const char* msg, ...)
     va_end(ap);
 }
 
+/* Fixed bounds; retain the Linux-qualified 4 MiB request size for measurement. */
+#define BULK_BYTES (4 << 20)
+#define BULK_MS 600000
+#define REOPEN_MS 30000
+static uint8_t saved_bus, saved_ports[8];
+static int saved_depth;
+static bool saved_location, stage1_pending;
+static bool observe_spl, observe_all_start1;
+extern unsigned long s1_exec_addr;
+
+static uint64_t monotonic_ms(void)
+{
+#ifdef _WIN32
+    return GetTickCount64();
+#else
+    struct timespec ts;
+    if(clock_gettime(CLOCK_MONOTONIC, &ts)) die("Monotonic clock failed");
+    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+#endif
+}
+
+static void rediscovery_pause(void)
+{
+#ifdef _WIN32
+    Sleep(100);
+#else
+    struct timespec ts = {0, 100000000};
+    nanosleep(&ts, NULL);
+#endif
+}
+
+/* Keep the list alive until the selected device has been opened/observed. */
+static int find_target(libusb_device ***list, libusb_device **target, bool observing)
+{
+    ssize_t n = libusb_get_device_list(NULL, list);
+    if(n < 0) {
+        if(!observing) die("USB enumeration failed: %d", (int)n);
+        fprintf(stderr, "Observation: USB enumeration failed: %d\n", (int)n);
+        return -1;
+    }
+    int count = 0;
+    for(ssize_t i = 0; i < n; ++i) {
+        struct libusb_device_descriptor desc;
+        int ret = libusb_get_device_descriptor((*list)[i], &desc);
+        if(ret < 0) {
+            if(!observing) die("USB descriptor failed: %d", ret);
+            fprintf(stderr, "Observation: USB descriptor failed: %d\n", ret);
+            return -1;
+        }
+        if(desc.idVendor == g_vid && desc.idProduct == g_pid) {
+            *target = (*list)[i]; ++count;
+        }
+    }
+    return count;
+}
+
+static bool target_location(libusb_device *dev, bool remember)
+{
+    uint8_t ports[8], bus = libusb_get_bus_number(dev);
+    int depth = libusb_get_port_numbers(dev, ports, sizeof(ports));
+    if(depth <= 0) {
+        if(remember) die("Cannot establish physical USB port path: %d", depth);
+        fprintf(stderr, "Observation: Cannot establish physical USB port path: %d\n", depth);
+        return false;
+    }
+    fprintf(stderr, "USB location bus=%u ports=", bus);
+    for(int i = 0; i < depth; ++i) fprintf(stderr, "%s%u", i ? "." : "", ports[i]);
+    fprintf(stderr, " address=%u\n", libusb_get_device_address(dev));
+    bool same = !saved_location || (bus == saved_bus && depth == saved_depth &&
+                                   !memcmp(ports, saved_ports, depth));
+    if(remember && !saved_location) {
+        saved_bus = bus; saved_depth = depth;
+        memcpy(saved_ports, ports, depth); saved_location = true;
+    }
+    return same;
+}
+
+static void observe_stage1(void)
+{
+    if(!stage1_pending) return;
+    libusb_device **list = NULL, *target = NULL;
+    int count = find_target(&list, &target, true);
+    if(count < 0) {
+        if(list) libusb_free_device_list(list, 1);
+        return;
+    }
+    unsigned char config = 0;
+    /* Query the old handle directly; Windows get_configuration can be cached. */
+    int ret = libusb_control_transfer(g_usb_dev, LIBUSB_ENDPOINT_IN,
+        LIBUSB_REQUEST_GET_CONFIGURATION, 0, 0, &config, 1, 1000);
+    const char *state = count == 0 ? "absent" : count > 1 ? "ambiguous" :
+                       target_location(target, false) ? "same-location" : "changed-location";
+    fprintf(stderr, "After stage1: target=%s old-handle=%d configuration=%d\n",
+            state, ret, ret == 1 ? config : -1);
+    libusb_free_device_list(list, 1);
+}
+
 void open_usb(void)
 {
+    bool reopening = saved_location;
     if(g_usb_dev) {
         verbose("Closing USB device");
-        libusb_close(g_usb_dev);
+        libusb_release_interface(g_usb_dev, 0);
+        libusb_close(g_usb_dev); g_usb_dev = NULL;
     }
-
     if(g_vid == 0 || g_pid == 0)
         die("Can't open USB device: vendor/product ID not specified");
-
-    verbose("Opening USB device %04x:%04x", g_vid, g_pid);
-    g_usb_dev = libusb_open_device_with_vid_pid(NULL, g_vid, g_pid);
-    if(!g_usb_dev)
-        die("Could not open USB device");
-
-    int ret = libusb_claim_interface(g_usb_dev, 0);
-    if(ret != 0) {
-        libusb_close(g_usb_dev);
-        die("Could not claim interface: %d", ret);
+    uint64_t deadline = monotonic_ms() + REOPEN_MS;
+    for(;;) {
+        libusb_device **list = NULL, *target = NULL;
+        int count = find_target(&list, &target, false);
+        if(count > 1) die("Ambiguous USB target: %d matching devices", count);
+        if(count == 1) {
+            if(!target_location(target, true)) die("USB target changed physical location");
+            int ret = libusb_open(target, &g_usb_dev);
+            libusb_free_device_list(list, 1);
+            if(ret != 0) die("Could not open USB device: %d", ret);
+            ret = libusb_claim_interface(g_usb_dev, 0);
+            if(ret != 0) {
+                libusb_close(g_usb_dev); g_usb_dev = NULL;
+                die("Could not claim interface: %d", ret);
+            }
+            if(reopening && monotonic_ms() >= deadline) die("USB reconnect deadline exceeded");
+            fprintf(stderr, "USB %s: unique target claimed\n", reopening ? "reopened" : "opened");
+            break;
+        }
+        libusb_free_device_list(list, 1);
+        if(!reopening) die("Could not open USB device: target absent");
+        if(monotonic_ms() >= deadline) die("USB reconnect deadline exceeded");
+        rediscovery_pause();
     }
+    stage1_pending = false;
     { char* e; if((e=getenv("USBBOOT_RETRIES"))) g_cmd_retries=atoi(e); if(g_cmd_retries<1) g_cmd_retries=1;
       if((e=getenv("USBBOOT_TIMEOUT"))) g_cmd_to=atoi(e); if(g_cmd_to<10) g_cmd_to=1000;
       if(g_cmd_retries>1) verbose("retry mode: %d tries x %dms", g_cmd_retries, g_cmd_to); }
@@ -173,8 +298,8 @@ void open_usb(void)
 
 void ensure_usb(void)
 {
-    if(!g_usb_dev)
-        open_usb();
+    if(!g_usb_dev) open_usb();
+    if(stage1_pending) { observe_stage1(); stage1_pending = false; }
 }
 
 /* USB communication functions */
@@ -196,55 +321,328 @@ void jz_get_cpu_info(void)
     printf("CPU info: %s\n", buf);
 }
 
-void jz_upload(const char* filename, int length)
+/* Windows diagnostic: identity and transfers use one exact interface path.
+ * libusb 1.0.27 exposes neither its Windows file handle nor wrap_sys_device.
+ * Use the same CreateFile/WinUsb_Initialize sequence as its WinUSB backend,
+ * without depending on private library structures. */
+#ifdef _WIN32
+#define DIAG_CAP 4096
+#define DIAG_APIS(X) \
+    X(SetupDiGetClassDevsW) X(SetupDiEnumDeviceInfo) \
+    X(SetupDiGetDeviceInstanceIdW) X(SetupDiOpenDevRegKey) \
+    X(SetupDiEnumDeviceInterfaces) X(SetupDiGetDeviceInterfaceDetailW) \
+    X(SetupDiDestroyDeviceInfoList)
+#define DIAG_DECLARE(name) static __typeof__(&name) diag_##name;
+DIAG_APIS(DIAG_DECLARE)
+DIAG_DECLARE(RegQueryValueExW)
+DIAG_DECLARE(RegCloseKey)
+DIAG_DECLARE(WinUsb_Initialize)
+DIAG_DECLARE(WinUsb_Free)
+DIAG_DECLARE(WinUsb_SetPipePolicy)
+DIAG_DECLARE(WinUsb_ControlTransfer)
+#undef DIAG_DECLARE
+
+struct diagnostic_modules { HMODULE setup, adv, win; };
+
+static bool diagnostic_apis(struct diagnostic_modules *modules)
 {
-    if(length < 0)
-        die("invalid upload length: %d", length);
-
-    ensure_usb();
-    verbose("Transfer %d bytes from device to host", length);
-
-    void* data = malloc(length);
-    int total = 0;
-    while(total < length) {
-        int xfered = 0;
-        int want = length - total;
-        if(want > (4<<20)) want = 4<<20;   /* 4MB per bulk transfer */
-        int ret = libusb_bulk_transfer(g_usb_dev, LIBUSB_ENDPOINT_IN | 1,
-                                       (unsigned char*)data + total, want, &xfered, 600000);
-        if(ret != 0 && xfered == 0)
-            die("Transfer failed at %d/%d: %d", total, length, ret);
-        total += xfered;
-    }
-    if(total != length)
-        die("Transfer error: got %d bytes, expected %d", total, length);
-
-    FILE* f = fopen(filename, "wb");
-    if(f == NULL)
-        die("Can't open file '%s' for writing", filename);
-
-    if(fwrite(data, length, 1, f) != 1)
-        die("Error writing transfered data to file");
-
-    fclose(f);
-    free(data);
+    /* No extra static imports, and no search of the bundle/current directory. */
+    modules->setup = LoadLibraryExW(L"setupapi.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if(!modules->setup) return false;
+    modules->adv = LoadLibraryExW(L"advapi32.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if(!modules->adv) return false;
+    modules->win = LoadLibraryExW(L"winusb.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if(!modules->win) return false;
+#define DIAG_RESOLVE(module, name) \
+    diag_##name = (__typeof__(&name))(void *)GetProcAddress(modules->module, #name); \
+    if(!diag_##name) return false;
+#define DIAG_SETUP(name) DIAG_RESOLVE(setup, name)
+    DIAG_APIS(DIAG_SETUP)
+    DIAG_RESOLVE(adv, RegQueryValueExW)
+    DIAG_RESOLVE(adv, RegCloseKey)
+    DIAG_RESOLVE(win, WinUsb_Initialize)
+    DIAG_RESOLVE(win, WinUsb_Free)
+    DIAG_RESOLVE(win, WinUsb_SetPipePolicy)
+    DIAG_RESOLVE(win, WinUsb_ControlTransfer)
+#undef DIAG_SETUP
+#undef DIAG_RESOLVE
+    return true;
 }
 
-void bulk_transfer_out(void* data, int length) {
-  verbose("Transfer %d bytes from host to device", length);
-  int total = 0;
-  while(total < length) {
-    int xfered = 0;
-    int want = length - total;
-    if(want > (4<<20)) want = 4<<20;   /* 4MB per bulk transfer */
-    int ret = libusb_bulk_transfer(g_usb_dev, LIBUSB_ENDPOINT_OUT | 1,
-				 (unsigned char*)data + total, want, &xfered, 600000);
-    if(ret != 0 && xfered == 0)
-      die("Transfer failed at %d/%d: %d", total, length, ret);
-    total += xfered;
-  }
-  if(total != length)
-    die("Transfer error: %d sent, expected %d", total, length);
+/* Parse a registered GUID with fixed bounds; no ole32/rpcrt4 dependency. */
+static bool diagnostic_guid(const wchar_t *text, GUID *guid)
+{
+    unsigned int part[11];
+    if(wcslen(text) != 38 || text[0] != L'{' || text[37] != L'}') return false;
+    for(int i = 1; i < 37; i++) {
+        if(i == 9 || i == 14 || i == 19 || i == 24) {
+            if(text[i] != L'-') return false;
+        } else if(!((text[i] >= L'0' && text[i] <= L'9') ||
+                    (text[i] >= L'a' && text[i] <= L'f') ||
+                    (text[i] >= L'A' && text[i] <= L'F'))) return false;
+    }
+    if(swscanf(text, L"{%8x-%4x-%4x-%2x%2x-%2x%2x%2x%2x%2x%2x}",
+               &part[0], &part[1], &part[2], &part[3], &part[4], &part[5],
+               &part[6], &part[7], &part[8], &part[9], &part[10]) != 11) return false;
+    guid->Data1 = part[0]; guid->Data2 = part[1]; guid->Data3 = part[2];
+    for(int i = 0; i < 8; i++) guid->Data4[i] = part[i + 3];
+    return true;
+}
+
+static bool diagnostic_path_id(const wchar_t *path, wchar_t *instance)
+{
+    /* USB interface symbolic links encode the instance before the final GUID.
+     * Verify that encoding against SetupAPI before opening this immutable path. */
+    if(wcsncmp(path, L"\\\\?\\", 4)) return false;
+    const wchar_t *end = wcsrchr(path + 4, L'#');
+    GUID guid;
+    if(!end || !diagnostic_guid(end + 1, &guid)) return false;
+    size_t n = (size_t)(end - (path + 4));
+    if(!n || n >= DIAG_CAP) return false;
+    for(size_t i = 0; i < n; i++) instance[i] = path[i + 4] == L'#' ? L'\\' : path[i + 4];
+    instance[n] = 0;
+    return !_wcsnicmp(instance, L"USB\\VID_A108&PID_EAEF\\", 22);
+}
+
+static void diagnostic_json_id(const wchar_t *id)
+{
+    if(!*id) { printf("null"); return; }
+    putchar('"');
+    for(; *id; id++) {
+        unsigned int c = (unsigned short)*id;
+        if(c == '"' || c == '\\') printf("\\%c", c);
+        else if(c < 32 || c > 126) printf("\\u%04x", c);
+        else putchar(c);
+    }
+    putchar('"');
+}
+
+static int windows_native_diagnostic(void)
+{
+    const char *status = "init";
+    int count = 0, length = -1;
+    DWORD error = ERROR_INVALID_DATA, size, type;
+    unsigned char raw[8] = {0};
+    wchar_t instance[DIAG_CAP] = {0}, candidate[DIAG_CAP], guids[DIAG_CAP] = {0};
+    wchar_t opened[DIAG_CAP] = {0}, metadata[DIAG_CAP];
+    struct diagnostic_modules modules = {0};
+    HDEVINFO set = INVALID_HANDLE_VALUE;
+    HDEVINFO interfaces = INVALID_HANDLE_VALUE;
+    HANDLE file = INVALID_HANDLE_VALUE;
+    HKEY key = INVALID_HANDLE_VALUE;
+    WINUSB_INTERFACE_HANDLE win = NULL;
+    SP_DEVINFO_DATA dev = {0}, selected = {0};
+    if(!diagnostic_apis(&modules)) { error = GetLastError(); goto done; }
+    status = "enumerate";
+    set = diag_SetupDiGetClassDevsW(NULL, L"USB", NULL, DIGCF_PRESENT | DIGCF_ALLCLASSES);
+    if(set == INVALID_HANDLE_VALUE) { error = GetLastError(); goto done; }
+    for(DWORD i = 0;; i++) {
+        dev.cbSize = sizeof(dev);
+        if(!diag_SetupDiEnumDeviceInfo(set, i, &dev)) {
+            error = GetLastError();
+            if(error == ERROR_NO_MORE_ITEMS) break;
+            goto done;
+        }
+        if(!diag_SetupDiGetDeviceInstanceIdW(set, &dev, candidate, DIAG_CAP, NULL)) {
+            error = GetLastError(); goto done;
+        }
+        if(!_wcsnicmp(candidate, L"USB\\VID_A108&PID_EAEF\\", 22)) {
+            count++; selected = dev; wcscpy(instance, candidate);
+        }
+    }
+    error = ERROR_INVALID_DATA;
+    if(count != 1) { status = count ? "ambiguous" : "absent"; goto done; }
+    status = "identity";
+    /* The in-box WinUSB binding can expose only GUID_DEVINTERFACE_USB_DEVICE.
+     * Registry interface GUIDs are optional additional candidates. */
+    const GUID usb_device = {0xa5dcbf10, 0x6530, 0x11d2,
+                             {0x90, 0x1f, 0x00, 0xc0, 0x4f, 0xb9, 0x51, 0xed}};
+    size_t guid_chars = 0;
+    key = diag_SetupDiOpenDevRegKey(set, &selected, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ);
+    if(key != INVALID_HANDLE_VALUE) {
+        size = sizeof(guids);
+        LONG rc = diag_RegQueryValueExW(key, L"DeviceInterfaceGUIDs", NULL, &type, (BYTE *)guids, &size);
+        if(rc == ERROR_FILE_NOT_FOUND) {
+            size = sizeof(guids);
+            rc = diag_RegQueryValueExW(key, L"DeviceInterfaceGUID", NULL, &type, (BYTE *)guids, &size);
+        }
+        if(!rc && (type == REG_SZ || type == REG_MULTI_SZ) && size >= 2 * sizeof(wchar_t) &&
+           size <= sizeof(guids) && !(size % sizeof(wchar_t)) && !guids[size / sizeof(wchar_t) - 1])
+            guid_chars = size / sizeof(wchar_t);
+    }
+    /* Try the standard class first, retaining only the selected instance. */
+    bool standard = true;
+    for(size_t offset = 0; standard || (offset < guid_chars && guids[offset]);) {
+        GUID guid = usb_device;
+        if(!standard) {
+            wchar_t *text = guids + offset;
+            offset += wcslen(text) + 1;
+            if(!diagnostic_guid(text, &guid)) continue;
+        }
+        standard = false;
+        interfaces = diag_SetupDiGetClassDevsW(&guid, instance, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+        if(interfaces == INVALID_HANDLE_VALUE) { error = GetLastError(); goto done; }
+        SP_DEVICE_INTERFACE_DATA iface = {0};
+        iface.cbSize = sizeof(iface);
+        if(!diag_SetupDiEnumDeviceInterfaces(interfaces, NULL, &guid, 0, &iface)) {
+            error = GetLastError();
+            if(error == ERROR_NO_MORE_ITEMS) {
+                diag_SetupDiDestroyDeviceInfoList(interfaces); interfaces = INVALID_HANDLE_VALUE;
+                error = ERROR_INVALID_DATA; continue;
+            }
+            goto done;
+        }
+        /* Aligned fixed storage, including the variable-length DevicePath. */
+        union { SP_DEVICE_INTERFACE_DETAIL_DATA_W detail; wchar_t storage[DIAG_CAP]; } path;
+        memset(&path, 0, sizeof(path)); path.detail.cbSize = sizeof(path.detail);
+        dev.cbSize = sizeof(dev);
+        if(!diag_SetupDiGetDeviceInterfaceDetailW(interfaces, &iface, &path.detail, sizeof(path), &size, &dev)) {
+            error = GetLastError(); goto done;
+        }
+        error = ERROR_INVALID_DATA;
+        if(size > sizeof(path) || size < sizeof(path.detail) ||
+           !wmemchr(path.detail.DevicePath, 0, (sizeof(path) - offsetof(SP_DEVICE_INTERFACE_DETAIL_DATA_W, DevicePath)) / sizeof(wchar_t)) ||
+           !diagnostic_path_id(path.detail.DevicePath, candidate) || _wcsicmp(instance, candidate)) goto done;
+        if(!diag_SetupDiGetDeviceInstanceIdW(interfaces, &dev, metadata, DIAG_CAP, NULL)) {
+            error = GetLastError(); goto done;
+        }
+        if(_wcsicmp(candidate, metadata)) goto done;
+        status = "open";
+        file = CreateFileW(path.detail.DevicePath, GENERIC_READ | GENERIC_WRITE,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+        if(file == INVALID_HANDLE_VALUE) { error = GetLastError(); goto done; }
+        /* Only publish the ID encoded by the path that CreateFile actually opened. */
+        wcscpy(opened, candidate);
+        break;
+    }
+    if(file == INVALID_HANDLE_VALUE) goto done;
+    status = "claim";
+    if(!diag_WinUsb_Initialize(file, &win)) { error = GetLastError(); goto done; }
+    status = "control";
+    ULONG timeout = 1000, transferred = 0;
+    if(!diag_WinUsb_SetPipePolicy(win, 0, PIPE_TRANSFER_TIMEOUT, sizeof(timeout), &timeout)) {
+        error = GetLastError(); goto done;
+    }
+    WINUSB_SETUP_PACKET packet = {0xc0, VR_GET_CPU_INFO, 0, 0, sizeof(raw)};
+    if(!diag_WinUsb_ControlTransfer(win, packet, raw, sizeof(raw), &transferred, NULL)) {
+        error = GetLastError(); goto done;
+    }
+    error = ERROR_INVALID_DATA;
+    if(transferred > sizeof(raw)) goto done;
+    length = (int)transferred; status = "raw"; error = 0;
+done:
+    if(win) diag_WinUsb_Free(win);
+    if(file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    if(key != INVALID_HANDLE_VALUE) diag_RegCloseKey(key);
+    if(interfaces != INVALID_HANDLE_VALUE) diag_SetupDiDestroyDeviceInfoList(interfaces);
+    if(set != INVALID_HANDLE_VALUE) diag_SetupDiDestroyDeviceInfoList(set);
+    /* Keep the saved operation error even when cleanup changes GetLastError. */
+    if(modules.win) FreeLibrary(modules.win);
+    if(modules.adv) FreeLibrary(modules.adv);
+    if(modules.setup) FreeLibrary(modules.setup);
+    printf("{\"schema\":1,\"status\":\"%s\",\"count\":%d,\"error\":%lu,\"length\":%d,\"hex\":\"",
+           status, count, (unsigned long)error, length);
+    for(int i = 0; i < length; i++) printf("%02x", raw[i]);
+    printf("\",\"instance_id\":"); diagnostic_json_id(opened); printf("}\n");
+    return error == 0 ? 0 : 1;
+}
+#endif
+
+/* Standalone raw diagnostic; short replies never identify the CPU. */
+static int native_diagnostic(void)
+{
+#ifdef _WIN32
+    return windows_native_diagnostic();
+#else
+    libusb_device **devices = NULL, *target = NULL;
+    libusb_device_handle *handle = NULL;
+    const char *status = "init";
+    int ret = libusb_init(NULL), count = 0, length = -1, claimed = 0;
+    unsigned char raw[8] = {0};
+    if(ret < 0) goto report;
+    ssize_t n = libusb_get_device_list(NULL, &devices);
+    status = "enumerate";
+    if(n < 0) { ret = (int)n; goto done; }
+    for(ssize_t i = 0; i < n; i++) {
+        struct libusb_device_descriptor desc;
+        ret = libusb_get_device_descriptor(devices[i], &desc);
+        if(ret < 0) goto done; /* Incomplete enumeration cannot prove uniqueness. */
+        if(desc.idVendor == 0xa108 && desc.idProduct == 0xeaef) {
+            target = devices[i]; count++;
+        }
+    }
+    if(count != 1) { status = count ? "ambiguous" : "absent"; ret = -1; goto done; }
+    status = "open";
+    ret = libusb_open(target, &handle);
+    if(ret < 0) goto done;
+    status = "claim";
+    ret = libusb_claim_interface(handle, 0);
+    if(ret < 0) goto done;
+    claimed = 1;
+    status = "control";
+    ret = libusb_control_transfer(handle,
+        LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE,
+        VR_GET_CPU_INFO, 0, 0, raw, sizeof(raw), 1000);
+    if(ret >= 0 && ret <= 8) { length = ret; status = "raw"; ret = 0; }
+    else if(ret >= 0) ret = -1;
+done:
+    if(claimed) libusb_release_interface(handle, 0);
+    if(handle) libusb_close(handle);
+    if(devices) libusb_free_device_list(devices, 1);
+    libusb_exit(NULL);
+report:
+    printf("{\"schema\":1,\"status\":\"%s\",\"count\":%d,\"error\":%d,\"length\":%d,\"hex\":\"",
+           status, count, ret, length);
+    for(int i = 0; i < length; i++) printf("%02x", raw[i]);
+    printf("\"}\n");
+    return ret == 0 ? 0 : 1;
+#endif
+}
+
+static void bulk_transfer(void *data, int length, unsigned char endpoint)
+{
+    if(length < 0) die("Invalid bulk length: %d", length);
+    uint64_t start = monotonic_ms(), deadline = start + BULK_MS;
+    int total = 0;
+    while(total < length) {
+        uint64_t now = monotonic_ms();
+        if(now >= deadline) die("Bulk deadline exceeded at %d/%d", total, length);
+        int want = length - total, xfered = 0;
+        if(want > BULK_BYTES) want = BULK_BYTES;
+        int ret = libusb_bulk_transfer(g_usb_dev, endpoint,
+            (unsigned char*)data + total, want, &xfered, (unsigned int)(deadline - now));
+        if(ret != 0 || xfered <= 0 || xfered > want)
+            die("Bulk failed at %d/%d: result=%d bytes=%d requested=%d; no retry",
+                total, length, ret, xfered, want);
+        total += xfered;
+        if(monotonic_ms() >= deadline) die("Bulk deadline exceeded at %d/%d", total, length);
+    }
+    fprintf(stderr, "Bulk endpoint=0x%02x bytes=%d request-max=%d elapsed-ms=%llu\n",
+            endpoint, total, BULK_BYTES, (unsigned long long)(monotonic_ms() - start));
+}
+
+void bulk_transfer_in(void *data, int length)
+{
+    bulk_transfer(data, length, LIBUSB_ENDPOINT_IN | 1);
+}
+
+void bulk_transfer_out(void *data, int length)
+{
+    bulk_transfer(data, length, LIBUSB_ENDPOINT_OUT | 1);
+}
+
+void jz_upload(const char* filename, int length)
+{
+    if(length < 0) die("invalid upload length: %d", length);
+    ensure_usb();
+    void* data = malloc(length ? length : 1);
+    if(!data) die("Cannot allocate upload buffer");
+    bulk_transfer_in(data, length);
+    FILE* f = fopen(filename, "wb");
+    if(f == NULL) die("Can't open file '%s' for writing", filename);
+    if(fwrite(data, 1, length, f) != (size_t)length || fclose(f))
+        die("Error writing transferred data to file");
+    free(data);
 }
 
 #define jz_vendor_out_func(name, type, fmt) \
@@ -252,14 +650,19 @@ void bulk_transfer_out(void* data, int length) {
         ensure_usb(); \
         verbose("Issue " #type fmt, param); \
         int ret=-1,_t; \
-        for(_t=0;_t<g_cmd_retries;_t++){ \
+        int tries = (VR_##type == VR_PROGRAM_START1 || VR_##type == VR_PROGRAM_START2) ? 1 : g_cmd_retries; \
+        for(_t=0;_t<tries;_t++){ \
           ret = libusb_control_transfer(g_usb_dev, \
             LIBUSB_ENDPOINT_OUT|LIBUSB_REQUEST_TYPE_VENDOR|LIBUSB_RECIPIENT_DEVICE, \
             VR_##type, param >> 16, param & 0xffff, NULL, 0, g_cmd_to); \
           if(ret==0) break; \
         } \
+        if(VR_##type == VR_PROGRAM_START1) { \
+            stage1_pending = observe_all_start1 || (observe_spl && param == s1_exec_addr); \
+            observe_stage1(); \
+        } \
         if(ret != 0) \
-            die("Request " #type " failed: %d (after %d tries)", ret, g_cmd_retries); \
+            die("Request " #type " failed: %d (after %d tries)", ret, tries); \
     }
 
 jz_vendor_out_func(jz_set_data_address, SET_DATA_ADDRESS, " 0x%08lx")
@@ -416,15 +819,7 @@ void mmc_read(uint32_t offset, uint32_t length, unsigned char* out) {
             r, ack[0],ack[1],ack[2],ack[3], ack[4],ack[5],ack[6],ack[7]);
   }
 
-  int total = 0;
-  while (total < (int)length) {
-    int xfered = 0;
-    int ret = libusb_bulk_transfer(g_usb_dev, LIBUSB_ENDPOINT_IN | 1,
-			       out + total, length - total, &xfered, 600000);
-    if(ret != 0)
-      die("read bulk failed at %d/%u: %d", total, length, ret);
-    total += xfered;
-  }
+  bulk_transfer_in(out, length);
 
   /* Trailing per-chunk ack the cloner reads after the data (bRequest 0x10). */
   if (g_handshake) {
@@ -678,6 +1073,9 @@ Advanced options:\n\
   --pid <pid>        Specify USB product ID\n\
   --swap-ota         Switch OTA between kernel/kernel2\n\
   --force-swap-ota   Ignore unknown OTA value, write ota:kernel to OTA\n\
+  --native-diagnostic Standalone raw open/claim/control JSON (no identity verdict)\n\
+  --observe-stage1  Log post-SPL observations (diagnostic opt-in, before --stage1)\n\
+  --observe-start1  Also observe other START1 addresses (including writers)\n\
   --cpuinfo          Ask device for CPU info\n\
   --addr <addr>      Set data address\n\
   --length <len>     Set data length\n\
@@ -721,6 +1119,13 @@ int main(int argc, char* argv[])
     if(argc <= 1)
         usage();
 
+    for(int i = 1; i < argc; i++) {
+        if(strcmp(argv[i], "--native-diagnostic") != 0) continue;
+        if(argc == 2) return native_diagnostic();
+        fprintf(stderr, "--native-diagnostic must be used alone\n");
+        return 1;
+    }
+
     libusb_init(NULL);
     atexit(cleanup);
 
@@ -730,7 +1135,7 @@ int main(int argc, char* argv[])
         OPT_VID = 0x100, OPT_PID,
         OPT_CPUINFO,
         OPT_START1, OPT_START2, OPT_FLUSH_CACHES,
-        OPT_RENUMERATE, OPT_WAIT, OPT_SWAP_OTA,
+        OPT_RENUMERATE, OPT_WAIT, OPT_SWAP_OTA, OPT_OBSERVE_STAGE1, OPT_OBSERVE_START1,
 	OPT_FORCE_SWAP_OTA, OPT_DUMP_PARITION, OPT_MED, OPT_CFG1, OPT_CFG2, OPT_OPS, OPT_HS, OPT_PROBE, OPT_STRCMD
     };
 
@@ -752,6 +1157,8 @@ int main(int argc, char* argv[])
         {"start2", required_argument, 0, OPT_START2},
         {"flush-caches", no_argument, 0, OPT_FLUSH_CACHES},
         {"renumerate", no_argument, 0, OPT_RENUMERATE},
+        {"observe-stage1", no_argument, 0, OPT_OBSERVE_STAGE1},
+        {"observe-start1", no_argument, 0, OPT_OBSERVE_START1},
         {"wait", required_argument, 0, OPT_WAIT},
         {"swap-ota", no_argument, 0, OPT_SWAP_OTA},
         {"force-swap-ota", no_argument, 0, OPT_FORCE_SWAP_OTA},
@@ -815,6 +1222,12 @@ int main(int argc, char* argv[])
         case 'v':
             g_verbose = true;
             break;
+        case OPT_OBSERVE_STAGE1:
+            observe_spl = true;
+            break;
+        case OPT_OBSERVE_START1:
+            observe_all_start1 = true;
+            break;
         case 'c':
             apply_cpu_profile(optarg);
             break;
@@ -863,6 +1276,7 @@ int main(int argc, char* argv[])
         case OPT_WAIT:
             verbose("Wait %lu seconds", param);
             sleep(param);
+            if(stage1_pending) observe_stage1();
             break;
         case OPT_MED:
             g_med = (int)param;

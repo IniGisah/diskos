@@ -6,17 +6,18 @@ machines - not just copies of the build host's dynamically-linked binaries.
 
 | tool | why bundled | portability requirement |
 |---|---|---|
-| `usbboot` | Ingenic mask-ROM USB loader (the flasher) | Build **static** against libusb compiled `--disable-udev` (drops libudev + libcap; libusb falls back to sysfs enumeration). `usbboot` has **no direct udev symbols** - they were only transitive via libusb - so this yields a binary needing only libc. Prefer full-static (musl) or, at minimum, `$ORIGIN/lib` rpath + a bundled `libusb-1.0.so` in `vendor/<tag>/lib/`. Do **not** ship arbitrary host glibc `.so`s or rely on `LD_LIBRARY_PATH` as the primary strategy. |
+| `usbboot` | Ingenic mask-ROM USB loader (the flasher) | Build **static** against libusb compiled `--disable-udev` (drops libudev + libcap; libusb falls back to sysfs enumeration). `usbboot` has **no direct udev symbols**; libusb uses the sysfs backend when udev is disabled. Prefer full-static (musl) or, at minimum, `$ORIGIN/lib` rpath + a bundled `libusb-1.0.so` in `vendor/<tag>/lib/`. Do **not** ship arbitrary host glibc `.so`s or rely on `LD_LIBRARY_PATH` as the primary strategy. |
 | `mksquashfs`, `unsquashfs` | build/extract the rootfs image | Ship **static** squashfs-tools (with lzo support - the stock image uses `-comp lzo`). |
-| `my_write6_dram.bin` | the DRAM NAND writer run on-device | Architecture-neutral blob (runs on the device, not the host). Copy as-is; the installer only runs this exact build (SHA-256 pinned in `flasher.py`). |
+| `my_write6_dram.bin` | the DRAM NAND writer run on-device | Host-architecture independent MIPS blob (runs on the device). Copy as-is; the installer only runs this exact build (SHA-256 pinned in `flasher.py`). |
 | `disc_spl_lpddr3.bin` | X2000 SPL | Same - device blob, copy as-is. |
 
 ## Status
 
-- `vendor/linux-x86_64/` holds **fully static** `usbboot`, `mksquashfs`, and
-  `unsquashfs`, produced by `build/build-usbboot-static.sh` and
-  `build/build-squashfs-static.sh`. The squashfs build runs an LZO round-trip self-test;
-  it may produce dynamic binaries for local host use when static libraries are missing.
+- Linux release tools must be **fully static**. Build `usbboot` with
+  `build/build-usbboot-pinned.sh`, which produces a candidate and manifest outside
+  `vendor/`; copy both into `vendor/linux-x86_64/` together. Build `mksquashfs`
+  and `unsquashfs` with `build/build-squashfs-static.sh`; it may produce dynamic
+  binaries for local host use when static libraries are missing.
   `build/stage-release.sh` refuses any dynamic Linux host tool. The shipped tools are static
   against glibc (built with `gcc -static`), so no runtime `.so` is needed; note the
   static glibc/liblzo2/libusb licensing in `../NOTICE.md` and the corresponding source
@@ -25,21 +26,62 @@ machines - not just copies of the build host's dynamically-linked binaries.
 - `vendor/macos-*/` is produced on a Mac by **`vendor/setup-macos.sh`** (compiles
   `usbboot` from `src/usbboot/usbboot.c` against Homebrew libusb, gathers
   lzo-capable squashfs-tools, copies the device blobs, and runs `dylibbundler` so
-  every tool is self-contained under `vendor/macos-<arch>/lib/` - no Homebrew at
-  runtime). `usbboot.c` is a single libusb-only file (no udev / no Linux-isms), so
+  each tool has its non-system libraries under `vendor/macos-<arch>/lib/` - no Homebrew at
+  runtime). `usbboot.c` uses libusb with host-specific branches, so
   it builds on macOS as-is. Then `build/build-macos.sh` packages the app.
+
+## Windows x86_64 (build-only, Windows 10+)
+
+Use MSYS2 bash with these packages already installed: MSYS `gcc gcc-libs
+zlib-devel make patch tar gzip bzip2 diffutils binutils coreutils`,
+and UCRT64 `mingw-w64-ucrt-x86_64-gcc`, `mingw-w64-ucrt-x86_64-pkgconf`.
+The GCC package supplies the CRT/headers and depends on UCRT64 binutils.
+From the installer directory run:
+
+```sh
+bash build/build-windows-tools.sh
+```
+
+No downloads or package installation occur. The recipe builds the pinned
+squashfs-tools 4.6.1 archive with `corresponding-source/msys2-squashfs.patch`
+(MSYS POSIX branches and little-endian constants), and usbboot from `src/`
+against the pinned libusb 1.0.27 archive using UCRT64 static linking.
+It writes `vendor/windows-x86_64/{mksquashfs.exe,unsquashfs.exe,usbboot.exe,
+bind_winusb.exe,msys-2.0.dll}`, copies `my_write6_dram.bin` and
+`disc_spl_lpddr3.bin` byte for byte from tracked `flash/` inputs, and writes
+`MANIFEST.txt` with native input/output SHA256 hashes,
+source versions and compiler/runtime package versions. Reproduce with the
+recorded toolchain and runtime versions. The recipe fixes the build time,
+strips binaries and uses fresh source workspaces.
+
+The generated files and retained `vendor/.windows-build.*` and
+`vendor/windows-x86_64/.driver-build.*` workspaces are ignored. Packaging uses
+explicit file allowlists. Retain the printed manifest SHA256 outside the checkout;
+flash-enabled `build/build-windows.ps1` requires it via `-NativeManifestSha256`
+and verifies every native input/output hash and both blob copies. Follow
+`windows-qualification.md` for the clean-clone runsheet.
+An existing destination is refused. Keep the bundle outside the installed MSYS2
+root, with no `etc/fstab`; production uses the isolated runtime's `/cygdrive`
+prefix. Do not ship UCRT API-set DLLs: Windows 10+ supplies them (Microsoft Learn,
+[Universal CRT deployment](https://learn.microsoft.com/en-us/cpp/windows/universal-crt-deployment)).
+Only usbboot gets its twelve recorded UCRT import exemptions. Windows flashing
+is disabled by default; use `build/build-windows.ps1 -EnableWindowsFlash`
+to embed the capability, and follow the qualification runsheet for release packaging.
+Redistribution also requires the MSYS2 package sources/notices described in
+`../NOTICE.md`.
 
 ## Pinned macOS arm64 build inputs
 
 `vendor/setup-macos.sh` requires Homebrew squashfs 4.7.5, libusb 1.0.30,
-lzo 2.10, lz4 1.10.0, xz 5.8.4 and zstd 1.5.7. It fails if a different
-version is installed. `dylibbundler` relocates exactly five non-system dylibs:
+lzo 2.10, lz4 1.10.0, xz 5.8.4 and zstd 1.5.7_1 (Homebrew revision 1 of
+upstream zstd 1.5.7). It fails if a different version is installed.
+`dylibbundler` relocates exactly five non-system dylibs:
 `libusb-1.0.0.dylib`, `liblzo2.2.dylib`, `liblz4.1.10.0.dylib`,
 `liblzma.5.dylib`, and `libzstd.1.5.7.dylib`. `build/stage-release.sh`
 rejects any extra or missing library. Source archives, the squashfs patch,
 formula snapshots, hashes, licenses and LGPL libusb relink instructions are
 in `corresponding-source/macos-arm64/README.md` and `licenses/README.md`.
-The Linux release uses static tools and has no `vendor/<tag>/lib/` directory.
+The Linux release uses static tools and has no `vendor/linux-x86_64/lib/` directory.
 
 ## macOS: Intel + Apple Silicon coverage
 

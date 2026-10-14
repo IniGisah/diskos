@@ -338,7 +338,7 @@ static void cmd_tick(void){ tick(DBGP); }
 #else
 #define TICK(d) ((void)0)
 #endif
-/* the three base partitions, in physical 128 KiB blocks (fixed Disc layout, docs/HARDWARE.md / NOTES.md) */
+/* the three base partitions, in physical 128 KiB blocks (fixed Disc layout, docs/HARDWARE.md) */
 static const u32 PART_START[3] = { 16u, 1104u, 1168u };   /* kernel, kernel2 (recovery), rootfs2 (recovery) */
 static const u32 PART_BLOCKS[3] = { 64u, 64u, 200u };
 static const u32 PART_KIND[3] = { 0u, 0u, 1u };            /* 0 uImage, 1 squashfs */

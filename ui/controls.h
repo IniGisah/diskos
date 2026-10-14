@@ -2,7 +2,7 @@
 /* Copyright (C) 2026 diskOS contributors */
 /* Screen rotation and volume-key actions, on top of the stock V2.57 player's own backends.
  *
- * Stock facts (V2.57; evidence in tests/release/test_parity_controls.py and the report):
+ * Stock facts (V2.57):
  *   Screen rotation: SYSCONFIG.SCREEN_ROT (CFG[31]) is set by player tag 0646 (handler 0x4f1978: stores the first
  *     parameter byte, then CFG set 31). Stock mq_ui (0x420e24) maps the stored value 0,1,2,3 to lv_display_set_rotation
  *     2,3,0,1, i.e. the frame is turned 180, 270, 0, 90 degrees clockwise. The panel is mounted upside down, so stock's

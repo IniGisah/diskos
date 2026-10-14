@@ -37,6 +37,27 @@ vendor/*/*.bak
 vendor/*/lib/
 flash/usbboot
 
+# Windows recipe outputs; keep source and unexpected vendor files visible.
+/vendor/windows-x86_64/usbboot.exe
+/vendor/windows-x86_64/mksquashfs.exe
+/vendor/windows-x86_64/unsquashfs.exe
+/vendor/windows-x86_64/bind_winusb.exe
+/vendor/windows-x86_64/msys-2.0.dll
+/vendor/windows-x86_64/MANIFEST.txt
+/vendor/windows-x86_64/my_write6_dram.bin
+/vendor/windows-x86_64/disc_spl_lpddr3.bin
+/vendor/.windows-build.????????/
+/vendor/windows-x86_64/.driver-build.????????/
+
+# Authenticated runtime source assets staged for the Windows freeze.
+/corresponding-source/windows/msys2-runtime-3.6.10-6.src.tar.zst
+/corresponding-source/windows/msys2-runtime-3.6.10-6.src.tar.zst.sig
+
+# --- generated packaging inputs ---
+/vendor/linux-x86_64/usbboot.manifest
+/vendor/macos-arm64/disc_spl_lpddr3.bin
+/vendor/macos-arm64/my_write6_dram.bin
+
 # --- top-level duplicates of payload/* (keep only payload/) ---
 /mq_ui
 /S97diskos_install
@@ -44,7 +65,7 @@ flash/usbboot
 
 # --- deprecated/unsafe legacy shell installer (superseded by the Python installer; never publish) ---
 # Kept on disk for reference but excluded from the public repo AND the release tarball.
-INSTALL.md
+/INSTALL.md
 mkdiskos.sh
 flash/flash_diskos.sh
 flash/extract_stock_rootfs.sh
@@ -65,6 +86,36 @@ SHA256SUMS
 flash/qual_lpddr3.sh
 flash/scan_check.sh
 flash/my_write5_scan_dram.bin
+/payload/diskos-prefstat
+/ui/tools/diskos_prefstat.c
+/ui/tools/ttc_probe.c
+
+# --- excluded release documents and assets ---
+/docs/RELEASE_NOTES_1.2.0.md
+/licenses/Adobe-Glyph-List-NOTICE.txt
+/docs/assets/audiobook-np.png
+/docs/assets/books.png
+/docs/assets/chapters.png
+/docs/assets/quicksettings.png
+
+# --- legacy images retained locally after untracking ---
+/docs/assets/accent.png
+/docs/assets/alphabet.png
+/docs/assets/apps.png
+/docs/assets/coverflow.png
+/docs/assets/design-system-board.png
+/docs/assets/diskos-avatar.png
+/docs/assets/diskos-hero.png
+/docs/assets/eq.png
+/docs/assets/folders.png
+/docs/assets/home.png
+/docs/assets/lastfm.png
+/docs/assets/library.png
+/docs/assets/lyrics.png
+/docs/assets/now-playing.png
+/docs/assets/screensaver.png
+/docs/assets/search.png
+/docs/assets/weather.png
 
 # --- extra build/release scratch ---
 build/release/

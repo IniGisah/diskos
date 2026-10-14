@@ -11,7 +11,8 @@ proven native binaries. Nothing is installed system-wide on Linux/macOS.
 """
 
 import argparse
-import fcntl
+import contextlib
+import ctypes
 import os
 import sys
 import tempfile
@@ -27,14 +28,52 @@ from diskos_installer.reporter import CLIReporter
 # stale-lock hazard). Opened READ-ONLY so any user can take the flock on a 0644 file, and O_NOFOLLOW
 # so a planted symlink can't redirect the open (we bail instead of following it). ---
 class _Lock:
-    def __init__(self):
+    def __init__(self, windows=None, api=None):
         # A FIXED absolute path, not tempfile.gettempdir(): $TMPDIR differs between a normal run and a
         # sudo run (and per-user on macOS), which would hand them SEPARATE locks and defeat the whole
-        # point. /tmp is world-accessible on every supported host (Linux/macOS); Windows is unsupported.
+        # point. /tmp is world-accessible on Linux/macOS; Windows uses a global mutex.
         self.path = "/tmp/diskos-installer.lock"
         self.fd = None
+        self.windows = platform_probe.host()[0] == "windows" if windows is None else windows
+        self.api = api
+        self.handle = None
 
     def __enter__(self):
+        if self.windows:
+            self.api = self.api or bundle._windows_api()
+            # Global namespace spans login sessions. Everyone gets only wait/release
+            # rights, so the first user's default DACL cannot split the lock by user.
+            from ctypes import wintypes as w
+            class Security(ctypes.Structure):
+                _fields_ = [("length", w.DWORD), ("descriptor", ctypes.c_void_p), ("inherit", w.BOOL)]
+            descriptor = ctypes.c_void_p()
+            if hasattr(self.api, "mutex_security"):
+                security = self.api.mutex_security()  # injectable OS boundary
+            else:
+                adv = ctypes.WinDLL("advapi32", use_last_error=True)
+                convert = adv.ConvertStringSecurityDescriptorToSecurityDescriptorW
+                convert.argtypes = [w.LPCWSTR, w.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+                convert.restype = w.BOOL
+                if not convert("D:(A;;0x00100001;;;WD)", 1, ctypes.byref(descriptor), None):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                security = Security(ctypes.sizeof(Security), descriptor, False)
+            try:
+                self.handle = self.api.CreateMutexExW(ctypes.byref(security),
+                                                     "Global\\diskos-installer", 0, 0x100001)
+            finally:
+                if descriptor.value:
+                    free = self.api.LocalFree
+                    free.argtypes, free.restype = [ctypes.c_void_p], ctypes.c_void_p
+                    free(descriptor)
+            if not self.handle:
+                raise SystemExit("could not open the machine-wide installer mutex")
+            result = self.api.WaitForSingleObject(self.handle, 0)
+            if result not in (0, 0x80):  # abandoned mutex is acquired after owner death
+                self.api.CloseHandle(self.handle)
+                self.handle = None
+                raise SystemExit("another installer is running or the run-lock is unavailable")
+            return self
+        import fcntl
         import stat as _stat
         flags = os.O_CREAT | os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
         try:
@@ -58,6 +97,13 @@ class _Lock:
         return self
 
     def __exit__(self, *exc):
+        if self.windows:
+            if self.handle:
+                self.api.ReleaseMutex(self.handle)
+                self.api.CloseHandle(self.handle)
+                self.handle = None
+            return False
+        import fcntl
         try:
             if self.fd is not None:
                 fcntl.flock(self.fd, fcntl.LOCK_UN)
@@ -78,7 +124,7 @@ def cmd_doctor(args):
     dname = platform_probe.distro_name()
     host_desc = f"{o}-{a}" + (f" ({dname})" if dname else "")
     ui.info(f"version    : {__version__}")
-    ui.info(f"host       : {host_desc} ({'supported' if platform_probe.is_supported() else 'UNSUPPORTED'})")
+    ui.info(f"host       : {host_desc} ({platform_probe.host_status()})")
     ui.info(f"state dir  : {state.state_dir()}")
 
     def _tool_ok(path, need_exec):
@@ -116,6 +162,14 @@ def cmd_doctor(args):
         (ui.ok if p else ui.err)(f"  {name}: {p or 'MISSING'}")
         all_ok = all_ok and bool(p)   # payload files are required to build a flashable image
 
+    if o == "windows":
+        from diskos_installer import windows_usb
+        try:
+            ui.info(windows_usb.driver_description(windows_usb.driver_inventory()))
+            ui.info("Driver setup/access check: diskos-installer setup-driver (never starts a flash)")
+        except errors.DiskOSError as e:
+            ui.err(str(e))
+            all_ok = False
     n = platform_probe.maskrom_count()
     if n < 0:
         ui.warn("device: cannot enumerate USB (pyusb/lsusb unavailable)")
@@ -149,6 +203,15 @@ def cmd_doctor(args):
     return 0 if all_ok else 1
 
 
+def cmd_setup_driver(args):
+    from diskos_installer import windows_usb
+    result = windows_usb.setup_driver(
+        ui.info, lambda: ui.confirm("Set up the Disc's WinUSB driver? Windows will ask for "
+                                    "administrator approval or credentials. No flash will start.", default=False))
+    ui.info(result["message"])
+    return 3 if result.get("aborted") else 0
+
+
 def _cli_confirm(yes):
     """Build a service `confirm` callback for the CLI (prints the summary, then
     y/N - or auto-yes with --yes)."""
@@ -164,8 +227,8 @@ def _cli_confirm(yes):
 
 
 def cmd_install(args):
-    if not platform_probe.is_supported():
-        ui.err(f"[E101] unsupported host {platform_probe.host_tag()} - Linux/macOS only for now")
+    if not flasher.flash_eligible():
+        ui.err(f"[E101] unsupported host {platform_probe.host_tag()} - {platform_probe.host_status()}")
         return 2
     if not args.firmware and not args.stock:
         ui.err("[E140] need --firmware <FiiO official update .zip> (or --stock <rootfs.squashfs>).")
@@ -173,6 +236,9 @@ def cmd_install(args):
     params = {"firmware": args.firmware, "stock": args.stock,
               "ui_binary": args.ui, "variant": args.variant,
               "ota_rootpub": args.ota_key, "no_ota": args.no_ota}
+    if flasher._WINDOWS_DEV_FLASH.get():
+        ui.warn("DEVELOPMENT Windows flash: owner supervision required.")
+        ui.info(f"Stock backup generations: {os.path.join(state.state_dir(), 'stock')}")
     r = service.do_install(params, CLIReporter(), _cli_confirm(args.yes))
     if r.get("ok"):
         ui.info("Reboot the device and diskOS installs itself automatically on first boot.")
@@ -196,7 +262,11 @@ def cmd_remove(args):
             ui.info(f"To finish: delete this executable ({sys.executable}).")
         else:
             ui.info(f"To finish: delete the installer folder ({bundle.resource_root()}).")
-        ui.info("Nothing was installed system-wide, so there is nothing else to clean up.")
+        if platform_probe.host()[0] == "windows":
+            from diskos_installer.gui import WINDOWS_REMOVE_NOTE
+            ui.info(WINDOWS_REMOVE_NOTE)
+        else:
+            ui.info("Nothing was installed system-wide, so there is nothing else to clean up.")
         return 0
     if r.get("errors"):
         return 1   # partial-removal errors already reported by the service
@@ -215,6 +285,8 @@ def build_parser():
 
     d = sub.add_parser("doctor", help="report host, bundled tools, device, and state")
     d.set_defaults(func=cmd_doctor)
+    sub.add_parser("setup-driver", help="Windows driver setup or USB access check; never flashes").set_defaults(
+        func=cmd_setup_driver)
 
     i = sub.add_parser("install", help="build from YOUR stock firmware and flash diskOS")
     i.add_argument("--firmware", help="FiiO official update .zip (your stock firmware)")
@@ -229,11 +301,18 @@ def build_parser():
     og.add_argument("--ota-key", metavar="PATH",
                     help="bake YOUR OWN OTA root PUBLIC key (PEM, ECDSA P-256); the image then accepts only updates signed by it")
     i.add_argument("-y", "--yes", action="store_true", help="don't prompt before flashing")
+    if not getattr(sys, "frozen", False):
+        i.add_argument("--windows-dev-flash", action="store_true",
+                       help="DEVELOPMENT: supervised native x64 Windows flash; also requires "
+                            "DISKOS_WINDOWS_DEV_FLASH=1 (not a public Windows release)")
     i.set_defaults(func=cmd_install)
 
     r = sub.add_parser("restore-stock", help="deactivate diskOS (reflash your saved stock rootfs)")
     r.add_argument("--firmware", help="FiiO update .zip (only needed if no stock image is saved)")
     r.add_argument("-y", "--yes", action="store_true", help="don't prompt before flashing")
+    if not getattr(sys, "frozen", False):
+        r.add_argument("--windows-dev-flash", action="store_true",
+                       help="DEVELOPMENT: supervised Windows restore; also requires DISKOS_WINDOWS_DEV_FLASH=1")
     r.set_defaults(func=cmd_restore_stock)
 
     rm = sub.add_parser("remove", help="delete the installer and everything it created")
@@ -244,6 +323,22 @@ def build_parser():
 
 
 def main(argv=None):
+    with contextlib.redirect_stdout(ui.SafeOutput(sys.stdout)), contextlib.redirect_stderr(ui.SafeOutput(sys.stderr)):
+        try:
+            return _main(argv)
+        except SystemExit as exc:
+            if isinstance(exc.code, str):
+                ui.err(exc.code)
+                return 1
+            raise
+
+
+def _main(argv=None):
+    from diskos_installer import flash_child
+    child_args = sys.argv[1:] if argv is None else argv
+    # Private dispatch enforces parent supervision and normal flash gates itself.
+    if child_args and child_args[0] == flash_child.CHILD_MODE:
+        return flash_child.main(child_args)
     args = build_parser().parse_args(argv)
     # no subcommand, or 'gui' -> launch the graphical installer (under the lock)
     if getattr(args, "cmd", None) in (None, "gui"):
@@ -253,8 +348,9 @@ def main(argv=None):
     try:
         if args.cmd == "doctor":            # doctor is read-only; no lock needed
             return args.func(args)
-        with _Lock():
-            return args.func(args)
+        with flasher.windows_dev_flash(getattr(args, "windows_dev_flash", False)):
+            with _Lock():
+                return args.func(args)
     except errors.DiskOSError as e:   # any coded installer error (Build/Flash/Preflight)
         ui.err(str(e))
         return 1

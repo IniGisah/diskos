@@ -58,18 +58,20 @@ static void master_key(char *buf, int n, int slot){ snprintf(buf, n, "eq%d_maste
  * outside the -12..12 range distinguishes "absent" from a real 0. */
 #define EQ_ABSENT (-1000)
 static void migrate_legacy_user1(void){
+    int moved = 0;
     for(int i=0;i<NBAND;i++){
         char nk[24]; band_key(nk, sizeof nk, SLOT_MIN, i);
         if(cfg_get_int(nk, EQ_ABSENT) != EQ_ABSENT) continue;   /* already has a new value */
         char ok[16]; snprintf(ok, sizeof ok, "eq_b%d", i);
         int lv = cfg_get_int(ok, EQ_ABSENT);
-        if(lv != EQ_ABSENT) cfg_set_int(nk, lv);
+        if(lv != EQ_ABSENT){ cfg_set_int_deferred(nk, lv); moved = 1; }
     }
     char nmk[24]; master_key(nmk, sizeof nmk, SLOT_MIN);
     if(cfg_get_int(nmk, EQ_ABSENT) == EQ_ABSENT){
         int lm = cfg_get_int("eq_master", EQ_ABSENT);
-        if(lm != EQ_ABSENT) cfg_set_int(nmk, lm);
+        if(lm != EQ_ABSENT){ cfg_set_int_deferred(nmk, lm); moved = 1; }
     }
+    if(moved) cfg_flush();   /* every migrated key in one rewrite */
 }
 
 /* build the stock PARAMS_JSON from the current band values + write+select the current PEQ
@@ -280,6 +282,21 @@ static void make_col(lv_obj_t *parent, int idx, const char *flabel,
     *slot_val = val;
 }
 
+/* View-only firmware: a slider looks unavailable, and a tap on its column says why. The slider stops taking the
+ * touch, so the tap lands on the column; a drag still scrolls the row of bands (no tap is sent after a scroll). */
+static void view_only_tap_cb(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED) ui_toast("Not on this firmware");
+}
+static void view_only_slider(lv_obj_t *sl){
+    if(!sl) return;
+    lv_obj_add_state(sl, LV_STATE_DISABLED);
+    lv_obj_set_style_opa(sl, LV_OPA_40, LV_STATE_DISABLED);
+    lv_obj_remove_flag(sl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *col = lv_obj_get_parent(sl);
+    lv_obj_add_flag(col, LV_OBJ_FLAG_CLICKABLE);
+    ui_on(col, view_only_tap_cb, LV_EVENT_CLICKED, NULL, "eqcustom.view_only", UI_CORE);
+}
+
 /* small "< USERn >" slot selector; two 44px-touch arrows around a centred label. */
 static void make_slot_selector(lv_obj_t *root){
     lv_obj_t *sel = lv_obj_create(root);
@@ -391,8 +408,7 @@ void eqcustom_create(lv_obj_t *root){
     if(!fw_custom_peq_writable()){
         /* View-only firmware: sliders and Flat are disabled (the slot arrows still browse curves), and the
          * Flat pill says why instead of offering a change the player would reject or repair. */
-        for(int i=0;i<NBAND;i++) if(g_band[i]) lv_obj_add_state(g_band[i], LV_STATE_DISABLED);
-        if(g_master) lv_obj_add_state(g_master, LV_STATE_DISABLED);
+        for(int i=0;i<=NBAND;i++) view_only_slider(i < NBAND ? g_band[i] : g_master);
         lv_obj_set_width(flat, 196);   /* inside the round glass at this height (y 296..330), square corners too */
         lv_label_set_text(fll, "Not on this firmware");
         lv_obj_set_style_text_color(fll, TC(TEXT_MUTED), 0);

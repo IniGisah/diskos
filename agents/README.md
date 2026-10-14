@@ -1,25 +1,22 @@
 # agents/
 
-Instructions for working on diskOS with an AI coding agent.
+Contributor instructions for working on diskOS.
 
 `AGENTS.md` in this folder is a ready-made project brief: the hardware facts that are easy to
-get wrong, the repo layout, the device-safety rules, and the "verify, do not guess" discipline
-that keeps this project honest and the device un-bricked.
+get wrong, the repo layout, the device-safety rules, and the "verify, do not guess" rule.
 
 ## How to use it
 
-- Copy `agents/AGENTS.md` to your agent's project-instruction file at the repo root (many agents
-  read an `AGENTS.md` there), or point your agent at it and have it read that file first.
-- Or paste the contents in as system/context before you start a session.
+- Read [AGENTS.md](AGENTS.md) before changing device or installer code.
+- Use it as the project brief for a contributor starting work.
 
-The point is to give the agent the same guardrails we use: check `docs/HARDWARE.md` before
+The brief covers the project rules: check `docs/HARDWARE.md` before
 claiming anything about the hardware, never assert device behavior from memory, keep the
-fail-closed boot contract intact, and treat a flash as recoverable but serious - not guaranteed.
+fail-closed boot contract intact, and follow [RECOVERY.txt](../RECOVERY.txt) after an interrupted flash.
 
 ## Good first tasks
 
-- Read `docs/HARDWARE.md` and the installer's `README.md`, then ask the agent to explain the
-  install flow back to you - a quick check that it has the right mental model.
-- Add support/validation for a new stock firmware version (must be flash-tested on real
-  hardware before it is declared supported).
+- Read `docs/HARDWARE.md` and the installer's `README.md`, then trace the
+  install flow in the source.
+- Add explicit command mappings and installer checks for a new stock firmware version.
 - Improve error messages / add error codes for failure modes not yet covered.

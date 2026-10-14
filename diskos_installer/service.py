@@ -15,6 +15,27 @@ import time
 
 from . import basegate, bundle, flasher, imagebuild, state
 
+INSTALL_CONSEQUENCE = (
+    "This replaces the Disc's system software to install diskOS. "
+    "Stored data is not wiped, and the SD card is not changed. "
+    "Keep the USB cable connected until it finishes.")
+RESTORE_CONSEQUENCE = (
+    "This replaces the Disc's system software with FiiO's stock firmware and deactivates diskOS. "
+    "Stored data is not wiped, and the SD card is not changed. "
+    "Keep the USB cable connected until it finishes.")
+
+
+def require_firmware_dependencies():
+    """Check the actual AES backend before starting any firmware work."""
+    try:
+        from Crypto.Cipher import AES
+        AES.new(bytes(32), AES.MODE_CBC, bytes(16))
+    except (ImportError, OSError) as exc:
+        raise imagebuild.BuildError("pycryptodome AES dependency is missing or cannot load", code="E105",
+                                   action="source runs: install the packages in requirements.txt into the Python "
+                                          "environment running the installer; standalone builds: re-download "
+                                          "or rebuild the installer with those requirements") from exc
+
 
 def _padded_stock(stock_sq):
     """The stock rootfs padded to the partition size (a new file beside it when padding is needed)."""
@@ -150,6 +171,8 @@ def _save_state_soft(st, rep):
 def do_install(params, rep, confirm):
     """params: dict(firmware=?, stock=?, ui_binary=?, variant='public'|'dev').
     Extract -> save bone-stock -> build -> confirm -> flash. Returns result dict."""
+    if params.get("firmware") and not params.get("stock"):
+        require_firmware_dependencies()
     ui_bin = params.get("ui_binary") or bundle.data("mq_ui", required=False)
     if not ui_bin or not os.path.exists(ui_bin):
         raise imagebuild.BuildError("no diskOS UI binary (bundled 'mq_ui' missing).", code="E102",
@@ -194,7 +217,7 @@ def do_install(params, rep, confirm):
         "image": out_bin,
         "ota": imagebuild.describe_ota(ota_cfg),
         "duration": "about 20 minutes",
-        "consequence": "This rewrites the device root filesystem. Do not disconnect.",
+        "consequence": INSTALL_CONSEQUENCE,
         "requires": (f"The Disc must already run FiiO's full {basegate.CATALOGUE[mver]['name']} "
                      "(kernel + recovery). The writer checks this before changing anything and stops "
                      "with nothing written if it doesn't match."),
@@ -224,6 +247,7 @@ def do_restore(params, rep, confirm):
     V2.57 Disc."""
     pending = None
     if params.get("firmware"):
+        require_firmware_dependencies()
         work = state.build_dir()
         stock_sq = os.path.join(work, "stock_rootfs.squashfs")
         imagebuild.extract_stock_rootfs(params["firmware"], stock_sq, work, rep=rep)
@@ -274,7 +298,7 @@ def do_restore(params, rep, confirm):
         "action": "restore-stock",
         "image": stock_bin,
         "duration": "about 20 minutes",
-        "consequence": "This reflashes bone-stock and removes diskOS. Do not disconnect.",
+        "consequence": RESTORE_CONSEQUENCE,
         "requires": (f"This stock image is FiiO {basegate.CATALOGUE[mver]['name']}. The Disc must already run that "
                      "firmware's kernel + recovery; the writer checks this first and stops with nothing written "
                      "if it doesn't match."),
@@ -310,19 +334,24 @@ def do_restore(params, rep, confirm):
 
 
 def do_remove(params, rep, confirm):
-    """Delete everything the tool created on this computer (its full uninstall
-    footprint). Nothing was installed system-wide, so this is the whole cleanup."""
+    """Remove saved state and owned GUI logs; retain the executable and USB driver."""
     if state.load().get("installed") and not params.get("force"):
         if not confirm({"action": "remove-tool",
                         "consequence": "diskOS still appears to be on the device. This only "
-                                       "removes the installer + its saved files from THIS "
+                                       "removes saved installer state and owned GUI logs from THIS "
                                        "computer (run restore-stock first to clear the device)."}):
             return {"ok": False, "aborted": True}
     d, errors = state.wipe_all()
+    from . import gui_entry
+    try:
+        gui_entry.remove_logs()
+    except OSError:
+        errors.append((gui_entry.LOG_FOLDER, "GUI log cleanup refused or failed; close other installer windows "
+                       "and check for redirected or foreign log files before retrying"))
     if errors:
-        rep.error(f"could not fully remove {len(errors)} item(s) under {d}:")
+        rep.error(f"could not fully remove {len(errors)} saved state/log item(s):")
         for p, m in errors[:8]:
             rep.log(f"  {p}: {m}")
         return {"ok": False, "errors": errors, "removed": d}
-    rep.ok(f"removed all tool state: {d}")
+    rep.ok(f"removed all tool state and GUI logs: {d}")
     return {"ok": True, "removed": d}

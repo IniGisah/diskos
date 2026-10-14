@@ -21,6 +21,9 @@ void artcache_put_if(const char *track, const char *fp_before, const char *cover
 
 /* 1 if this track already has a complete cache entry (cover+thumb+backdrop). */
 int  artcache_has(const char *track);
+/* artcache_has + artcache_key with one fingerprint: 1 = complete entry, 0 = miss with the current key in key_out,
+ * -1 = no key (track unreadable or SD not available). */
+int  artcache_lookup(const char *track, char *key_out, int cap);
 
 /* Copy JUST the cached 42px thumb to thumb_out (fast, no ffmpeg). Used by the Books
  * list, which only needs the small cover. Returns 0 on hit, -1 if the thumb isn't cached. */

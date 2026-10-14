@@ -67,7 +67,6 @@ Saver Style	屏保样式	螢幕保護樣式	セーバーの種類	보호기 스�
 Screen Off	息屏	關閉螢幕	画面オフ	화면 끄기	Apagar pantalla		Spegni schermo	Bildschirm aus	Extinction écran	Выкл. экрана
 24-Hour Time	24小时制	24小時制	24時間表示	24시간제	Formato 24 h		Formato 24 ore	24-Stunden-Format	Format 24 h	24-часовой формат
 Animations	动画	動畫	アニメーション	애니메이션	Animaciones		Animazioni	Animationen	Animations	Анимации
-Disc Colour	光盘颜色	光碟顏色	ディスクの色	디스크 색상	Color del disco	Cor do Disc	Colore del disco	Diskfarbe	Couleur du disque	Цвет диска
 Weather on Home	主页天气	主頁天氣	ホームに天気	홈 날씨	Tiempo en inicio		Meteo in home	Wetter auf Start	Météo à l'accueil	Погода на главной
 Back-swipe	滑动返回	滑動返回	スワイプで戻る	스와이프 뒤로	Deslizar atrás		Scorri indietro	Zurückwischen	Balayer retour	Свайп назад
 Language	语言	語言	言語	언어	Idioma	Idioma	Lingua	Sprache	Langue	Язык
@@ -111,9 +110,6 @@ Cover Flow	封面流	封面流	カバーフロー	커버 플로우	Cover Flow		C
 Analog	模拟	類比	アナログ	아날로그	Analógico	Analógico	Analogico	Analog	Analogique	Аналоговые
 Minimal	极简	極簡	ミニマル	미니멀	Mínimo	Minimalista	Minimale	Minimal	Minimal	Минимализм
 Digital	数字	數位	デジタル	디지털	Digital	Digital	Digitale	Digital	Numérique	Цифровые
-Black	黑色	黑色	ブラック	검정	Negro	Preto	Nero	Schwarz	Noir	Чёрный
-Turquoise	青绿色	青綠色	ターコイズ	청록색	Turquesa	Turquesa	Turchese	Türkis	Turquoise	Бирюзовый
-Pink	粉色	粉紅色	ピンク	분홍색	Rosa	Rosa	Rosa	Rosa	Rose	Розовый
 Stock	原厂	原廠	標準	기본	Original	Original	Originale	Original	Origine	Штатный
 Covers only	仅封面	僅封面	ジャケットのみ	커버만	Solo carátulas		Solo copertine	Nur Cover	Pochettes seules	Только обложки
 When Idle	空闲时	閒置時	待機中	유휴 시	En reposo		A riposo	Bei Leerlauf	Au repos	В простое
@@ -309,3 +305,7 @@ Discard
 Turn off updates?										
 Turning updates off discards the downloaded update.										
 Update discarded. Updates are off.										
+Old tags	旧标签	舊標籤	古いタグ	이전 태그	Etiquetas antiguas	Etiquetas antigas	Tag vecchi	Alte Tags	Anciens tags	Старые теги
+Western	西欧	西歐	西欧	서유럽	Occidental	Ocidental	Occidentale	Westeuropäisch	Occidental	Западные
+Cyrillic	西里尔	西里爾	キリル文字	키릴 문자	Cirílico	Cirílico	Cirillico	Kyrillisch	Cyrillique	Кириллица
+Legacy text: guess, Latin-1 or CP1251. Rescan Library to apply.	旧文本：自动猜测、Latin-1 或 CP1251。重新扫描音乐库以应用。	舊文字：自動猜測、Latin-1 或 CP1251。重新掃描音樂庫以套用。	古い文字：自動判定、Latin-1、CP1251。適用には再スキャン。	이전 텍스트: 자동 감지, Latin-1 또는 CP1251. 적용하려면 라이브러리를 다시 검색하세요.	Texto antiguo: Auto, Latin-1 o CP1251. Reescanea la biblioteca para aplicar.	Texto antigo: Auto, Latin-1 ou CP1251. Reanalise a biblioteca para aplicar.	Testo vecchio: Auto, Latin-1 o CP1251. Riesegui la scansione per applicare.	Alter Text: Auto, Latin-1 oder CP1251. Zum Anwenden Bibliothek neu scannen.	Ancien texte : Auto, Latin-1 ou CP1251. Réanalysez la bibliothèque pour appliquer.	Старый текст: Авто, Latin-1 или CP1251. Пересканируйте медиатеку для применения.

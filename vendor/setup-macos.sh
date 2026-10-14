@@ -53,7 +53,7 @@ check_brew_version libusb 1.0.30
 check_brew_version lzo 2.10
 check_brew_version lz4 1.10.0
 check_brew_version xz 5.8.4
-check_brew_version zstd 1.5.7
+check_brew_version zstd 1.5.7_1
 
 # a C compiler (clang via Xcode CLT) is required
 if ! command -v cc >/dev/null 2>&1; then

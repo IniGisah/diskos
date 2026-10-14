@@ -1,0 +1,19 @@
+#ifndef DISKOS_FTOPTION_H_
+#define DISKOS_FTOPTION_H_
+
+#include <freetype/config/ftoption.h>
+
+/* The stock TTC uses glyf outlines. No compressed or PostScript fonts. */
+#undef FT_CONFIG_OPTION_USE_ZLIB
+#undef FT_CONFIG_OPTION_USE_LZW
+#undef FT_CONFIG_OPTION_USE_BZIP2
+#undef FT_CONFIG_OPTION_USE_PNG
+#undef FT_CONFIG_OPTION_USE_BROTLI
+#undef FT_CONFIG_OPTION_USE_HARFBUZZ
+#undef FT_CONFIG_OPTION_POSTSCRIPT_NAMES
+#undef FT_CONFIG_OPTION_ADOBE_GLYPH_LIST
+#undef FT_CONFIG_OPTION_MAC_FONTS
+#undef FT_CONFIG_OPTION_GUESSING_EMBEDDED_RFORK
+#undef FT_CONFIG_OPTION_SVG
+
+#endif

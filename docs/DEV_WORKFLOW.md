@@ -2,11 +2,11 @@
 
 How to build, deploy, and iterate on the diskOS UI (`mq_ui`) on real hardware. For iterating on
 UI changes you do **not** need the installer or a reflash. Build, push over SSH, hot-reload. A reboot
-simply reverts to the flashed build, which is what you want while experimenting.
+restores the selected signed update or flashed build.
 
 ## 1. Build the binary
 
-Use the pinned Docker builder (works on Linux and macOS, Intel or Apple Silicon):
+Use the pinned Docker builder (Linux and macOS, Intel or Apple Silicon):
 
 ```sh
 cd ui
@@ -31,14 +31,14 @@ ssh root@<device-ip>      # password from Debug Mode
 Stream the freshly built `mq_ui` to a staging path, verify it, then move it into place:
 
 ```sh
-scp mq_ui root@<device-ip>:/usr/data/mq_ui.new
-ssh root@<device-ip> 'chmod 755 /usr/data/mq_ui.new && md5sum /usr/data/mq_ui.new'
+ssh root@<device-ip> 'cat > /usr/data/mq_ui.new && chmod 755 /usr/data/mq_ui.new && md5sum /usr/data/mq_ui.new' < mq_ui
+md5sum mq_ui
 # confirm the md5 matches your local build, then:
 ssh root@<device-ip> 'mv /usr/data/mq_ui.new /usr/data/mq_ui'
 ```
 
-You do **not** need to touch the boot manifest for a hot-reload. The manifest and the S97 check only
-run at boot; for a live reload they are irrelevant.
+S97 checks the manifest at boot. For a manual preview, leave the manifest in place
+and launch the binary directly as shown below.
 
 ## 4. Hot-reload (the important part)
 
@@ -84,8 +84,8 @@ To go back to stock without a reboot, just `killall mq_ui` and let the watchdog 
 
 ## 5. Make it permanent (optional)
 
-Hand-deployed binaries revert to the flashed build on reboot (S97 verifies `/usr/data/mq_ui` against
-the read-only manifest). To bake a build in permanently, flash it with the installer:
+Hand-deployed binaries revert to the selected signed update or flashed build on reboot
+(S97 checks `/usr/data/mq_ui` against that build's manifest). To bake a build in permanently, run the installer from the repository root:
 
 ```sh
 ./diskos-installer install --firmware SNOWSKY_DISC_update_*.zip --ui path/to/mq_ui --variant public
@@ -97,24 +97,31 @@ deliberately want to skip that prompt (for example in a script), since it rewrit
 
 ### macOS note
 
-The installer looks for host-native tools under `vendor/<host-tag>/` (for example
-`vendor/macos-arm64/`), not on your `PATH`. An Apple Silicon release package includes prebuilt flash tools; for a source checkout or an Intel Mac, build the native tools once:
+The installer prefers host-native tools under `vendor/<host-tag>/` (for example
+`vendor/macos-arm64/`). `usbboot` must be bundled; missing squashfs tools can fall back
+to `PATH`. An Apple Silicon release package includes the native tools. For a source
+checkout or an Intel Mac, populate the native tools from the repository root:
 
 ```sh
 ./vendor/setup-macos.sh
 ```
 
-It builds `usbboot`, `mksquashfs`, and `unsquashfs` (with load paths rewritten) into
-`vendor/macos-arm64/` from `src/usbboot` plus Homebrew deps (`libusb squashfs lzo dylibbundler`) and the
-Xcode command line tools. After that the installer finds them and the `[E102]` error goes away. Apple Silicon release users need Python 3 and the setup dependencies, but do not need to build these flash tools.
+It compiles `usbboot`, copies Homebrew `mksquashfs` and `unsquashfs`, bundles their dylibs,
+and copies the device blobs into `vendor/macos-<arch>/` (`arm64` or `x86_64`). It requires
+Xcode command line tools and Homebrew packages libusb, squashfs, lzo, lz4, xz, zstd,
+pkg-config, and dylibbundler. The script requires specific versions of the native
+libraries and squashfs tools. Release packages include the native
+tools; see [INSTALL.md](INSTALL.md) for runtime requirements.
 
 ## Notes
 
-- **Screenshots:** the device ships `fbshot`, which writes the framebuffer to `/usr/data/fb.raw`
-  (360x360, 32bpp BGRA, panel rotated 180 degrees). Pull it and convert to view.
+- **Screenshots:** [diskos-shot.sh](../tools/diskos-shot.sh) captures the first framebuffer page
+  (360x360, 32bpp BGRA) and rotates it 180 degrees. See the
+  [capture limitation](../tools/README.md#screenshot). `ui/fbshot.c` is a separate helper that
+  follows the active page; it is not bundled by the installer.
 - **Player logs:** `/usr/data/fiio/log/fiio_player.log`. **PCM state:**
-  `/proc/asound/card*/pcm*p/sub*/status` (`RUNNING` = playing).
-- **Raw player frames** (for debugging IPC): `/usr/data/psend <FRAME>` sends a raw `/player` command.
+  `/proc/asound/card*/pcm*p/sub*/status` (`RUNNING` = active PCM stream).
+- **Raw player frames:** a sender such as `psend` must be installed separately; it is not bundled.
 
 ## Preview a UI build without reflashing
 
@@ -128,4 +135,4 @@ md5sum mq_ui
 ssh root@<device-ip> 'mv /usr/data/mq_ui.new /usr/data/mq_ui'
 ```
 
-Run the detached reload command in section 4, then check `/proc/<pid>/exe` as shown there. The startup animation runs again. Restarting the Disc restores the flashed build because the boot script checks the UI against its read-only manifest. To keep a build across restarts, flash it with the installer as in section 5.
+Run the detached reload command in section 4, then check `/proc/<pid>/exe` as shown there. The startup animation runs again. Restarting the Disc restores the selected signed update or flashed build because the boot script checks the UI against its manifest. To keep a build across restarts, flash it with the installer as in section 5.

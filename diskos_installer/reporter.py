@@ -43,7 +43,7 @@ class CLIReporter(Reporter):
     def phase(self, name, destructive=False):
         self._end_bar()
         self._phase = name
-        ui.step(name + ("  (this rewrites the device)" if destructive else ""))
+        ui.step(name + ("  (keep the USB cable connected)" if destructive else ""))
 
     def status(self, message):
         self._end_bar()

@@ -22,10 +22,12 @@ static lv_obj_t *g_results;
 static void search_layout(int active){
     if(active){
         int edge = ui_edge_nav();                              /* the theme's Back is on the left edge */
+        int def = !strcmp(theme_kit()->id, "default");
         if(g_back){ if(edge) lv_obj_set_pos(g_back, 0, 140); else lv_obj_set_pos(g_back, 72, 24); }   /* the shared header's Back: x72..116 */
-        lv_obj_set_size(g_bar, edge ? 168 : 164, 40);
-        lv_obj_align(g_bar, LV_ALIGN_TOP_LEFT, edge ? 96 : 120, 26);   /* clear of the back button -> no hit-target overlap */
-        lv_obj_set_size(g_bar_lbl, 116, 18);                   /* query text, stops before the X */
+        if(g_back && !edge && !def) lv_obj_set_ext_click_area(g_back, 1);   /* retain a 46 px target clear of the query bar */
+        lv_obj_set_size(g_bar, edge ? 168 : def ? 152 : 164, 40);
+        lv_obj_align(g_bar, LV_ALIGN_TOP_LEFT, edge ? 96 : def ? 128 : 120, 26);   /* clear of Back and the round top edge */
+        lv_obj_set_size(g_bar_lbl, def ? 104 : 116, 18);      /* query text stops before the X */
         lv_obj_set_style_text_align(g_bar_lbl, LV_TEXT_ALIGN_LEFT, 0);
         lv_obj_align(g_bar_lbl, LV_ALIGN_LEFT_MID, 14, 0);
         if(g_clear) lv_obj_set_pos(g_clear, edge ? 228 : 248, 31);   /* at the pill's right edge (bar 120..284; edge themes 96..264) */
@@ -34,6 +36,7 @@ static void search_layout(int active){
         lv_obj_remove_flag(g_results, LV_OBJ_FLAG_HIDDEN);
     } else {
         if(g_back){ if(ui_edge_nav()) lv_obj_set_pos(g_back, 0, 140); else lv_obj_set_pos(g_back, 72, 24); }   /* shared header position in both empty and result states */
+        if(g_back && !ui_edge_nav()) lv_obj_set_ext_click_area(g_back, 10);
         lv_obj_set_size(g_bar, ui_edge_nav() ? 150 : 128, 40);  /* the header Back (x72..116) stays clear of it */
         lv_obj_align(g_bar, LV_ALIGN_CENTER, 0, -8);            /* centred; narrow enough that the arrow clears its left edge */
         lv_obj_set_width(g_bar_lbl, LV_SIZE_CONTENT);
@@ -67,6 +70,7 @@ static void rebuild(const char *q){
         lv_label_set_text(l, (q && q[0]) ? "No results" : "Tap the bar to search");
         lv_obj_set_style_text_color(l, TC(TEXT_MUTED), 0);
         lv_obj_set_style_text_font(l, TF(UI_14), 0);
+        if(q && q[0]) theme_kit()->empty_state(KIT_EMPTY_SEARCH, l);
         return;
     }
     for(int i=0;i<shown;i++){
@@ -101,12 +105,18 @@ static void rebuild(const char *q){
     }
 }
 
+static lv_color_t query_color(int has_query){
+    /* Kits can turn a neutral field into paper: its foreground must follow that
+     * surface when the query changes after the one-time styling pass. */
+    if(lv_color_eq(lv_obj_get_style_bg_color(g_bar, 0), TC(TEXT_PRIMARY))) return TC(CANVAS);
+    return has_query ? TC(TEXT_PRIMARY) : TC(TEXT_MUTED);
+}
 static void on_query(const char *text){
-    if(!text) return;   /* Cancel (or an empty OK) -> keep the current query/results; the X button clears */
+    if(!text) return;
     snprintf(g_query, sizeof g_query, "%s", text);
     if(g_bar_lbl) lv_label_set_text(g_bar_lbl, g_query[0] ? g_query : "Search library");
     if(g_bar_lbl) lv_obj_set_style_text_color(g_bar_lbl,
-        (g_query[0] ? TC(TEXT_PRIMARY) : TC(TEXT_MUTED)), 0);
+        query_color(g_query[0] != 0), 0);
     if(g_clear){
         if(g_query[0]) lv_obj_clear_flag(g_clear, LV_OBJ_FLAG_HIDDEN);
         else           lv_obj_add_flag(g_clear, LV_OBJ_FLAG_HIDDEN);
@@ -114,9 +124,15 @@ static void on_query(const char *text){
     search_layout(g_query[0] != 0);   /* centre when empty, top+results when searching */
     rebuild(g_query);
 }
+#ifdef DISKOS_HOST
+void search_host_query(const char *text){ on_query(text); }
+#endif
 static void clear_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) on_query(""); }
+static void on_query_done(const char *text){
+    if(text && text[0]) on_query(text);   /* Cancel or empty Save keeps the results; the X button clears */
+}
 static void bar_cb(lv_event_t *e){
-    if(lv_event_get_code(e)==LV_EVENT_CLICKED) kbinput_open("Search", g_query, on_query);
+    if(lv_event_get_code(e)==LV_EVENT_CLICKED) kbinput_open("Search", g_query, on_query_done);
 }
 
 void search_create(lv_obj_t *root){

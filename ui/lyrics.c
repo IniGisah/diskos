@@ -2,6 +2,7 @@
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
 #include "theme.h"
+#include "theme_kit.h"
 #include "sdio.h"
 #include "ipc.h"
 #include "musicdb.h"
@@ -44,18 +45,24 @@ static char g_lbuf[16384];         /* result text (lyrics or message)  (see hand
 static int g_lkind = 0;            /* what g_lbuf holds: 0 = a message, 1 = plain lyrics, 2 = LRC text (guarded) */
 static int g_lready = 0;           /* a fetch finished                 (guarded) */
 static int g_linflight = 0;        /* a fetch thread is running        (guarded) */
-static int g_lphase = 0;           /* 0=checking local .lrc, 1=searching online (guarded) */
+static int g_lphase = 0;           /* 0=local, 1=online, 2=local found, 3=local absent (guarded) */
 static unsigned g_req = 0;         /* bumps on each lyrics_open         (main thread only) */
 static unsigned g_done_req = 0;    /* request id the finished fetch was for (guarded) */
 static char g_q_title[512], g_q_artist[512];  /* url-encoded query (main thread only); 3x MDB_STR(160)
                                                * expansion for %-encoded non-ASCII/CJK titles + margin */
+/* Path lifecycle (main thread): local outcome survives same-path identities. */
+static int g_local_done, g_local_found;
+/* Online-title identity (main thread): only identities first seen pending arm it. */
+static int g_title_pending;
+static uint64_t g_token;
+static unsigned g_generation;
 static char g_path[256];                       /* current track path (main thread only) */
 
 /* Per-fetch inputs snapshotted on the MAIN thread before pthread_create and handed to
  * the worker as its arg, so the worker never reads the g_req / g_q_title / g_q_artist /
  * g_path globals directly (they are main-thread-only; a re-open could otherwise race
  * the worker's reads of them). */
-typedef struct { unsigned req; int online; char title[512], artist[512], path[256]; } ly_job_t;  /* enc query, see g_q_* */
+typedef struct { unsigned req; int online, online_only; char title[512], artist[512], path[256]; } ly_job_t;  /* enc query, see g_q_* */
 
 
 static void urlenc(const char *s, char *out, int cap)
@@ -193,7 +200,7 @@ static void *lyrics_thread(void *arg)
     g_lkind = 0;
 
     /* 1) local sibling .lrc FIRST - instant for offline users who sideloaded lyrics (no 12s wait) */
-    if(job->path[0] && sd_io_begin()){
+    if(!job->online_only && job->path[0] && sd_io_begin()){
         char lrc[320]; derive_lrc(job->path, lrc, sizeof lrc);
         FILE *f = fopen(lrc, "r");
         if(f){ read_lrc(f, g_lbuf, sizeof g_lbuf); fclose(f); }
@@ -202,7 +209,7 @@ static void *lyrics_thread(void *arg)
     }
 
     /* 2) lyrics inside the audio file (ID3 USLT/SYLT, Vorbis comments, MP4 (c)lyr): still on the card, no network */
-    if(!g_lbuf[0] && job->path[0] && sd_io_begin()){
+    if(!job->online_only && !g_lbuf[0] && job->path[0] && sd_io_begin()){
         FILE *f = fopen(job->path, "rb");
         if(f){
             int synced = 0;
@@ -211,6 +218,8 @@ static void *lyrics_thread(void *arg)
         }
         sd_io_end();
     }
+
+    int local_found = g_lbuf[0] != 0;
 
     /* 3) fall back to online (lrclib) by track + artist, unless the user turned it off */
     if(!g_lbuf[0] && job->title[0] && job->online){
@@ -241,6 +250,7 @@ static void *lyrics_thread(void *arg)
     /* publish atomically (pairs with lyrics_poll's lock so g_lbuf is visible) */
     pthread_mutex_lock(&g_ly_mu);
     g_done_req = job->req;
+    g_lphase = local_found ? 2 : 3;
     g_linflight = 0;
     g_lready = 1;
     pthread_mutex_unlock(&g_ly_mu);
@@ -248,22 +258,34 @@ static void *lyrics_thread(void *arg)
     return NULL;
 }
 
+static void show_text(const char *txt, int message);
+/* a status message in the theme's message style (a bare label text change would skip the theme's sticker/plate) */
+static void show_status(const char *txt)
+{
+    if(g_text && strcmp(lv_label_get_text(g_text), txt)) show_text(txt, 1);
+}
 /* Claim the single fetch slot and launch a worker with a snapshot of the current
  * request (req + query + path), all read on the main thread before pthread_create. */
 static void start_fetch(void)
 {
-    int start = 0;
+    int start = 0, online_only = 0;
     pthread_mutex_lock(&g_ly_mu);
-    if(!g_linflight){ g_linflight = 1; g_lready = 0; g_lphase = 0; start = 1; }
+    if(!g_linflight){
+        /* A consumed miss for this path request needs only the online stage.
+         * New path/view requests bump g_req, so they always start locally. */
+        online_only = g_done_req == g_req && g_lphase == 3;
+        g_linflight = 1; g_lready = 0; g_lphase = online_only ? 1 : 0; start = 1;
+    }
     pthread_mutex_unlock(&g_ly_mu);
     if(!start) return;
     ly_job_t *job = malloc(sizeof *job);
     if(!job){
         pthread_mutex_lock(&g_ly_mu); g_linflight = 0; pthread_mutex_unlock(&g_ly_mu);
-        if(g_text) lv_label_set_text(g_text, "Lyrics unavailable.");   /* don't leave "Fetching..." stuck */
+        show_status("Lyrics unavailable.");   /* don't leave "Fetching..." stuck */
         return;
     }
     job->req = g_req;
+    job->online_only = online_only;
     job->online = cfg_get_int("online_lyrics", 1);   /* Settings > Display > Online Lyrics (on unless turned off) */
     snprintf(job->title,  sizeof job->title,  "%s", g_q_title);
     snprintf(job->artist, sizeof job->artist, "%s", g_q_artist);
@@ -273,18 +295,31 @@ static void start_fetch(void)
     else {
         free(job);
         pthread_mutex_lock(&g_ly_mu); g_linflight = 0; pthread_mutex_unlock(&g_ly_mu);
-        if(g_text) lv_label_set_text(g_text, "Lyrics unavailable.");
+        show_status("Lyrics unavailable.");
     }
 }
 
 /* block-text mode: one label (status messages, untimed lyrics) */
-static void show_text(const char *txt)
+static void show_text(const char *txt, int message)
 {
     g_nll = 0; g_lcur = -2;
     if(g_lines_box){ lv_obj_clean(g_lines_box); lv_obj_add_flag(g_lines_box, LV_OBJ_FLAG_HIDDEN); }
-    if(g_text){ lv_obj_remove_flag(g_text, LV_OBJ_FLAG_HIDDEN); lv_label_set_text(g_text, txt); }
+    if(g_text){ lv_obj_remove_flag(g_text, LV_OBJ_FLAG_HIDDEN); lv_label_set_text(g_text, txt);
+        lv_obj_set_style_translate_y(g_text, 0, 0);
+        if(message) theme_kit()->empty_state(KIT_EMPTY_LYRICS, g_text);
+        else {
+            lv_obj_set_width(g_text, 280);
+            lv_obj_set_style_pad_all(g_text, 0, 0);   /* a message style may have padded it */
+            lv_obj_set_style_translate_x(g_text, 0, 0);
+            lv_obj_set_style_text_align(g_text, LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_set_style_text_font(g_text, TF(USER_16), 0);
+            lv_obj_set_style_text_color(g_text, TC(TEXT_LYRICS), 0);
+        } }
     if(g_scroll) lv_obj_scroll_to_y(g_scroll, 0, LV_ANIM_OFF);
 }
+#ifdef DISKOS_HOST
+void lyrics_host_show_plain(const char *txt){ show_text(txt, 0); }
+#endif
 
 /* timed mode: one label per line in g_ll; returns 0 (and leaves the view alone) if the text isn't timed */
 static int show_timed(const char *lrc)
@@ -292,7 +327,7 @@ static int show_timed(const char *lrc)
     int synced = 0;
     int n = lrc_parse(lrc, g_ll, LY_MAXL, g_ltext, sizeof g_ltext, g_lplain, sizeof g_lplain, &synced);
     if(!synced || !g_lines_box){
-        show_text(g_lplain[0] ? g_lplain : "No lyrics found.");
+        show_text(g_lplain[0] ? g_lplain : "No lyrics found.", !g_lplain[0]);
         return 0;
     }
     lv_obj_clean(g_lines_box);
@@ -356,32 +391,81 @@ static void scroll_cb(lv_event_t *e)
         { g_holding = 1; g_hold_until = lv_tick_get() + 4000; }
 }
 
-void lyrics_open(void)
+/* Two independent state pieces: g_path/g_req and the local outcome own the
+ * view/fetch lifecycle; g_token/g_generation/g_title_pending own online readiness.
+ * Invariant: a title ready on the first snapshot (non-Opus, CUE/SACD,
+ * streams) preserves the pre-Opus PATH lifecycle exactly: same path means
+ * no restart, loading state, scroll reset or refetch, with the same DB-title
+ * fallback for an empty ready live title. Only a pending identity adds work:
+ * local/path work proceeds immediately; only online search waits, then runs
+ * once with the committed title for that playback identity. Pending-empty
+ * never uses the DB fallback; ready-empty does. Ready-first open/retry
+ * requires a nonempty resolved query title, as before; only pending
+ * identities may start local work with a path alone.
+ *
+ * path    identity title                  local/decode       action
+ * changed any      ready nonempty          any                normal local + online fallback
+ * changed any      ready empty             any                DB fallback; fetch only if title resolves,
+ *                                                           else "No track playing."; no work
+ * changed any      pending (empty or not)  any                local only; arm online
+ * same    changed  ready (empty or not)    any                keep view/scroll/fetch; disarm
+ * same    changed  pending (empty or not)  any                keep path work; arm new identity
+ * same    same     pending                any                no DB/online query
+ * same    same     committed              running/unconsumed wait for local result
+ * same    same     committed              present            disarm; keep local lyrics/scroll
+ * same    same     committed nonempty     absent             disarm; one online-only search
+ * same    same     committed empty        absent             DB fallback; one search if available
+ * Commitment before/after decode uses the same consumed-result barrier. */
+static void lyrics_query(const track_state_t *st)
 {
-    g_req++;   /* new request - supersedes any in-flight fetch for a previous track */
-    /* resolve title / artist / path: live state, else resume track from DB */
-    track_state_t st; ipc_get_state(&st);
-    char title[200] = "", artist[200] = "";
-    g_path[0] = 0;
-    if(st.path[0]) snprintf(g_path, sizeof g_path, "%s", st.path);
-    if(st.title[0])  snprintf(title,  sizeof title,  "%s", st.title);
-    if(st.artist[0]) snprintf(artist, sizeof artist, "%s", st.artist);
-    if(!title[0]){
+    char title[IPC_TITLE_CAPACITY] = "", artist[200] = "";
+    int ready = !st->have_track || st->title_ready;
+    if(ready) snprintf(title, sizeof title, "%s", st->title);
+    snprintf(artist, sizeof artist, "%s", st->artist);
+    if(ready && !title[0]){
         mdb_song_t cur; int pm, pl;
         if(mdb_current_play(&cur, &pm, &pl)){
-            snprintf(title,  sizeof title,  "%s", cur.title);
+            snprintf(title, sizeof title, "%s", cur.title);
             snprintf(artist, sizeof artist, "%s", cur.artist);
             if(!g_path[0]) mdb_song_path(cur.id, g_path, sizeof g_path);
         }
     }
-    urlenc(title,  g_q_title,  sizeof g_q_title);
+    urlenc(title, g_q_title, sizeof g_q_title);
     urlenc(artist, g_q_artist, sizeof g_q_artist);
+}
 
-    show_text("Checking SD card...");
+void lyrics_open(void)
+{
+    g_req++;   /* path/view request supersedes any in-flight fetch */
+    track_state_t st; ipc_get_state(&st);
+    g_local_done = g_local_found = 0;
+    g_title_pending = st.have_track && !st.title_ready;
+    g_token = st.playback_token; g_generation = st.player_generation;
+    snprintf(g_path, sizeof g_path, "%s", st.path);
+    lyrics_query(&st);
+    show_text("Checking SD card...", 1);
     screen_show(SCR_LYRICS);
+    if(g_q_title[0] || (g_title_pending && g_path[0])) start_fetch();
+    else show_text("No track playing.", 1);
+}
 
-    if(g_q_title[0]) start_fetch();
-    else             show_text("No track playing.");
+/* MAIN thread only. Local work is consumed before submitting online-only work. */
+static void lyrics_commit_title(const track_state_t *st)
+{
+    if(!st->have_track){ g_title_pending = 0; return; }
+    if(st->playback_token != g_token || st->player_generation != g_generation){
+        g_token = st->playback_token; g_generation = st->player_generation;
+        g_title_pending = !st->title_ready;
+    }
+    if(!g_title_pending || !st->title_ready || strcmp(st->path, g_path)) return;
+    pthread_mutex_lock(&g_ly_mu);
+    int waiting = g_linflight || g_lready;
+    pthread_mutex_unlock(&g_ly_mu);
+    if(waiting || !g_local_done) return;
+    g_title_pending = 0;
+    if(g_local_found) return;
+    lyrics_query(st);
+    if(g_q_title[0] && cfg_get_int("online_lyrics", 1)) start_fetch();
 }
 
 void lyrics_poll(lv_timer_t *t)
@@ -393,7 +477,8 @@ void lyrics_poll(lv_timer_t *t)
      * fires once per change. Only while SCR_LYRICS is visible - no wasted fetches. */
     if(screen_current() == SCR_LYRICS){
         track_state_t st; ipc_get_state(&st);
-        if(st.path[0] && strcmp(st.path, g_path) != 0){ lyrics_open(); return; }
+        if(st.path[0] && strcmp(st.path, g_path)){ lyrics_open(); return; }
+        lyrics_commit_title(&st);
     }
     int on = screen_current() == SCR_LYRICS;
     if(t) lv_timer_set_period(t, (on && g_nll) ? 200 : 500);   /* follow timed lines closely only while they show */
@@ -405,15 +490,17 @@ void lyrics_poll(lv_timer_t *t)
     pthread_mutex_unlock(&g_ly_mu);
     if(!ready){
         /* still fetching: reflect the phase so the wait isn't a silent "Checking SD card..." */
-        if(inflight && g_text) lv_label_set_text(g_text, phase ? "Searching online..." : "Checking SD card...");
+        if(inflight && g_text && !lv_obj_has_flag(g_text, LV_OBJ_FLAG_HIDDEN))
+            show_status(phase ? "Searching online..." : "Checking SD card...");
         return;
     }
     if(done == g_req){
+        g_local_done = 1; g_local_found = phase == 2;
         /* result is for the current track; g_lbuf is visible (published under the lock)
          * and no worker is running, so reading it here is race-free. */
         if(g_lkind == 2){ if(show_timed(g_lbuf) && on) lyrics_follow(); }
-        else show_text(g_lbuf);
-    } else if(g_q_title[0]){
+        else show_text(g_lbuf, g_lkind == 0);
+    } else if(g_q_title[0] || (g_title_pending && g_path[0])){
         /* finished fetch was for a superseded track - fetch the current one
          * (start_fetch no-ops if a newer fetch is already running). */
         (void)inflight;

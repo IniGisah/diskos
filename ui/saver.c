@@ -20,6 +20,9 @@
  * Any touch wakes (handled in main.c). Kept cheap: static blit + labels;
  * analog hands recompute only on the ~10s clock tick. */
 
+int ui_label_input_changed(lv_obj_t *obj, const char *txt);   /* ui.c: a label's text only when its input changes */
+int ui_label_set_changed(lv_obj_t *obj, const char *txt);
+
 LV_FONT_DECLARE(font_weather16)
 static lv_font_t s_swfont;   /* montserrat_16 + weather-icon fallback */
 
@@ -31,6 +34,7 @@ static lv_obj_t *g_date;
 static lv_obj_t *g_weather;
 static lv_obj_t *g_track;
 static lv_obj_t *g_artist;
+static int g_playing;
 
 /* analog clock */
 static lv_obj_t *g_face;
@@ -51,13 +55,19 @@ static int g_have_track = 0; /* is a track currently loaded? The art savers (Cov
                                 (main.c), so a paused-but-loaded track shows the cover, frozen. */
 
 static int g_style = -1;   /* currently-applied style */
+static int g_song_dirty = 1;  /* an input of the tick's layout changed (a text, the style): run it on the next tick */
+static int blue_saver(void){ return !strcmp(theme_kit()->id, "blueprint"); }
+static void blue_song_layout(void){
+    if(!blue_saver() || !g_clock || !theme_kit()->saver) return;
+    saver_parts_t sp = { lv_obj_get_parent(g_clock), g_clock, g_date, g_weather, g_track, g_artist, g_face, g_style };
+    theme_kit()->saver(&sp);
+}
 
-/* Sharp full-bleed vinyl cover: the art worker's cover is only 148px (blurry when
- * upscaled to 360 for a full-bleed spin), so decode the stock player's 364px
- * /usr/data/fiio/cover.jpg into a NATIVE 360px ARGB RAM image ONCE per track. That's
- * both crisp (no upscale) and cheap to rotate (native format, no per-frame scale). */
+/* Shared sharp cover: one unrotated 360px current-source buffer, borrowed by
+ * bauhaus NP and read by the vinyl rotation code. UI thread owns its lifetime. */
 #define VIN_W 360
 static uint8_t *g_vbuf = NULL;       /* 360x360 BGRA (== LVGL ARGB8888 byte order) */
+static int g_vbound;                /* vinyl has bound the current shared source */
 static int g_vbuf_valid = 0;         /* does g_vbuf hold a good decode of the CURRENT track's cover?
                                         A failed/absent decode must NOT display the previous track's
                                         buffer, so visibility + brightness gate on this, not on g_vbuf. */
@@ -66,7 +76,7 @@ static lv_image_dsc_t g_vdsc;
 /* The spin: diskOS rotates the cover itself into g_vout (a second 360x360 ARGB image the widget shows as-is) instead of
  * asking LVGL to transform the image every frame. LVGL's generic transform cost ~19 ms/frame with anti-aliasing OFF
  * (jagged edges) and ~52 ms with it on; this fixed-point bilinear loop over the round screen only measured ~6 ms/frame
- * on the Disc (scratch/rotbench, 2026-09-27) with smooth edges, so the spin costs a fraction of the CPU (heat/battery)
+ * on the Disc with smooth edges, so the spin costs a fraction of the CPU (heat/battery)
  * and looks better. Outside the rotated square stays transparent, as before. */
 static uint8_t *g_vout = NULL;       /* 360x360 BGRA: the rotated cover the widget shows */
 static lv_image_dsc_t g_vodsc;
@@ -115,11 +125,13 @@ static void vinyl_rotate(int32_t tenths)
     if (g_vinyl) lv_obj_invalidate(g_vinyl);
 }
 
+static void song_visibility(void);
 static void vinyl_update_vis(void)
 {
     if (!g_vinyl) return;
-    if (g_style == 4 && g_vbuf && g_vbuf_valid && g_have_track) lv_obj_remove_flag(g_vinyl, LV_OBJ_FLAG_HIDDEN);
+    if (g_style == 4 && g_vbound && g_vbuf_valid && g_have_track) lv_obj_remove_flag(g_vinyl, LV_OBJ_FLAG_HIDDEN);
     else                                                        lv_obj_add_flag(g_vinyl, LV_OBJ_FLAG_HIDDEN);
+    song_visibility();   /* the song label steps aside while the spinning cover shows (and returns if it cannot) */
 }
 
 /* The vinyl saver is an album-art SHOWCASE, so it should stay at the user's set
@@ -154,6 +166,7 @@ static int64_t vin_now_ms(void){ struct timespec t; clock_gettime(CLOCK_MONOTONI
 static uint8_t *g_vres; static unsigned g_vres_gen; static int g_vres_ready;   /* under g_vmu: finished decode */
 static unsigned g_vasked_gen = ~0u;      /* UI thread: generation last requested (no duplicate requests) */
 static lv_timer_t *g_vpoll;
+static int g_vpending;
 
 static void *vinyl_worker(void *arg)
 {
@@ -171,7 +184,7 @@ static void *vinyl_worker(void *arg)
         ui_decode_lock();                               /* one decoder at a time, shared with NP + prewarm */
         /* after waiting for the lock: a newer request, or a spent deadline, means this one is not worth decoding */
         pthread_mutex_lock(&g_vmu);
-        int superseded = g_vwant && g_vwant_gen != gen;
+        int superseded = g_vgen != gen;
         pthread_mutex_unlock(&g_vmu);
         int rc = (superseded || vin_now_ms() >= deadline) ? -1 : art_make_saver(path, out, deadline);
         ui_decode_unlock();
@@ -189,6 +202,7 @@ static void *vinyl_worker(void *arg)
         }
         unlink(out);
         pthread_mutex_lock(&g_vmu);
+        if (gen != g_vgen) { free(buf); pthread_mutex_unlock(&g_vmu); continue; }
         free(g_vres);                                   /* an older, never-collected result */
         g_vres = buf; g_vres_gen = gen; g_vres_ready = 1;
         pthread_mutex_unlock(&g_vmu);
@@ -196,34 +210,10 @@ static void *vinyl_worker(void *arg)
     return NULL;
 }
 
-/* UI thread: install a finished decode if it belongs to the current track */
-static void vinyl_poll(lv_timer_t *t)
+/* UI thread: vinyl alone owns the optional rotation output. */
+static void vinyl_bind(void)
 {
-    (void)t;
-    pthread_mutex_lock(&g_vmu);
-    if (!g_vres_ready) { pthread_mutex_unlock(&g_vmu); return; }
-    uint8_t *buf = g_vres; unsigned gen = g_vres_gen;
-    g_vres = NULL; g_vres_ready = 0;
-    pthread_mutex_unlock(&g_vmu);
-    if (gen != g_vgen || !buf || !g_vinyl) {            /* stale (track changed) or failed: show nothing */
-        free(buf);
-        if (gen == g_vgen) {
-            g_vbuf_valid = 0; vinyl_update_vis();
-            if (++g_vfails < VIN_RETRIES) g_vasked_gen = ~0u;   /* allow a retry the next time the saver shows */
-        }
-        return;
-    }
-    uint8_t *old = g_vbuf;
-    if (old) lv_image_cache_drop(&g_vdsc);             /* LVGL must not keep the old pixels cached */
-    g_vbuf = buf; g_vbuf_valid = 1;
-    memset(&g_vdsc, 0, sizeof g_vdsc);
-    g_vdsc.header.magic  = LV_IMAGE_HEADER_MAGIC;
-    g_vdsc.header.cf     = LV_COLOR_FORMAT_ARGB8888;
-    g_vdsc.header.w      = VIN_W;
-    g_vdsc.header.h      = VIN_W;
-    g_vdsc.header.stride = VIN_W * 4;
-    g_vdsc.data          = g_vbuf;
-    g_vdsc.data_size     = (uint32_t)VIN_W * VIN_W * 4;
+    if (!g_vinyl || !g_vbuf_valid || g_vbound) return;
     if (!g_vout) g_vout = calloc((size_t)VIN_W * VIN_W, 4);   /* zeroed: outside the round area stays transparent */
     if (g_vout) {                                            /* show the diskOS-rotated copy (see vinyl_rotate) */
         g_vodsc = g_vdsc;
@@ -241,16 +231,80 @@ static void vinyl_poll(lv_timer_t *t)
     }
     lv_image_set_scale(g_vinyl, 256);                    /* 1x - already 360px, no upscale */
     lv_obj_center(g_vinyl);
-    free(old);
+    g_vbound = 1;
     vinyl_update_vis();
 }
 
-/* UI thread: ask for the current track's sharp cover (returns at once) */
-static void vinyl_load_sharp_cover(void)
+const lv_image_dsc_t *sharp_cover_get(void)
 {
-    if (!g_vinyl || !g_have_track || !g_vpath[0]) { g_vbuf_valid = 0; vinyl_update_vis(); return; }
-    if (g_vbuf_valid || g_vasked_gen == g_vgen) return;  /* already showing it, or already asked */
+    return g_vbuf_valid ? &g_vdsc : NULL;
+}
+
+/* Detach both borrowers and evict caches before freeing any pixel allocation. */
+void sharp_cover_invalidate(void)
+{
+    pthread_mutex_lock(&g_vmu);
+    g_vgen++; g_vwant = 0;
+    free(g_vres); g_vres = NULL; g_vres_ready = 0;
+    pthread_mutex_unlock(&g_vmu);
+    g_vpending = 0;
+    if (g_vpoll) lv_timer_pause(g_vpoll);
+    g_vbuf_valid = g_vbound = 0; g_vfails = 0; g_vasked_gen = ~0u;
+    if (g_vinyl) lv_image_set_src(g_vinyl, NULL);
+    ui_np_cover_changed();
+    lv_image_cache_drop(&g_vdsc); lv_image_cache_drop(&g_vodsc);
+    free(g_vbuf); g_vbuf = NULL; free(g_vout); g_vout = NULL;
+    g_vdsc.data = g_vodsc.data = NULL;
+    vinyl_update_vis();
+}
+
+void sharp_cover_set_source(const char *path)
+{
+    const char *p = path ? path : "";
+    if (!strcmp(p, g_vpath)) return;
+    sharp_cover_invalidate();
+    snprintf(g_vpath, sizeof g_vpath, "%s", p);
+}
+
+static int sharp_retained(void)
+{
+    return !strcmp(theme_kit()->id, "bauhaus") || cfg_get_int("saver_style", 0) == 4;
+}
+
+/* Install without requiring a vinyl widget. The descriptor belongs to the provider. */
+static void vinyl_poll(lv_timer_t *t)
+{
+    pthread_mutex_lock(&g_vmu);
+    if (!g_vres_ready) { pthread_mutex_unlock(&g_vmu); return; }
+    uint8_t *buf = g_vres; unsigned gen = g_vres_gen;
+    g_vres = NULL; g_vres_ready = 0;
+    pthread_mutex_unlock(&g_vmu);
+    if (gen != g_vgen) { free(buf); if (!g_vpending) lv_timer_pause(t); return; }
+    g_vpending = 0;
+    lv_timer_pause(t);
+    if (!sharp_retained()) { free(buf); return; }
+    if (!buf) {
+        if (++g_vfails < VIN_RETRIES) g_vasked_gen = ~0u;
+        return;                         /* retry only on another visible demand */
+    }
+    g_vbuf = buf; g_vbuf_valid = 1;
+    memset(&g_vdsc, 0, sizeof g_vdsc);
+    g_vdsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    g_vdsc.header.cf = LV_COLOR_FORMAT_ARGB8888;
+    g_vdsc.header.w = g_vdsc.header.h = VIN_W;
+    g_vdsc.header.stride = VIN_W * 4;
+    g_vdsc.data = buf; g_vdsc.data_size = (uint32_t)VIN_W * VIN_W * 4;
+    ui_np_cover_changed();
+    if (g_style == 4 && screen_current() == SCR_SAVER) vinyl_bind();
+}
+
+/* UI thread: visible consumers coalesce requests for the exact current source. */
+void sharp_cover_request(void)
+{
+    if (!g_vpath[0] || !sharp_retained() || g_vbuf_valid || g_vasked_gen == g_vgen) return;
     if (!g_vpoll) g_vpoll = lv_timer_create(vinyl_poll, 150, NULL);
+    if (!g_vpoll) { if (++g_vfails >= VIN_RETRIES) g_vasked_gen = g_vgen; return; }
+    lv_timer_pause(g_vpoll);
     pthread_mutex_lock(&g_vmu);
     if (!g_vwork_started) {
         pthread_t th;
@@ -259,16 +313,32 @@ static void vinyl_load_sharp_cover(void)
     if (g_vwork_started) {
         snprintf(g_vwant_path, sizeof g_vwant_path, "%s", g_vpath);
         g_vwant_gen = g_vgen; g_vwant = 1;
-        g_vwant_deadline = vin_now_ms() + 15000;       /* time spent queued behind other decodes counts */
+        g_vwant_deadline = vin_now_ms() + 15000;
         pthread_cond_signal(&g_vcv);
         g_vasked_gen = g_vgen;
-    }
+        g_vpending = 1;
+        lv_timer_reset(g_vpoll);
+        lv_timer_resume(g_vpoll);
+    } else if (++g_vfails >= VIN_RETRIES) g_vasked_gen = g_vgen;
     pthread_mutex_unlock(&g_vmu);
-    vinyl_update_vis();                                  /* stays hidden until the new cover arrives */
+}
+
+static void vinyl_load_sharp_cover(void)
+{
+    if (g_vinyl && g_have_track) { sharp_cover_request(); vinyl_bind(); }
+    vinyl_update_vis();
 }
 
 #define CX 180
 #define CY 180
+static int default_saver(void){ return !strcmp(theme_kit()->id, "default"); }
+static int something_saver(void){ return !strcmp(theme_kit()->id, "something"); }
+static int hifi_saver(void){ return !strcmp(theme_kit()->id, "hi-fi"); }
+static int term_saver(void){ return !strcmp(theme_kit()->id, "terminal"); }
+static int bauh_saver(void){ return !strcmp(theme_kit()->id, "bauhaus"); }
+static int stone_saver(void){ return !strcmp(theme_kit()->id, "stone"); }
+static int zine_saver(void){ return !strcmp(theme_kit()->id, "zine"); }
+static int analog_y(void){ return default_saver() || something_saver() || hifi_saver() || term_saver() || bauh_saver() || blue_saver() || stone_saver() || zine_saver() ? 138 : CY; }
 
 static lv_obj_t *mk(lv_obj_t *p, const lv_font_t *font, lv_color_t c, int y)
 {
@@ -289,7 +359,7 @@ static lv_obj_t *mk_hand(lv_obj_t *p, int w, lv_color_t c, lv_point_precise_t *p
     lv_obj_set_style_line_width(ln, w, 0);
     lv_obj_set_style_line_color(ln, c, 0);
     lv_obj_set_style_line_rounded(ln, true, 0);
-    pts[0].x = CX; pts[0].y = CY; pts[1].x = CX; pts[1].y = CY - 1;
+    pts[0].x = CX; pts[0].y = analog_y(); pts[1].x = CX; pts[1].y = analog_y() - 1;
     lv_line_set_points(ln, pts, 2);
     return ln;
 }
@@ -297,23 +367,32 @@ static lv_obj_t *mk_hand(lv_obj_t *p, int w, lv_color_t c, lv_point_precise_t *p
 static void set_hand(lv_obj_t *ln, lv_point_precise_t *pts, double deg, int len)
 {
     double r = deg * 3.14159265 / 180.0;
-    pts[0].x = CX; pts[0].y = CY;
+    int y = analog_y();
+    pts[0].x = CX; pts[0].y = y;
     pts[1].x = (lv_value_precise_t)(CX + len * sin(r));
-    pts[1].y = (lv_value_precise_t)(CY - len * cos(r));
+    pts[1].y = (lv_value_precise_t)(y - len * cos(r));
     lv_line_set_points(ln, pts, 2);
     lv_obj_invalidate(ln);
 }
 
 /* 1s tick: animate the analog hands (incl. seconds) only while the analog saver
  * is actually on screen - cheap no-op otherwise (battery). */
+/* one length for both the 1 s hand animation and the clock update, so the hand never changes length between them */
+static int min_hand_len(void)
+{
+    if(hifi_saver()) return 68;
+    return default_saver() || something_saver() || term_saver() || bauh_saver() || blue_saver() || stone_saver()
+        || zine_saver() ? 80 : 104;
+}
 static void saver_anim_cb(lv_timer_t *t)
 {
     (void)t;
     if (g_style != 1 || screen_current() != SCR_SAVER) return;
     time_t now = time(NULL); struct tm lt; localtime_r(&now, &lt);
-    set_hand(g_hour, g_hpts, (lt.tm_hour % 12) * 30.0 + lt.tm_min * 0.5, 70);
-    set_hand(g_min,  g_mpts, lt.tm_min * 6.0, 104);
-    set_hand(g_sec,  g_spts, lt.tm_sec * 6.0, 118);
+    int def = default_saver();
+    set_hand(g_hour, g_hpts, (lt.tm_hour % 12) * 30.0 + lt.tm_min * 0.5, hifi_saver() ? 60 : 70);
+    set_hand(g_min,  g_mpts, lt.tm_min * 6.0, min_hand_len());
+    set_hand(g_sec,  g_spts, lt.tm_sec * 6.0, hifi_saver() ? 68 : def || something_saver() || term_saver() || bauh_saver() || blue_saver() || stone_saver() || zine_saver() ? 83 : 118);
 }
 
 /* vinyl spin - idempotent; main.c calls it each loop with the live condition
@@ -321,14 +400,14 @@ static void saver_anim_cb(lv_timer_t *t)
 /* Throttle the actual rotation to ~20 Hz: on this GPU-less SoC a full-bleed rotate
  * is close to a full-screen software transform, so applying it every LVGL frame
  * (~30 Hz) is wasteful. Skipping a callback causes NO invalidation, so capping to
- * 50 ms keeps the redraw cost down while ~2°/step stays smooth for a slow spin. */
+ * 50 ms keeps the redraw cost down while ~2 degrees/step stays smooth for a slow spin. */
 static void vspin_cb(void *var, int32_t v){
     static uint32_t last = 0;
     uint32_t now = lv_tick_get();
     /* 30 fps. With diskOS's own rotation (vinyl_rotate) a frame costs ~7 ms, so the loop would otherwise run ~60 fps
      * and spend the saving on frames nobody needs: at 27 s/rev, 30 fps is under half a degree per frame (smooth), and
      * the cap sits far above the render time, so the cadence stays even. Device: ~58% CPU (old LVGL transform) ->
-     * ~44% uncapped -> see the cap's figure in plans (measured with /proc stat ticks over 10 s). */
+     * ~44% uncapped (measured with /proc stat ticks over 10 s); the cap avoids extra frames. */
     if (now - last < 33) return;
     last = now;
     g_vangle = v % 3600;
@@ -357,6 +436,66 @@ void saver_vinyl_spin(int want)
 }
 
 /* show/hide + position elements for a style */
+static void song_visibility(void){
+    int hifi = hifi_saver();
+    int show = default_saver() || something_saver() || hifi || term_saver() || bauh_saver() || blue_saver() || stone_saver() || zine_saver()
+               ? g_playing && g_have_track : cfg_get_int("saver_style", 0) == 0;
+    /* Vinyl is the cover alone (owner 2026-10-07: no song label on the spinning saver); with no cover to spin the
+     * label stays, so the saver never goes blank */
+    if (g_style == 4 && g_vinyl && !lv_obj_has_flag(g_vinyl, LV_OBJ_FLAG_HIDDEN)) show = 0;
+    if(g_track){ if(show) lv_obj_remove_flag(g_track, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(g_track, LV_OBJ_FLAG_HIDDEN); }
+    if(g_artist){ if(show) lv_obj_remove_flag(g_artist, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(g_artist, LV_OBJ_FLAG_HIDDEN); }
+    if(zine_saver()){
+        extern void kit_zine_song_visibility(int show);
+        kit_zine_song_visibility(show);
+    }
+    if((hifi || bauh_saver()) && g_track && lv_obj_get_parent(g_track) != lv_obj_get_parent(g_clock)){
+        lv_obj_t *well = lv_obj_get_parent(g_track);
+        if(show) lv_obj_remove_flag(well, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(well, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void saver_set_playing(int playing){
+    if(g_playing == !!playing) return;
+    g_playing = !!playing;
+    song_visibility();
+    if(blue_saver() && screen_current() == SCR_SAVER) blue_song_layout();
+    if(zine_saver() && screen_current() == SCR_SAVER && g_clock){
+        saver_parts_t sp = { lv_obj_get_parent(g_clock), g_clock, g_date, g_weather, g_track, g_artist, g_face, g_style };
+        theme_kit()->saver(&sp);
+    }
+}
+
+static void default_song_layout(int style)
+{
+    int analog = style == 1;
+    int song_y = analog ? 278 : 254;
+    if((style == 0 || style == 3) && g_weather){
+        lv_obj_update_layout(g_weather);
+        int below = lv_obj_get_y(g_weather) + lv_obj_get_height(g_weather) + 12;
+        if(below > song_y) song_y = below;
+    }
+    if(analog && g_date && !lv_obj_has_flag(g_date, LV_OBJ_FLAG_HIDDEN)){
+        lv_obj_update_layout(g_date);
+        int below = lv_obj_get_y(g_date) + lv_obj_get_height(g_date) + 8;
+        if(below > song_y) song_y = below;
+    }
+    if(g_track) lv_obj_align(g_track, LV_ALIGN_TOP_MID, 0, song_y);
+    if(g_artist) lv_obj_align(g_artist, LV_ALIGN_TOP_MID, 0, song_y + 24);
+    int width = analog ? 200 : 230;
+    if(analog && g_artist){
+        lv_obj_update_layout(g_artist);
+        int bottom = lv_obj_get_y(g_artist) + lv_obj_get_height(g_artist);
+        int dy = bottom - 180;
+        if((width / 2) * (width / 2) + dy * dy > 176 * 176){
+            int fit = ui_round_width(bottom, 10);
+            if(fit < width) width = fit;
+        }
+    }
+    if(g_track) lv_obj_set_width(g_track, width);
+    if(g_artist) lv_obj_set_width(g_artist, width);
+}
+
 static void relayout(int style)
 {
     int analog = (style == 1);
@@ -374,6 +513,12 @@ static void relayout(int style)
     /* vinyl: just the spinning square cover (shown only in vinyl style + when a cover
      * has been decoded; saver_show_sync/saver_set_track drive the decode + visibility) */
     (void)vinyl;
+    if (!sharp_retained()) sharp_cover_invalidate();
+    else if (style != 4 && g_vout) {
+        if (g_vinyl) lv_image_set_src(g_vinyl, NULL);
+        g_vbound = 0; lv_image_cache_drop(&g_vodsc);
+        free(g_vout); g_vout = NULL; g_vodsc.data = NULL;
+    }
     vinyl_update_vis();
 
     /* analog parts */
@@ -405,13 +550,13 @@ static void relayout(int style)
     if (g_weather) { if (cover || style == 3){ lv_obj_remove_flag(g_weather, LV_OBJ_FLAG_HIDDEN);
                          if (g_date){ lv_obj_update_layout(g_date); lv_obj_align(g_weather, LV_ALIGN_TOP_MID, 0, lv_obj_get_y(g_date) + 30); } }
                      else lv_obj_add_flag(g_weather, LV_OBJ_FLAG_HIDDEN); }
-    /* track/artist: Cover only */
-    if (g_track)  { if (cover) lv_obj_remove_flag(g_track, LV_OBJ_FLAG_HIDDEN);  else lv_obj_add_flag(g_track, LV_OBJ_FLAG_HIDDEN); }
-    if (g_artist) { if (cover) lv_obj_remove_flag(g_artist, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(g_artist, LV_OBJ_FLAG_HIDDEN); }
     if (theme_kit()->saver) {                         /* the active theme's touches on this style */
         saver_parts_t sp = { lv_obj_get_parent(g_clock), g_clock, g_date, g_weather, g_track, g_artist, g_face, style };
         theme_kit()->saver(&sp);
     }
+    if(default_saver()) default_song_layout(style);
+    song_visibility();
+    g_song_dirty = 1;   /* the tick's layout runs again, as it always followed a relayout */
 }
 
 void saver_create(lv_obj_t *root)
@@ -436,7 +581,8 @@ void saver_create(lv_obj_t *root)
         lv_obj_set_style_bg_color(d, (big ? TC(TEXT_PRIMARY) : TC(TEXT_MUTED)), 0);
         lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
         double r = i * 30 * 3.14159265 / 180.0;
-        int x = (int)(CX + 150 * sin(r)), y = (int)(CY - 150 * cos(r));
+        int radius = stone_saver() || zine_saver() ? 99 : default_saver() || something_saver() || hifi_saver() || term_saver() || bauh_saver() || blue_saver() ? 105 : 150;
+        int x = (int)(CX + radius * sin(r)), y = (int)(analog_y() - radius * cos(r));
         lv_obj_set_pos(d, x - (big?4:2), y - (big?4:2));
         g_tick[i] = d;
     }
@@ -449,7 +595,7 @@ void saver_create(lv_obj_t *root)
     lv_obj_set_style_radius(g_hub, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(g_hub, ui_current_accent(), 0);
     lv_obj_set_style_bg_opa(g_hub, LV_OPA_COVER, 0);
-    lv_obj_set_pos(g_hub, CX - 7, CY - 7);
+    lv_obj_set_pos(g_hub, CX - 7, analog_y() - 7);
 
     /* vinyl: STOCK-STYLE - the plain SQUARE album cover free-rotates; the round
      * screen cuts its corners (black shows at the corners mid-tilt). No record
@@ -469,8 +615,9 @@ void saver_create(lv_obj_t *root)
     g_clock   = mk(root, TF(SAVER_CLOCK), TC(TEXT_PRIMARY), 110);
     g_date    = mk(root, TF(UI_16), TC(TEXT_SECONDARY), 170);
     g_weather = mk(root, &s_swfont,              TC(TEXT_SECONDARY), 200);
-    g_track   = mk(root, TF(UI_16), TC(TEXT_PRIMARY), 254);
-    g_artist  = mk(root, TF(UI_14), TC(TEXT_MUTED), 278);
+    int def = default_saver();
+    g_track   = mk(root, def ? TF(UI_18) : TF(UI_16), TC(TEXT_PRIMARY), 254);
+    g_artist  = mk(root, def ? TF(UI_16) : TF(UI_14), TC(TEXT_MUTED), 278);
     lv_label_set_text(g_clock, "--:--");
     lv_obj_add_event_cb(g_clock, saver_clock_style_cb, LV_EVENT_STYLE_CHANGED, NULL);   /* refit after the theme's face lands */
 
@@ -494,7 +641,7 @@ void saver_set_accent(lv_color_t c)
 void saver_show_sync(void)
 {
     int s = cfg_get_int("saver_style", 0);
-    if (s != g_style) { relayout(s); g_style = s; }
+    g_style = s; relayout(s);   /* style first: relayout's vinyl/label visibility reads g_style */
     saver_set_accent(ui_current_accent());
     /* decode the sharp cover as the vinyl saver appears - but only if a track is loaded;
      * otherwise make sure the vinyl stays hidden (no stale cover on an idle player). */
@@ -556,30 +703,76 @@ static void saver_clock_style_cb(lv_event_t *e)
     busy = 1; saver_clock_fit(); busy = 0;
 }
 
+/* What the tick's layout reads besides its texts, as requested (styles and flags): a width a theme sets after its last
+ * layout pass is already here, while coordinates still show the old one until the next refresh. The song block's
+ * parent is a theme's well or panel. */
+#define SONG_GEOM_N 17
+static void song_geom(intptr_t g[6][SONG_GEOM_N])
+{
+    lv_obj_t *o[6] = { g_clock, g_date, g_weather, g_track, g_artist, g_track ? lv_obj_get_parent(g_track) : NULL };
+    memset(g, 0, sizeof(intptr_t) * 6 * SONG_GEOM_N);
+    for (int i = 0; i < 6; i++) {
+        if (!o[i]) continue;
+        intptr_t *v = g[i];
+        v[0] = (intptr_t)lv_obj_get_parent(o[i]); v[1] = lv_obj_has_flag(o[i], LV_OBJ_FLAG_HIDDEN);
+        v[14] = (intptr_t)lv_obj_get_style_text_font(o[i], 0);
+        v[15] = lv_obj_get_style_text_letter_space(o[i], 0); v[16] = lv_obj_get_style_text_line_space(o[i], 0);
+        if (o[i] == g_clock) continue;   /* its box and scale come from the time alone (saver_clock_fit) */
+        v[2] = lv_obj_get_style_x(o[i], 0); v[3] = lv_obj_get_style_y(o[i], 0);
+        v[4] = lv_obj_get_style_width(o[i], 0); v[5] = lv_obj_get_style_height(o[i], 0);
+        v[6] = lv_obj_get_style_align(o[i], 0);
+        v[7] = lv_obj_get_style_pad_left(o[i], 0); v[8] = lv_obj_get_style_pad_right(o[i], 0);
+        v[9] = lv_obj_get_style_pad_top(o[i], 0); v[10] = lv_obj_get_style_pad_bottom(o[i], 0);
+        v[11] = lv_obj_get_style_border_width(o[i], 0);
+        v[12] = lv_obj_get_style_translate_x(o[i], 0); v[13] = lv_obj_get_style_translate_y(o[i], 0);
+    }
+}
+
 void saver_set_clock(const char *t, const char *date)
 {
     /* re-apply layout if the style setting changed */
     int s = cfg_get_int("saver_style", 0);
-    if (s != g_style) { relayout(s); g_style = s; }
+    if (s != g_style) { g_style = s; relayout(s); }
 
-    if (g_clock) {
-        snprintf(g_clock_text, sizeof g_clock_text, "%s", t ? t : "--:--");
-        saver_clock_fit();
+    /* The layout below reads what it last set (a theme's song widths, the date's place), so it ran on every 10 s tick to
+     * settle. It runs when a text changed, and again while a run moves what it reads; once a run leaves that as it found
+     * it, the same inputs give the same layout and an unchanged tick skips it. */
+    static int settled;
+    static intptr_t after[6][SONG_GEOM_N];
+    const char *tt = t ? t : "--:--", *dd = date ? date : "";
+    int time_new = strcmp(g_clock_text, tt) != 0;
+    int date_new = ui_label_input_changed(g_date, dd);
+    intptr_t before[6][SONG_GEOM_N];
+    song_geom(before);
+    if (time_new || date_new || g_song_dirty || !settled || memcmp(before, after, sizeof before)) {
+        if (g_clock && time_new) {
+            snprintf(g_clock_text, sizeof g_clock_text, "%s", tt);
+            saver_clock_fit();
+        }
+        if (g_date && date_new) theme_case_text(g_date, dd);   /* the theme's case, as on Home (was always "Thu 14 Nov") */
+        if(blue_saver()) blue_song_layout();
+        if (time_new && theme_kit()->saver_clock) theme_kit()->saver_clock(tt);
+        if ((bauh_saver() || hifi_saver() || something_saver() || term_saver() || stone_saver() || zine_saver()) && theme_kit()->saver) {
+            saver_parts_t sp = { lv_obj_get_parent(g_clock), g_clock, g_date, g_weather, g_track, g_artist, g_face, s };
+            theme_kit()->saver(&sp);   /* the date now has its final text height */
+        }
+        if(default_saver()) default_song_layout(s);
+        g_song_dirty = 0;
+        song_geom(after);
+        settled = !memcmp(before, after, sizeof before);
     }
-    if (g_date)  theme_case_text(g_date, date ? date : "");   /* the theme's case, as on Home (was always "Thu 14 Nov") */
-    if (theme_kit()->saver_clock) theme_kit()->saver_clock(t ? t : "--:--");
 
     /* analog hands from the live time */
     if (g_style == 1) {
         time_t now = time(NULL); struct tm lt; localtime_r(&now, &lt);
-        set_hand(g_hour, g_hpts, (lt.tm_hour % 12) * 30.0 + lt.tm_min * 0.5, 70);
-        set_hand(g_min,  g_mpts, lt.tm_min * 6.0, 104);
+        set_hand(g_hour, g_hpts, (lt.tm_hour % 12) * 30.0 + lt.tm_min * 0.5, hifi_saver() ? 60 : 70);
+        set_hand(g_min,  g_mpts, lt.tm_min * 6.0, min_hand_len());
     }
 }
 
 void saver_set_weather(const char *text)
 {
-    if (g_weather) lv_label_set_text(g_weather, text ? text : "");
+    if (ui_label_set_changed(g_weather, text ? text : "")) g_song_dirty = 1;
 }
 
 void saver_set_track(const char *title, const char *artist, const void *backdrop_src, const char *path)
@@ -588,12 +781,16 @@ void saver_set_track(const char *title, const char *artist, const void *backdrop
      * NULL-ness, not emptiness - a valid but untitled file still counts as a loaded track. */
     g_have_track = (title != NULL);
     const char *p = (g_have_track && path) ? path : "";
-    if (strcmp(p, g_vpath) != 0) {                       /* a different track: the old cover is no longer valid */
-        snprintf(g_vpath, sizeof g_vpath, "%s", p);
-        g_vgen++; g_vbuf_valid = 0; g_vfails = 0;
+    sharp_cover_set_source(p);
+    /* the original input: a dotted label edits its own copy */
+    if (ui_label_set_changed(g_track, title ? title : "")) g_song_dirty = 1;
+    if (ui_label_set_changed(g_artist, artist ? artist : "")) g_song_dirty = 1;
+    song_visibility();
+    if(blue_saver() && screen_current() == SCR_SAVER) blue_song_layout();
+    if(zine_saver() && screen_current() == SCR_SAVER && g_clock){
+        saver_parts_t sp = { lv_obj_get_parent(g_clock), g_clock, g_date, g_weather, g_track, g_artist, g_face, g_style };
+        theme_kit()->saver(&sp);
     }
-    if (g_track)  lv_label_set_text(g_track, title ? title : "");
-    if (g_artist) lv_label_set_text(g_artist, artist ? artist : "");
 
     /* vinyl cover: re-decode the sharp 360px cover only when the vinyl saver is
      * actually on-screen (track auto-advanced while idle); otherwise just refresh

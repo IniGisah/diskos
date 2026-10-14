@@ -1,12 +1,7 @@
 # Snowsky Disc - Hardware Capability Map
 
-Live-probed from the device root shell (serial `/dev/ttyACM0`) on 2026-06-25, while
-running **stock firmware** (V2.09 family, kernel built 2026-06-03). This documents what
-the *hardware* can do, independent of what stock software chooses to use - to scope
-diskOS enhancements and the "write our own mq_player/mq_ui" question.
-
-Probing was read-only (`/proc`, `/sys`, `aplay --dump-hw-params`, `i2cdetect`-equivalent
-via sysfs names, `dmesg`). Nothing was written to the device during this survey.
+Hardware and stock V2.09 interfaces for the FiiO Snowsky Disc. This map also notes
+how diskOS uses those interfaces and what a replacement audio engine would require.
 
 ---
 
@@ -27,10 +22,9 @@ via sysfs names, `dmesg`). Nothing was written to the device during this survey.
 | VPU / video decode | **None** - no `vpu`/`video`/`mem2mem` dev nodes | `/dev` |
 | Hardware JPEG | **None** as a dev node (stock `jpg_to_png.c` is software) | `/dev`, RE |
 
-**Implication:** all audio DSP and all UI rendering are CPU-bound. The single biggest
-untapped compute lever is **MSA SIMD** - diskOS's LVGL is almost certainly built without
-`-mmsa`, so blends/scales/rotations run scalar. Rebuilding LVGL (and any DSP/resampler)
-with MSA is the highest-leverage perf win available.
+diskOS uses LVGL's software renderer. The UI Makefile does not enable `-mmsa`;
+MSA is available for CPU-side optimization. Display scaling is handled separately
+by the LCD controller described below.
 
 ---
 
@@ -38,7 +32,7 @@ with MSA is the highest-leverage perf win available.
 
 | Item | Value |
 |---|---|
-| RAM total | **120 MB** (`MemTotal: 120308 kB`) |
+| RAM total | **117.5 MiB** (`MemTotal: 120308 kB`) |
 | Free / available (stock running) | ~19 MB free / ~64 MB available |
 
 Tight but workable. diskOS already runs in this budget. Big in-RAM buffers (e.g. a
@@ -48,15 +42,16 @@ full-res rotating album-art layer) must be sized carefully.
 
 ## 3. Storage
 
-NAND (MTD) with **A/B dual-boot** for OTA, plus the user microSD:
+NAND (MTD) with a main system and a smaller recovery system, plus the user microSD.
+The recovery rootfs is not large enough to hold the main image:
 
 | mtd | size | name | notes |
 |---|---|---|---|
 | mtd0 | 2 MB | uboot | bootloader |
-| mtd1 | 8 MB | kernel | slot A |
-| mtd2 | 128 MB | rootfs | slot A - **squashfs, read-only** (why `fiio_init.sh` can't be edited in place) |
-| mtd3 | 8 MB | kernel2 | slot B |
-| mtd4 | 25 MB | rootfs2 | slot B (smaller - recovery/fallback) |
+| mtd1 | 8 MB | kernel | main kernel |
+| mtd2 | 128 MB | rootfs | main rootfs - **squashfs, read-only** (why `fiio_init.sh` can't be edited in place) |
+| mtd3 | 8 MB | kernel2 | recovery kernel |
+| mtd4 | 25 MB | rootfs2 | recovery rootfs |
 | mtd5 | 1 MB | ota | OTA state |
 | mtd6 | 1 MB | mac | MAC/calibration |
 | mtd7 | 83 MB | **userdata** | writable - mounted as `/usr/data`, where **diskOS lives** |
@@ -83,10 +78,8 @@ Four Cirrus **CS43131** chips on I2C bus 3:
 | 3-0033 | cs43131d | `/dev/cs43131d` (245) |
 
 dmesg tags include `cs43131_left_negetive` and `cs43131b_open` -> the four DACs are wired
-as **L+/L-/R+/R- (fully differential / balanced)**, two CS43131 per channel. This is an
-unusually serious analog design for the form factor. *(Whether the physical jack exposes
-balanced (4.4 mm) or sums to single-ended (3.5 mm) is a board question - confirm against
-the unit's connectors.)*
+as **L+/L-/R+/R- (fully differential / balanced)**, two CS43131 per channel.
+The player has a 3.5 mm output and a 4.4 mm balanced output.
 
 Each CS43131 is a stereo DAC + integrated headphone amp; the family supports PCM to
 384 kHz and **DSD64/128/256**. Control is via a **custom FiiO `cs43131` kernel driver**
@@ -104,9 +97,7 @@ CHANNELS:    [1 8]
 RATE:        [8000 768000]
 ```
 
-So the **kernel/I2S link can stream up to 768 kHz / 64-bit / 8-channel** - far beyond the
-current track (S32_LE / 48 kHz / 2ch on DMA3). The real output ceiling is set by the
-CS43131 (~384 kHz PCM, DSD256), not the SoC.
+These are the ALSA driver's advertised parameter ranges. The CS43131 output ceiling is 384 kHz PCM / DSD256.
 
 ### 4.3 ALSA mixer surface
 `amixer controls` shows only the **SoC internal codec** (`ICODEC HPOUTL/MIC GAIN`,
@@ -139,22 +130,17 @@ today (the DAC just has to already be configured for the rate).
 | **Overlay layers** | `fb0`-`fb3` = **4 hardware LCDC planes** (`/dev/fb0..fb3`) |
 | Backlight | standard `backlight` class, **41 levels (0-40)** |
 
-**Layer control interface (confirmed via sysfs):** `ingenicfb` exposes `layer0`-`layer3`
+**Layer control interface:** `ingenicfb` exposes `layer0`-`layer3`
 under `/sys/class/graphics/fb0/device/`, each with `enable`, `src_fmt`, `src_size`,
 `target_pos`, and **`target_size`**. `target_size` != `src_size` => the LCDC has a
 **per-layer hardware scaler** (notable, since there's otherwise no GPU/VPU). layer0 is the
 active UI plane (`enable: 1`, src 360x360). Layers position + scale in hardware but **do
 not rotate**.
 
-**Implication:** static scaled art/backdrops *could* be HW-composited on fb1-3 (e.g. a
-scaled cover or a dim backdrop under the LVGL UI) with no CPU blend. BUT:
-- A **spinning** cover still needs software rotation (layers don't rotate) - LVGL already
-  does this fine, so the overlay is an optimization, not a requirement.
-- **Alpha/blend mode is NOT in sysfs** (no alpha/zorder/colorkey node) - likely an FBIO
-  ioctl in the ingenicfb driver; blending behavior is **unverified**.
-- **Visual confirmation needs a camera:** `fbshot` reads fb0's memory, but overlays
-  composite at *scanout*, so an fb1 test pattern won't appear in an fb0 capture. Defer the
-  live overlay test until we're ready to pursue HW-layer art and can eyeball the panel.
+The extra planes offer a path for static scaled artwork. A spinning cover still needs
+software rotation. Alpha/blend controls are not exposed in sysfs; the driver ioctl
+interface for blending is not mapped here. `fbshot` reads framebuffer memory,
+so an fb0 capture does not include other planes composited at scanout.
 
 ---
 
@@ -166,7 +152,8 @@ scaled cover or a dim backdrop under the LVGL UI) with no CPU blend. BUT:
 | Keys | `/dev/input/event0` - **x2000_key** | **physical buttons** (GPIO keys) |
 
 We can synthesize input by writing the 32-bit-ABI `input_event` (16-byte) MT-B sequence to
-`/dev/input/event1` - verified working (used to drive stock's UI pages over serial during RE). diskOS can also read the hardware keys via event0.
+`/dev/input/event1`. The injector source is `tools/tinj.c`. diskOS can also read
+the hardware keys via event0.
 
 ---
 
@@ -178,9 +165,8 @@ We can synthesize input by writing the 32-bit-ABI `input_event` (16-byte) MT-B s
 | **CW221X** (Cellwise) | 2-0064 | battery **fuel gauge** -> `/sys/class/power_supply/cw221X-bat` |
 | **AW35615** | 2-0022 | **USB-C PD / CC** controller (Type-C orientation + power delivery) |
 
-Live read: capacity 100%, 4.32 V, source "Mains". The fuel gauge gives real %/voltage;
-`/dev/usbcc_ioctl` (from RE) is the PD/CC control path. **PD negotiation hardware exists**,
-so faster charging / power-role awareness is at least theoretically addressable.
+The fuel gauge exposes capacity and voltage. `/dev/usbcc_ioctl` is the PD/CC
+control path. Charging behavior depends on the board and driver configuration.
 
 ---
 
@@ -195,12 +181,8 @@ so faster charging / power-role awareness is at least theoretically addressable.
 | BT firmware | `BCM4343A1_001.002.009.1026.1055.hcd` (the `BCM4345C5/C0` `.hcd` files are leftovers for other FiiO models) | `/lib/firmware/bt_bcm` |
 | BT bring-up | **hci0 is NOT attached at boot** - `bcmdhd.ko` only loads the driver/GPIOs. The HCI iface is created on-demand by `brcm_patchram_plus --enable_lpm --enable_hci --baudrate 3000000 --patchram <.hcd> /dev/ttyS0`, then `/usr/project/bluetoothd` (a2dp,avrcp,source) + `bluealsa --device=hci0` (SBC/LDAC). **Stock = bluez; `bsa_server`/`bt_enable_bsa*.sh` = dead code for the wrong chip.** Decoded from `mq_player` strings. | mq_player RE |
 
-> **Corrects prior note:** earlier memory said "BCM4345C5". The actual silicon is
-> **BCM43438 (AP6212)** - single-band 2.4 GHz + BT 4.x.
-
-**Implication:** no 5 GHz -> WiFi music transfer / streaming is capped at 2.4 GHz real
-throughput (tens of Mbps, congestion-sensitive). BT codec quality (LDAC/aptX) is a
-userspace-stack question, not a chip blocker for A2DP.
+Wi-Fi is limited to 2.4 GHz. Bluetooth codec selection depends on the stock
+userspace stack and the connected device; see [COMMAND_MAP.md](COMMAND_MAP.md).
 
 ---
 
@@ -209,13 +191,15 @@ userspace-stack question, not a chip blocker for A2DP.
 | Item | Value |
 |---|---|
 | Controller | **DWC2 OTG** (`13500000.otg_new`) - **dual-role** (host *or* device) |
-| Current mode | device; gadget `serial_demo` exposing **ACM** only (VID 0x0525 / PID 0xa4a7) -> this *is* our serial shell |
+| Serial gadget | `serial_demo` exposing **ACM** (VID 0x0525 / PID 0xa4a7); the passwordless serial shell is limited to dev builds |
 | USB-DAC mode | stock "UAC" work-mode reconfigures the gadget to **USB Audio Class** (device-as-DAC for a host PC) |
 
-**Untapped:** DWC2 is OTG, so **USB host mode is physically possible** - mounting USB
-storage, or driving an *external* USB DAC (device as a pure transport). Stock only ships
-device-mode (serial + UAC). Host-mode would need role switch + the right gadget/host
-config and likely a USB-C OTG adapter.
+The stock player provides a USB host audio route for an external USB DAC,
+pairing output route `0666=3` with gadget selector `0642=5`. diskOS contains
+this route, but its USB Audio control is absent from normal builds.
+The stock player also provides a `storage_demo` card-reader gadget. Do not
+mount or access the SD locally while it is exported to a computer;
+concurrent access can corrupt the card.
 
 ---
 
@@ -226,7 +210,7 @@ config and likely a USB-C OTG adapter.
   jack/line detect, if wired).
 - **Watchdog:** hardware `/dev/jz_watchdog`.
 - **LED:** **none.** `/sys/class/leds` is empty and there is **no physical LED** on the
-  unit (confirmed visually). The `RGB_LEVEL`/`RGB_STATUS` fields in mq_player's config blob
+  unit. The `RGB_LEVEL`/`RGB_STATUS` fields in mq_player's config blob
   are vestigial, inherited from the halley5 reference design / other FiiO products.
   -> diskOS should plan **no LED features**.
 - **Motion sensors:** none on I2C (no accel/gyro) - no tilt/gesture input despite the
@@ -238,14 +222,14 @@ config and likely a USB-C OTG adapter.
 
 | Capability | HW supports | Stock uses | diskOS opportunity |
 |---|---|---|---|
-| MSA SIMD | Yes (128-bit) | UI not built for it (unknown) | Rebuild LVGL/DSP `-mmsa` -> faster render/effects |
-| LCDC overlay planes | 4 (fb0-3) | fb0 only | HW-composited art/video layer (spinning cover, backdrops) |
+| MSA SIMD | Yes (128-bit) | Stock compiler flags unspecified | CPU-side optimization; UI Makefile has no `-mmsa` flag |
+| LCDC overlay planes | 4 (fb0-3) | fb0 only | HW-composited static art/backdrops; rotation remains software |
 | I2S rate | 768k/64b/8ch | <=384k/DSD256 (DAC-limited) | none beyond DAC; already maxes the DAC |
 | DSD native + DoP | Yes | Yes | parity - reuse driver ioctls |
 | Quad balanced DACs | Yes | Yes | direct ioctl control for bit-perfect / HW volume |
-| USB host (OTG) | Yes | No (device-only) | USB storage / external USB-DAC transport |
+| USB host (OTG) | Yes | USB host audio route | External USB DAC route exists in source; control absent from normal builds |
 | UAC2 gadget | Yes | Yes (UAC mode) | expose/control USB-DAC from diskOS |
-| USB-C PD | Yes (AW35615) | basic charge | PD-aware fast charge / power-role UI |
+| USB-C PD | Yes (AW35615) | Charging | Power-role UI |
 | Physical keys | Yes (x2000_key) | Yes | map HW buttons in diskOS |
 | WiFi 5 GHz | **No** | - | hard ceiling: 2.4 GHz only |
 | GPU / VPU / HW JPEG | **No** | - | hard ceiling: video is CPU-only (MSA-assisted at best) |
@@ -278,7 +262,7 @@ What a from-scratch local player needs, and how hard each piece is:
    future thin player) control bit-perfect output, hardware volume, DSD, and filters
    directly. Highest-value RE next step.
 3. **Only build our own *local* player** if we need something stock won't expose - e.g.
-   software parametric EQ, ReplayGain, custom gapless/crossfade, or a DSP chain - using
+   a DSP chain or custom crossfade - using
    ffmpeg + tinyalsa + the RE'd DAC ioctls. Leave streaming to stock.
 
 The streaming receivers and MCU dependency are what make a *complete* replacement

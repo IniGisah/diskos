@@ -14,6 +14,9 @@
 #include <pthread.h>
 #include <sys/stat.h>
 
+int ui_label_input_changed(lv_obj_t *obj, const char *txt);   /* ui.c: a label's text only when its input changes */
+int ui_label_set_changed(lv_obj_t *obj, const char *txt);
+
 /* Song Info: a metadata detail page (title/artist/album/genre/format/rate/depth/bitrate/channels/duration/size/folder/
  * file). Opened by tapping the Now Playing album art; back-swipe / back returns. Populated from the live track_state_t
  * via songinfo_set(). Stock's page (V2.57 mq_ui icons nowplaying/name, artist, album, genre, sample, bit_depth, time,
@@ -279,20 +282,28 @@ void songinfo_create(lv_obj_t *root)
     }
 }
 
+/* A row shown or hidden only when that changes: each flag change marks the shared screen for a layout pass. */
+static void si_show(lv_obj_t *cell, int on)
+{
+    if(cell && on == lv_obj_has_flag(cell, LV_OBJ_FLAG_HIDDEN)){
+        if(on) lv_obj_remove_flag(cell, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(cell, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 void songinfo_set(const track_state_t *st)
 {
     if(!g_val[0]) return;
     if(!st || !st->have_track){
-        for(int i=0;i<F_COUNT;i++) if(g_val[i]) lv_label_set_text(g_val[i], "-");
-        if(g_cell[F_NARRATOR]) lv_obj_add_flag(g_cell[F_NARRATOR], LV_OBJ_FLAG_HIDDEN);
+        for(int i=0;i<F_COUNT;i++) if(g_val[i]) ui_label_set_changed(g_val[i], "-");
+        si_show(g_cell[F_NARRATOR], 0);
         static const int optional[] = { F_GENRE, F_DEPTH, F_BITRATE, F_CHANNELS, F_SIZE, F_FOLDER };
-        for(size_t i=0;i<sizeof optional/sizeof *optional;i++) if(g_cell[optional[i]]) lv_obj_add_flag(g_cell[optional[i]], LV_OBJ_FLAG_HIDDEN);
+        for(size_t i=0;i<sizeof optional/sizeof *optional;i++) si_show(g_cell[optional[i]], 0);
         return;
     }
 
-    lv_label_set_text(g_val[F_TITLE],  st->title[0]?st->title:"Untitled");
-    lv_label_set_text(g_val[F_ARTIST], st->artist[0]?st->artist:"-");
-    lv_label_set_text(g_val[F_ALBUM],  st->album[0]?st->album:"-");
+    /* every playback update lands here: a value is set only when it changed (the Album slot is set below) */
+    ui_label_set_changed(g_val[F_TITLE],  st->title_ready ? (st->title[0] ? st->title : "Untitled") : "");
+    ui_label_set_changed(g_val[F_ARTIST], st->artist[0]?st->artist:"-");
 
     /* tech rows: the rate is the player's own (a2 frame); the rest comes from the worker (bounded header read + stat +
      * DB genre), applied when it lands. A row with no known value stays hidden rather than showing a dash. */
@@ -310,25 +321,25 @@ void songinfo_set(const track_state_t *st)
     if(have) cur = tech;
 
     char fmt[16]; si_fmt_format(fmt, sizeof fmt, st->path, st->is_dsd, cur.dsd_hz, st->sample_rate);
-    lv_label_set_text(g_val[F_FORMAT], fmt);
+    ui_label_set_changed(g_val[F_FORMAT], fmt);
 
     char rate[24];
     si_fmt_rate(rate, sizeof rate, (st->is_dsd && cur.dsd_hz > 0) ? cur.dsd_hz : st->sample_rate);
-    lv_label_set_text(g_val[F_RATE], rate);
+    ui_label_set_changed(g_val[F_RATE], rate);
 
     char vb[24];
-    if(cur.genre[0]){ lv_label_set_text(g_val[F_GENRE], cur.genre); lv_obj_remove_flag(g_cell[F_GENRE], LV_OBJ_FLAG_HIDDEN); }
-    else lv_obj_add_flag(g_cell[F_GENRE], LV_OBJ_FLAG_HIDDEN);
+    if(cur.genre[0]){ ui_label_set_changed(g_val[F_GENRE], cur.genre); si_show(g_cell[F_GENRE], 1); }
+    else si_show(g_cell[F_GENRE], 0);
     si_fmt_bits(vb, sizeof vb, cur.bits);
-    if(cur.bits > 0){ lv_label_set_text(g_val[F_DEPTH], vb); lv_obj_remove_flag(g_cell[F_DEPTH], LV_OBJ_FLAG_HIDDEN); } else lv_obj_add_flag(g_cell[F_DEPTH], LV_OBJ_FLAG_HIDDEN);
+    if(cur.bits > 0){ ui_label_set_changed(g_val[F_DEPTH], vb); si_show(g_cell[F_DEPTH], 1); } else si_show(g_cell[F_DEPTH], 0);
     si_fmt_kbps(vb, sizeof vb, cur.kbps);
-    if(cur.kbps > 0){ lv_label_set_text(g_val[F_BITRATE], vb); lv_obj_remove_flag(g_cell[F_BITRATE], LV_OBJ_FLAG_HIDDEN); } else lv_obj_add_flag(g_cell[F_BITRATE], LV_OBJ_FLAG_HIDDEN);
+    if(cur.kbps > 0){ ui_label_set_changed(g_val[F_BITRATE], vb); si_show(g_cell[F_BITRATE], 1); } else si_show(g_cell[F_BITRATE], 0);
     si_fmt_channels(vb, sizeof vb, cur.channels);
-    if(cur.channels > 0){ lv_label_set_text(g_val[F_CHANNELS], vb); lv_obj_remove_flag(g_cell[F_CHANNELS], LV_OBJ_FLAG_HIDDEN); } else lv_obj_add_flag(g_cell[F_CHANNELS], LV_OBJ_FLAG_HIDDEN);
+    if(cur.channels > 0){ ui_label_set_changed(g_val[F_CHANNELS], vb); si_show(g_cell[F_CHANNELS], 1); } else si_show(g_cell[F_CHANNELS], 0);
     si_fmt_size(vb, sizeof vb, cur.size);
-    if(cur.size > 0){ lv_label_set_text(g_val[F_SIZE], vb); lv_obj_remove_flag(g_cell[F_SIZE], LV_OBJ_FLAG_HIDDEN); } else lv_obj_add_flag(g_cell[F_SIZE], LV_OBJ_FLAG_HIDDEN);
+    if(cur.size > 0){ ui_label_set_changed(g_val[F_SIZE], vb); si_show(g_cell[F_SIZE], 1); } else si_show(g_cell[F_SIZE], 0);
     char folder[128]; si_fmt_folder(folder, sizeof folder, st->path);
-    if(folder[0]){ lv_label_set_text(g_val[F_FOLDER], folder); lv_obj_remove_flag(g_cell[F_FOLDER], LV_OBJ_FLAG_HIDDEN); } else lv_obj_add_flag(g_cell[F_FOLDER], LV_OBJ_FLAG_HIDDEN);
+    if(folder[0]){ ui_label_set_changed(g_val[F_FOLDER], folder); si_show(g_cell[F_FOLDER], 1); } else si_show(g_cell[F_FOLDER], 0);
 
     char dur[20]="-";
     if(st->duration_ms>0){
@@ -336,18 +347,18 @@ void songinfo_set(const track_state_t *st)
         if(h>0) snprintf(dur,sizeof dur,"%ld:%02ld:%02ld", h, m, s);   /* long books: H:MM:SS */
         else    snprintf(dur,sizeof dur,"%ld:%02ld", m, s);
     }
-    lv_label_set_text(g_val[F_DURATION], dur);
+    ui_label_set_changed(g_val[F_DURATION], dur);
 
     /* file basename */
     const char *base=strrchr(st->path,'/'); base = base?base+1:st->path;
-    lv_label_set_text(g_val[F_FILE], base[0]?base:"-");
+    ui_label_set_changed(g_val[F_FILE], base[0]?base:"-");
 
     /* Audiobook: relabel to "Book details" and turn the Album slot into reading progress. */
     int book = mdb_is_book_path(st->path);
-    if(g_header) theme_title_text(g_header, book ? "Book details" : "Song Info");
-    lv_label_set_text(g_key[F_ARTIST],   book ? "Author" : "Artist");
-    lv_label_set_text(g_key[F_ALBUM],    book ? "Progress" : "Album");
-    lv_label_set_text(g_key[F_DURATION], book ? "Total length" : "Duration");
+    if(ui_label_input_changed(g_header, book ? "Book details" : "Song Info")) theme_title_text(g_header, book ? "Book details" : "Song Info");
+    ui_label_set_changed(g_key[F_ARTIST],   book ? "Author" : "Artist");
+    ui_label_set_changed(g_key[F_ALBUM],    book ? "Progress" : "Album");
+    ui_label_set_changed(g_key[F_DURATION], book ? "Total length" : "Duration");
     if(book){
         char pg[56]="-";
         if(st->duration_ms>0){
@@ -358,9 +369,9 @@ void songinfo_set(const track_state_t *st)
             if(rh>0) snprintf(pg,sizeof pg,"%d%%  \xC2\xB7  %ldh %02ldm left", pct, rh, rm);
             else     snprintf(pg,sizeof pg,"%d%%  \xC2\xB7  %ldm left", pct, rm>0?rm:1);
         }
-        lv_label_set_text(g_val[F_ALBUM], pg);
+        ui_label_set_changed(g_val[F_ALBUM], pg);
     } else {
-        lv_label_set_text(g_val[F_ALBUM], st->album[0]?st->album:"-");   /* restore album for music */
+        ui_label_set_changed(g_val[F_ALBUM], st->album[0]?st->album:"-");   /* restore album for music */
     }
 
     /* Narrated by: only for a book that actually names a narrator (composer tag); load once per book. */
@@ -370,9 +381,9 @@ void songinfo_set(const track_state_t *st)
             if(!scan_read_narrator(st->path, narr, sizeof narr)) narr[0] = 0;
             snprintf(narr_path, sizeof narr_path, "%s", st->path);
         }
-        if(narr[0]){ lv_label_set_text(g_val[F_NARRATOR], narr); lv_obj_remove_flag(g_cell[F_NARRATOR], LV_OBJ_FLAG_HIDDEN); }
-        else       { lv_obj_add_flag(g_cell[F_NARRATOR], LV_OBJ_FLAG_HIDDEN); }
+        if(narr[0]){ ui_label_set_changed(g_val[F_NARRATOR], narr); si_show(g_cell[F_NARRATOR], 1); }
+        else       { si_show(g_cell[F_NARRATOR], 0); }
     } else {
-        lv_obj_add_flag(g_cell[F_NARRATOR], LV_OBJ_FLAG_HIDDEN);
+        si_show(g_cell[F_NARRATOR], 0);
     }
 }

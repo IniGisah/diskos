@@ -54,6 +54,10 @@ void kit_pass(lv_obj_t *root);          /* style root and everything under it no
 void kit_restyle(lv_obj_t *root);       /* style root's tree again (content rebuilt in place) */
 void kit_install(void);                 /* screens_init: start the styling pass (no-op for Default) */
 void kit_keep(lv_obj_t *obj);           /* a layout hook styled obj itself: the pass leaves it (not its children) */
+typedef enum { KIT_ROW_PLAIN, KIT_ROW_ICON, KIT_ROW_SWATCH, KIT_ROW_SYMBOL } kit_row_layout_t;
+void kit_row_layout(lv_obj_t *row, kit_row_layout_t layout); /* tag leading content before the styling pass */
+kit_row_layout_t kit_row_layout_get(const lv_obj_t *row);
+void kit_some_dot_arrow(lv_obj_t *glyph, int left); /* Something's decorative matrix arrow */
 
 /* Home's parts, as built by home.c, for a theme that lays Home out its own way. It may move, resize and restyle any
  * of them and hide only DECORATIVE ones (hint, thumb art/glyph, date); every control must stay reachable. */
@@ -68,6 +72,7 @@ typedef struct {
 typedef struct {
     lv_obj_t *root, *backdrop, *ring, *cover, *cover_img, *cover_note, *fav, *fav_icon, *sleep, *sleep_icon, *mode,
              *mode_icon, *mode_one, *title, *artist, *album, *prev, *pp, *next, *elapsed, *sep, *remain, *dots[2];
+    lv_obj_t *pos;   /* the queue position on its own line: hidden unless a theme shows it (then the album line drops it) */
 } np_parts_t;
 
 /* The Quick Settings drawer (quicksettings.c), rebuilt on every open. CORE: every tile (short + long press), the
@@ -81,6 +86,16 @@ typedef struct {
 /* The screensaver (saver.c) after it laid out the user's saver style (0 Cover, 1 Analog, 2 Minimal, 3 Digital,
  * 4 Vinyl). Display only: any touch wakes it. */
 typedef struct { lv_obj_t *root, *clock, *date, *weather, *track, *artist, *face; int style; } saver_parts_t;
+typedef enum { KIT_EMPTY_LYRICS, KIT_EMPTY_UPNEXT, KIT_EMPTY_LIBRARY, KIT_EMPTY_SEARCH } kit_empty_kind_t;
+typedef enum { KIT_VALUE_COUNT, KIT_VALUE_DURATION } kit_value_kind_t;
+/* Called only by rows that actually have a separate right-hand value. */
+void kit_row_value(lv_obj_t *row, lv_obj_t *title, lv_obj_t *sub, lv_obj_t *value, kit_value_kind_t kind);
+void kit_cursor_sync(int backlight_on); /* navigation/backlight lifecycle for terminal headers */
+#ifdef DISKOS_HOST
+int kit_cursor_host_paused(void);
+int kit_cursor_host_on(void);
+void kit_cursor_host_phase(int on);
+#endif
 
 /* ---- the kit: component builders. NULL entries fall back to Default's. ---- */
 typedef struct theme_kit {
@@ -91,7 +106,13 @@ typedef struct theme_kit {
     void (*style)(lv_obj_t *obj, kit_role_t role);
     void (*home)(const home_parts_t *p);      /* Home layout (after home.c built the default one) */
     void (*home_clock)(const char *time);     /* each Home clock update (after the clock label is set) */
+    void (*home_progress)(lv_obj_t *pill, int progress, int have_track, lv_color_t accent);
     void (*nowplaying)(const np_parts_t *p);  /* Now Playing layout (after ui.c built the default one) */
+    void (*np_progress)(int value);           /* progress display; seek handling stays in ui.c */
+    void (*np_cover_state)(lv_obj_t *cover, lv_obj_t *note, int show, int loading);
+    void (*empty_state)(kit_empty_kind_t kind, lv_obj_t *message);
+    void (*row_value)(lv_obj_t *row, lv_obj_t *title, lv_obj_t *sub, lv_obj_t *value, kit_value_kind_t kind);
+    void (*row_decor)(lv_obj_t *row, lv_obj_t *title); /* true list row; decoration cannot own input */
     void (*quicksettings)(const qs_parts_t *p);   /* drawer layout (after each build) */
     void (*qs_tile)(lv_obj_t *tile, lv_obj_t *glyph, lv_obj_t *cap, int on, int toggle);   /* paint a tile lit / unlit (toggle: 0 = a one-shot action) */
     void (*saver)(const saver_parts_t *p);    /* screensaver touches (after each relayout) */

@@ -1,18 +1,18 @@
 # Third-party libraries bundled in a self-built onefile
 
-> **Scope:** this applies **only if you build a self-contained PyInstaller onefile yourself**
-> (`build/build.sh`). The **published diskOS release does not ship such a binary** - it distributes
-> source, and the Python runtime + these native libraries come from *your* system Python (see
-> [`../NOTICE.md`](../NOTICE.md)), so this project does not redistribute them. If you *do* build and
-> redistribute the onefile, **you** become the redistributor of everything it embeds.
+> **Scope:** this applies to a Linux self-contained PyInstaller onefile built
+> with `build/build.sh`. Linux/macOS source release tarballs use your system
+> Python; the Windows package bundles Python and has a separate inventory in
+> [`../build/WINDOWS_FROZEN_DEPENDENCIES.md`](../build/WINDOWS_FROZEN_DEPENDENCIES.md).
+> See [`../NOTICE.md`](../NOTICE.md) for the release-specific obligations.
 >
-> The onefile embeds the CPython runtime plus **~90 native shared libraries** its GUI/runtime pulls
-> in (CPython + Tkinter GUI + pycryptodome + pyusb chains). The table below lists the principal
-> permissive families with verbatim texts in [`bundled/`](bundled/); it is **illustrative, not a
-> complete manifest** of all ~90 entries. To regenerate the full list for a given build, walk the
-> extracted onefile's shared objects and map each to its distribution package. Note the GUI chain
-> also pulls in **libudev (LGPL-2.1)** and **freetype (FTL/GPL dual)** - a CLI-only build
-> (`excludes=['tkinter']`) avoids both.
+> The Linux onefile inventory contains CPython plus **~90 native shared libraries**
+> from the CPython, Tkinter, pycryptodome and pyusb dependency chains. The table
+> lists the principal permissive families with verbatim texts in
+> [`bundled/`](bundled/); it is not a complete manifest. Collection varies with
+> the build host. Map each extracted shared object to its distribution package
+> before redistributing your build. The GUI chain includes **libudev (LGPL-2.1)**
+> and **FreeType (FTL/GPL dual)**; their obligations apply alongside the table.
 
 | Bundled library (`.so`) | License | Text |
 |---|---|---|
@@ -33,8 +33,7 @@
 CPython itself is PSF-licensed (see [`PSF-Python.txt`](PSF-Python.txt)); the Python packages `pyusb`
 (BSD) and `pycryptodome` (BSD / public-domain) are covered in [`README.md`](README.md).
 
-These libraries are present **only in a self-built onefile**. The published release runs the
-installer **from source** with your own Python (`./install.sh` then `./diskos-installer`), where they
-come from *your* system's Python and are **not redistributed by this project**. (`bash build/build.sh`
-is the separate, optional step that produces the onefile - if you run *that* and redistribute the
-result, the obligations above become yours.)
+If you build and redistribute a onefile, you are responsible for the licences
+of everything it embeds. Linux/macOS source releases run the installer with
+your Python (`./install.sh` then `./diskos-installer`); they do not redistribute
+that Python runtime or its transitive libraries.

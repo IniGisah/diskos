@@ -6,7 +6,7 @@
 #
 # Build the image:   docker build -t diskos-ui-builder .        (from this ui/ directory; builds GCC: takes a while)
 # Build the UI:       docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/src" diskos-ui-builder
-#   The `-u` keeps the built mq_ui/*.o owned by you, not root. LVGL is vendored at ui/lvgl.
+#   The `-u` keeps the built mq_ui/*.o owned by you, not root. LVGL is vendored at ui/lvgl; FreeType 2.13.3 is vendored at ui/third_party.
 #   The static mipsel `mq_ui` lands in the current directory, plus the helpers: make diskos-artdec diskos-bootprobe
 
 FROM debian:12-slim
@@ -27,5 +27,6 @@ RUN git clone "$MCM_URL" /tmp/mcm \
 ENV CROSS=/opt/mipsel-n2008-musl-cross/bin/mipsel-linux-musl-
 
 WORKDIR /src
+# FreeType is built from the pruned in-tree sources with the same pinned compiler.
 # Default: build mq_ui from the mounted ui/ tree. Fails clearly if the source isn't mounted.
 CMD ["sh", "-c", "test -f Makefile || { echo 'mount the ui/ source at /src (see the Dockerfile header)'; exit 1; }; make CROSS=$CROSS && ls -l mq_ui"]

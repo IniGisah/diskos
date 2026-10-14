@@ -9,6 +9,21 @@ from diskos_installer import gui, imagebuild
 
 
 class GuiOtaTests(unittest.TestCase):
+    def setUp(self):
+        ota_env = {"DISKOS_OTA_ROOTPUB", "DISKOS_MIN_KEY_EPOCH",
+                   "DISKOS_MIN_UI_EPOCH"}
+        env = {k: v for k, v in os.environ.items() if k not in ota_env}
+        p = mock.patch.dict(os.environ, env, clear=True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_enabled_gui_uses_the_shipped_release_floor(self):
+        self.assertTrue(gui.ota_key_available())
+        cfg = imagebuild.resolve_ota_config(**gui.ota_params(True, True))
+        self.assertIsNotNone(cfg)
+        self.assertEqual(cfg["epochs"],
+                         b"MIN_KEY_EPOCH=1\nMIN_UI_EPOCH=6\n")
+
     def test_ticked_with_key_means_ota_on(self):
         self.assertEqual(gui.ota_params(True, True), {"no_ota": False})
 
@@ -37,7 +52,7 @@ class GuiOtaTests(unittest.TestCase):
 
     def test_confirm_dialog_lists_ota_line(self):
         src = open(gui.__file__).read()
-        self.assertIn('("variant", "ota", "duration"', src)
+        self.assertIn('("Updates over Wi-Fi", summary.get("ota"))', src)
 
 
 if __name__ == "__main__":

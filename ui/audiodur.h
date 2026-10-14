@@ -12,12 +12,12 @@
  *   AIFF  COMM sample frames / sample rate (80-bit float, integer rates only)
  *   DSF   fmt sample count / sampling frequency
  *   WMA   ASF File Properties play duration (100 ns) minus preroll (ms)
- *   OGG   Vorbis: the last page's granule position / the identification header's rate (first logical stream)
+ *   OGG   Vorbis: last granule / rate; Opus: validated zero-origin stream, EOS granule minus pre-skip
  *   APE, raw AAC, DFF, DTS: unknown (0) - no single header field holds the length
  * The stock player ignores DB durations for ordinary files (it plays by the decoder's own length); only CUE/ISO
  * rows use them, and the scanner never writes those (internal RE notes). Every read is bounded; a hostile or
- * truncated file just yields 0. Result is 1..INT32_MAX (the player parses it as a 32-bit value), 0 unknown, or -1
- * when the file could not be READ (an I/O error: the caller keeps what it had rather than storing "unknown"). */
+ * truncated file just yields 0. Result is 1..INT32_MAX (the player parses it as a 32-bit value), 0 unknown, or a negative status
+ * for I/O/resource/work failure (SONG stores unknown) or cancellation (roll back the scan). */
 #ifndef AUDIODUR_H
 #define AUDIODUR_H
 #include <stdio.h>
@@ -25,6 +25,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <sys/types.h>
+#include <errno.h>
 
 static long long ad_clamp(unsigned long long ms){ return (ms >= 1 && ms <= 2147483647ULL) ? (long long)ms : 0; }
 /* a * mul / div without intermediate overflow; 0 (unknown) if it can't be represented */
@@ -310,24 +311,326 @@ static long long ad_wma(FILE *f, off_t fsz){
     return 0;
 }
 
-/* ---- Ogg Vorbis ---- */
+/* ---- Ogg Vorbis and Opus ---- */
 /* Ogg's page CRC-32 (polynomial 0x04C11DB7, no reflection, init 0) over the page with its CRC field taken as zero */
 static uint32_t ad_ogg_crc(const unsigned char *p, size_t n){
+    static const uint32_t table[16] = {
+        0x00000000u,0x04c11db7u,0x09823b6eu,0x0d4326d9u,
+        0x130476dcu,0x17c56b6bu,0x1a864db2u,0x1e475005u,
+        0x2608edb8u,0x22c9f00fu,0x2f8ad6d6u,0x2b4bcb61u,
+        0x350c9b64u,0x31cd86d3u,0x3c8ea00au,0x384fbdbdu
+    };
     uint32_t crc = 0;
     for(size_t i = 0; i < n; i++){
         unsigned char b = (i >= 22 && i < 26) ? 0 : p[i];
         crc ^= (uint32_t)b << 24;
-        for(int k = 0; k < 8; k++) crc = (crc & 0x80000000u) ? (crc << 1) ^ 0x04C11DB7u : crc << 1;
+        crc = (crc << 4) ^ table[crc >> 28];
+        crc = (crc << 4) ^ table[crc >> 28];
     }
     return crc;
 }
-static long long ad_ogg(FILE *f, off_t fsz){
+typedef int (*ad_cancel_fn)(void *);
+enum { AD_CANCELLED=-2, AD_DEFERRED=-3, AD_OPUS_SMALL=2*1024*1024 };
+static int ad_opus_head(const unsigned char *p, size_t n){
+    if(n < 19 || memcmp(p,"OpusHead",8) || p[8] != 1 || !p[9]) return 0;
+    if(!p[18]) return n == 19 && p[9] <= 2;
+    if(p[18] != 1 && p[18] != 255) return 0;
+    if(n != (size_t)21 + p[9] || !p[19] || p[20] > p[19] || p[19]+p[20] > 255) return 0;
+    for(int i=0; i<p[9]; i++) if(p[21+i] != 255 && p[21+i] >= p[19]+p[20]) return 0;
+    if(p[18] == 1){
+        static const unsigned char streams[8]={1,1,2,2,3,4,4,5}, coupled[8]={0,1,1,2,2,2,3,3};
+        static const unsigned char map[8][8]={{0},{0,1},{0,2,1},{0,1,2,3},{0,4,1,2,3},
+                                             {0,4,1,2,3,5},{0,4,1,2,3,5,6},{0,6,1,2,3,4,5,7}};
+        if(p[9]>8 || p[19]!=streams[p[9]-1] || p[20]!=coupled[p[9]-1] ||
+           memcmp(p+21,map[p[9]-1],p[9])) return 0;
+    }
+    return 1;
+}
+/* Validate the complete comment list before the shared tolerant reader can publish fields. */
+static int ad_opus_tags(const unsigned char *p, uint32_t n){
+    if(n<16 || memcmp(p,"OpusTags",8)) return 0;
+    uint32_t vendor=ad_le32(p+8);
+    if(vendor>n-16) return 0;
+    uint32_t off=12+vendor, count=ad_le32(p+off); off+=4;
+    if(count>(n-off)/4) return 0;
+    for(uint32_t i=0; i<count; i++){
+        if(n-off<4) return 0;
+        uint32_t len=ad_le32(p+off); off+=4;
+        if(len>n-off) return 0;
+        off+=len;
+    }
+    return 1;   /* RFC 7845 permits padding after the comments */
+}
+/* Strict comment result for current-file TITLE consumers; scanner stays tolerant.
+ * Validate every TITLE, including duplicates, so unusable values cannot hide behind
+ * a previous success. First nonempty usable value wins, like the scanner. */
+enum { AD_TITLE_ABSENT, AD_TITLE_FOUND, AD_TITLE_MALFORMED,
+       AD_TITLE_VALUE, AD_TITLE_CANCELLED };
+static int ad_title_utf8(const unsigned char *p, size_t n){
+    for(size_t i=0;i<n;){
+        unsigned c=p[i++], extra=0, cp=0, minimum=0;
+        if(c<0x80){ if(c<0x20 || c==0x7f) return 0; continue; }
+        if(c>=0xc2 && c<=0xdf){ extra=1; cp=c&31; minimum=0x80; }
+        else if(c>=0xe0 && c<=0xef){ extra=2; cp=c&15; minimum=0x800; }
+        else if(c>=0xf0 && c<=0xf4){ extra=3; cp=c&7; minimum=0x10000; }
+        else return 0;
+        if(extra>n-i) return 0;
+        while(extra--){ unsigned b=p[i++]; if((b&0xc0)!=0x80) return 0; cp=(cp<<6)|(b&63); }
+        if(cp<minimum || cp>0x10ffff || (cp>=0xd800 && cp<=0xdfff) ||
+           (cp>=0x80 && cp<=0x9f)) return 0;
+    }
+    return 1;
+}
+static inline int ad_opus_title(const unsigned char *p, uint32_t n, char *title, size_t cap,
+                         ad_cancel_fn cancel, void *ctx){
+    if(!cap) return AD_TITLE_VALUE;
+    title[0]=0;
+    if(!ad_opus_tags(p,n)) return AD_TITLE_MALFORMED;
+    uint32_t off=12+ad_le32(p+8), count=ad_le32(p+off); off+=4;
+    for(uint32_t i=0;i<count;i++){
+        if(cancel && cancel(ctx)) return AD_TITLE_CANCELLED;
+        uint32_t len=ad_le32(p+off); off+=4;
+        const unsigned char *v=p+off;
+        if(len>=6 && (v[0]|32)=='t' && (v[1]|32)=='i' && (v[2]|32)=='t' &&
+           (v[3]|32)=='l' && (v[4]|32)=='e' && v[5]=='='){
+            size_t value=len-6;
+            if(value>=cap || !ad_title_utf8(v+6,value)) return AD_TITLE_VALUE;
+            if(!title[0]){ memcpy(title,v+6,value); title[value]=0; }
+        }
+        off+=len;
+    }
+    return title[0] ? AD_TITLE_FOUND : AD_TITLE_ABSENT;
+}
+/* RFC 6716 frame lengths; validate framing without decoding audio. */
+static int ad_opus_frame_len(const unsigned char *p, size_t n, size_t *off, size_t *len){
+    if(*off>=n) return 0;
+    unsigned v=p[(*off)++];
+    if(v>=252){ if(*off>=n) return 0; v+=4u*p[(*off)++]; }
+    *len=v; return 1;
+}
+static unsigned ad_opus_samples(const unsigned char *p, size_t n){
+    if(!n) return 0;
+    unsigned toc=p[0], code=toc&3, frames=code ? 2 : 1, vbr=code==2;
+    size_t off=1, end=n, used=0;
+    if(code==3){
+        if(n<2) return 0;
+        unsigned control=p[off++]; frames=control&63; vbr=control&128;
+        if(control&64){
+            unsigned pad;
+            do {
+                if(off>=end) return 0;
+                pad=p[off++]; size_t bytes=pad==255 ? 254 : pad;
+                if(bytes>end-off) return 0;
+                end-=bytes;
+            } while(pad==255);
+        }
+    }
+    unsigned spf=(toc&128) ? (120u<<((toc>>3)&3)) :
+                 ((toc&96)==96) ? ((toc&8) ? 960 : 480) :
+                 (((toc>>3)&3)==3) ? 2880 : (480u<<((toc>>3)&3));
+    if(!frames || frames*spf>5760) return 0;
+    if(vbr){
+        for(unsigned i=1;i<frames;i++){
+            size_t len;
+            if(!ad_opus_frame_len(p,end,&off,&len) || len>end-off || used>end-off-len) return 0;
+            used+=len;
+        }
+        if(used>end-off || end-off-used>1275) return 0;
+    } else if((end-off)%frames || (end-off)/frames>1275) return 0;
+    return frames*spf;
+}
+/* Limit each blocking read to 4 KiB, with cancellation before every chunk. */
+static int ad_opus_read(FILE *f, unsigned char *p, size_t n, ad_cancel_fn cancel, void *ctx){
+    while(n){
+        if(cancel && cancel(ctx)) return AD_CANCELLED;
+        size_t chunk=n>4096 ? 4096 : n;
+        if(fread(p,1,chunk,f)!=chunk) return feof(f) && !ferror(f) ? 0 : -1;
+        p+=chunk; n-=chunk;
+    }
+    return 1;
+}
+/* Endpoint inspection does not prove interior integrity or exclude malformed serial reuse.
+ * Files <= 2 MiB instead use the complete walk (room for 1 MiB tags plus audio).
+ * Tail candidates use the Vorbis backward reach-to-EOF technique. Overlapping valid
+ * interpretations are unknown; CRC input, including overlaps, is capped at 512 KiB. */
+static long long ad_opus_tail(FILE *f, off_t fsz, off_t tags_end, uint32_t serial,
+                              uint32_t head_seq, unsigned skip, unsigned long long head_g,
+                              unsigned char *pkt, ad_cancel_fn cancel, void *ctx){
+    off_t start=fsz>128*1024 ? fsz-128*1024 : 0;
+    if(start<tags_end) start=tags_end;
+    size_t n=(size_t)(fsz-start), first=n, candidates=0, budget=512*1024;
+    unsigned char *t=malloc(n), *reach=calloc(n+1,1);
+    long long result=0;
+    if(!t || !reach){ result=AD_DEFERRED; goto done; }
+    if(n<27) goto done;
+    if(fseeko(f,start,SEEK_SET)){ result=-1; goto done; }
+    int rr=ad_opus_read(f,t,n,cancel,ctx);
+    if(rr!=1){ result=rr; goto done; }
+    if(cancel && cancel(ctx)){ result=AD_CANCELLED; goto done; }
+    if(fgetc(f)!=EOF) goto done;
+    if(ferror(f)){ result=-1; goto done; }
+    reach[n]=1;
+    for(size_t i=n-27+1; i-- >0; ){
+        if(cancel && cancel(ctx)){ result=AD_CANCELLED; goto done; }
+        if(memcmp(t+i,"OggS",4) || t[i+4] || (t[i+5]&~7)) continue;
+        unsigned ns=t[i+26];
+        if(!ns || i+27+ns>n) continue;
+        size_t size=27+ns;
+        for(unsigned k=0;k<ns;k++) size+=t[i+27+k];
+        if(size>n-i || !reach[i+size]) continue;
+        if(size>budget){ result=AD_DEFERRED; goto done; }
+        budget-=size;
+        if(ad_ogg_crc(t+i,size)!=ad_le32(t+i+22)) continue;
+        reach[i]=1; first=i; candidates++;
+    }
+    uint32_t seq=0, plen=0;
+    unsigned long long previous=0;
+    int pending=0, seen=0, dropping=0;
+    size_t walked=0;
+    for(size_t i=first;i<n;){
+        if(cancel && cancel(ctx)){ result=AD_CANCELLED; goto done; }
+        const unsigned char *p=t+i;
+        unsigned flags=p[5], ns=p[26];
+        size_t off=27+ns;
+        if((flags&2) || ad_le32(p+14)!=serial) goto done;
+        if(!walked){
+            seq=ad_le32(p+18);
+            if(seq<head_seq) goto done;
+            pending=dropping=!!(flags&1);
+        }
+        if(ad_le32(p+18)!=seq++ || !!(flags&1)!=pending) goto done;
+        unsigned completed=0;
+        unsigned long long samples=0, g=(unsigned long long)ad_le32(p+6) |
+                                                     (unsigned long long)ad_le32(p+10)<<32;
+        for(unsigned k=0;k<ns;k++){
+            unsigned len=p[27+k];
+            if(!dropping){
+                if(len>1024*1024-plen){ result=AD_DEFERRED; goto done; }
+                memcpy(pkt+plen,p+off,len); plen+=len;
+            }
+            off+=len; pending=len==255;
+            if(pending) continue;
+            completed++;
+            if(dropping){ dropping=0; continue; }
+            unsigned count=ad_opus_samples(pkt,plen);
+            if(!count) goto done;
+            samples+=count; plen=0;
+        }
+        walked++;
+        if(completed){
+            if(g>0x7fffffffffffffffULL || g<head_g) goto done;
+            if(flags&4){
+                if(!seen || pending || i+off!=n || g<skip || g<previous || g>previous+samples || walked!=candidates) goto done;
+                result=ad_muldiv(g-skip,1000,48000); goto done;
+            }
+            if(seen && g!=previous+samples) goto done;
+            previous=g; seen=1;
+        } else if((flags&4) || g!=~0ULL) goto done;
+        i+=off;
+    }
+done:
+    free(reach); free(t); return result;
+}
+/* With tags != NULL, return a validated second packet only. Otherwise return exact ms,
+ * 0 for malformed/unsupported data, AD_DEFERRED for limits/resources, or a read/cancel error. */
+static long long ad_opus(FILE *f, unsigned char **tags, uint32_t *taglen,
+                         ad_cancel_fn cancel, void *ctx){
+    enum { PACKET_MAX=1024*1024, PAGE_MAX=27+255+65025 };
+    unsigned char *page=malloc(PAGE_MAX), *pkt=malloc(PACKET_MAX);
+    long long result=0;
+    uint32_t serial=0, seq=0, plen=0;
+    unsigned packets=0, skip=0, mapping=0;
+    unsigned long long total=0, previous=0;
+    int pending=0, audio_seen=0;
+    off_t fsz=ad_size(f), tags_end=0;
+    int small=fsz<=AD_OPUS_SMALL;
+    size_t budget=2*1024*1024;
+    if(fsz<0){ result=-1; goto done; }
+    if(!page || !pkt){ result=AD_DEFERRED; goto done; }
+    if(fseeko(f,0,SEEK_SET)){ result=-1; goto done; }
+    for(unsigned pages=0;; pages++){
+        if(packets<2 && pages>=64){ result=AD_DEFERRED; goto done; }
+        if(cancel && cancel(ctx)){ result=AD_CANCELLED; goto done; }
+        if(budget<27){ result=small && packets>=2 ? 0 : AD_DEFERRED; goto done; }
+        budget-=27;
+        int rr=ad_opus_read(f,page,27,cancel,ctx);
+        if(rr!=1){ result=rr; goto done; }
+        if(memcmp(page,"OggS",4) || page[4] || (page[5]&~7)) goto done;
+        unsigned flags=page[5], ns=page[26];
+        if(!ns) goto done;
+        if(ns>budget){ result=AD_DEFERRED; goto done; }
+        budget-=ns;
+        rr=ad_opus_read(f,page+27,ns,cancel,ctx);
+        if(rr!=1){ result=rr; goto done; }
+        size_t size=27+ns;
+        for(unsigned i=0;i<ns;i++) size+=page[27+i];
+        if(size-27-ns>budget){ result=AD_DEFERRED; goto done; }
+        budget-=size-27-ns;
+        rr=ad_opus_read(f,page+27+ns,size-27-ns,cancel,ctx);
+        if(rr!=1){ result=rr; goto done; }
+        if(ad_ogg_crc(page,size)!=ad_le32(page+22)) goto done;
+        if(!pages){ serial=ad_le32(page+14); if(flags!=2 || ad_le32(page+18)) goto done; }
+        else if((flags&2) || ad_le32(page+14)!=serial) goto done;
+        if(ad_le32(page+18)!=seq++ || !!(flags&1)!=pending) goto done;
+        unsigned long long granule=(unsigned long long)ad_le32(page+6) | (unsigned long long)ad_le32(page+10)<<32;
+        if(packets<2 && (flags&4)) goto done;   /* EOS cannot end any header page */
+        size_t off=27+ns;
+        unsigned completed=0;
+        for(unsigned i=0;i<ns;i++){
+            unsigned len=page[27+i];
+            if(len>PACKET_MAX-plen){ result=AD_DEFERRED; goto done; }
+            memcpy(pkt+plen,page+off,len); plen+=len; off+=len;
+            pending=len==255;
+            if(pending) continue;
+            if(!packets){
+                if(pages || i+1!=ns || flags!=2 || granule || !ad_opus_head(pkt,plen)) goto done;
+                skip=pkt[10]|((unsigned)pkt[11]<<8); mapping=pkt[18];
+            } else if(packets==1){
+                if(i+1!=ns || (flags&4) || granule || !ad_opus_tags(pkt,plen)) goto done;
+                if(tags){ *tags=pkt; *taglen=plen; pkt=NULL; result=1; goto done; }
+                if(mapping) goto done;   /* multistream packet durations are unsupported */
+                tags_end=ftello(f);
+                if(tags_end<0){ result=-1; goto done; }
+                if(tags_end>fsz) goto done;
+                budget=small ? (size_t)(fsz-tags_end) : 256*1024;
+            } else {
+                unsigned samples=ad_opus_samples(pkt,plen);
+                if(!samples || total>0x7fffffffffffffffULL-samples) goto done;
+                total+=samples; completed++;
+            }
+            packets++; plen=0;
+        }
+        if(packets<2){
+            if(packets==1 && pages && granule!=~0ULL) goto done;
+            continue;
+        }
+        if(completed){
+            if(granule>0x7fffffffffffffffULL) goto done;
+            if(flags&4){
+                if(pending || granule<skip || granule>total || (audio_seen && granule<previous)) goto done;
+                if(fgetc(f)!=EOF || ferror(f)) goto done;
+                result=ad_muldiv(granule-skip,1000,48000); goto done;
+            }
+            if(granule!=total) goto done;   /* nonzero origins are deliberately unknown */
+            previous=granule; audio_seen=1;
+            if(!small){
+                result=ad_opus_tail(f,fsz,tags_end,serial,seq-1,skip,previous,pkt,cancel,ctx);
+                goto done;
+            }
+        } else if((flags&4) || (pending && granule!=~0ULL)) goto done;
+    }
+done:
+    free(pkt); free(page); return result;
+}
+
+static long long ad_ogg(FILE *f, off_t fsz, ad_cancel_fn cancel, void *ctx){
     unsigned char h[27 + 255 + 30];
     if(!ad_read_at(f, 0, h, 27) || memcmp(h, "OggS", 4) != 0) return 0;
     int nseg = h[26];
     uint32_t serial = ad_le32(h + 14);
     if(!ad_read_at(f, 27, h + 27, (size_t)nseg + 30)) return 0;
     const unsigned char *pk = h + 27 + nseg;                                  /* first packet: identification */
+    if(!memcmp(pk,"OpusHead",8)) return ad_opus(f,NULL,NULL,cancel,ctx);
     if(pk[0] != 1 || memcmp(pk + 1, "vorbis", 6) != 0) return 0;
     uint32_t rate = ad_le32(pk + 12);
     if(rate == 0) return 0;
@@ -380,10 +683,11 @@ static int ad_ext(const char *n, const char *e){
     return 1;
 }
 /* Length in ms of an open audio file (any position; it seeks), 0 if unknown. `fname` picks the parser. */
-static long long audio_duration_ms(FILE *f, const char *fname){
+static long long audio_duration_ms_cancel(FILE *f, const char *fname, ad_cancel_fn cancel, void *ctx){
     if(!f || !fname) return 0;
     off_t fsz = ad_size(f);
-    if(fsz <= 0) return 0;
+    if(fsz < 0) return -1;
+    if(fsz == 0) return 0;
     long long ms = 0;
     if(ad_ext(fname, ".flac")) ms = ad_flac(f, fsz);
     else if(ad_ext(fname, ".mp3")) ms = ad_mp3(f, fsz);
@@ -392,9 +696,12 @@ static long long audio_duration_ms(FILE *f, const char *fname){
     else if(ad_ext(fname, ".aif") || ad_ext(fname, ".aiff")) ms = ad_aiff(f, fsz);
     else if(ad_ext(fname, ".dsf")) ms = ad_dsf(f, fsz);
     else if(ad_ext(fname, ".wma")) ms = ad_wma(f, fsz);
-    else if(ad_ext(fname, ".ogg")) ms = ad_ogg(f, fsz);
-    if(ferror(f)) ms = -1;                         /* a READ error, not "no length": the caller keeps its old value */
+    else if(ad_ext(fname, ".ogg") || ad_ext(fname, ".opus") || ad_ext(fname, ".oga")) ms = ad_ogg(f, fsz, cancel, ctx);
+    if(ferror(f)) ms = -1;                         /* a READ error, distinct from a clean unknown result */
     clearerr(f);
     return ms;
+}
+static inline long long audio_duration_ms(FILE *f, const char *fname){
+    return audio_duration_ms_cancel(f,fname,NULL,NULL);
 }
 #endif

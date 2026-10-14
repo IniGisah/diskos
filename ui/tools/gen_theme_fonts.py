@@ -8,7 +8,7 @@ Variable fonts are first cut to one fixed weight (fontTools instancer), then con
 Text faces carry Latin-1 plus typographic quotes/ellipsis/bullet; clock faces carry only what a clock shows.
 Characters a face lacks (symbols, CJK) fall back at runtime to the international chains (theme.c).
 
-Usage: python3 tools/gen_theme_fonts.py [--src DIR] [--converter lv_font_conv.js] [--only THEME]
+Usage: python3 tools/gen_theme_fonts.py --src DIR [--converter lv_font_conv.js] [--only THEME]
 """
 import argparse, subprocess, sys, tempfile
 from pathlib import Path
@@ -16,10 +16,12 @@ from pathlib import Path
 APP = Path(__file__).resolve().parent.parent
 TEXT = '0x20-0x7E,0xA0-0xFF,0x2018-0x201D,0x2026,0x2022'
 CLOCK = '0x20,0x2D,0x30-0x3A,0x41,0x4D,0x50'          # space - 0-9 : A M P
-GLITCH = '0x20-0x7E'
+GLITCH = '0x20-0x7E,0xA0-0xFF,0x400-0x45F'
+DOT = '0x20-0x7E,0xA0-0xFF'
 
 # theme -> [(face, source file, {axis: value} or None, sizes, range)]
 FONTS = {
+    'dot': [('', 'something/Doto-w700.ttf', None, (18, 28), DOT)],
     'hifi': [('ui', 'concepts/Inter-VF.ttf', {'wght': 600}, (12, 14, 16, 18, 20, 24), TEXT),
              ('seg', 'concepts/DSEG7Classic-Bold.ttf', None, (20, 64), CLOCK)],
     'term': [('ui', 'concepts/JetBrainsMono-VF.ttf', {'wght': 500}, (12, 14, 16, 18, 20, 24), TEXT),
@@ -55,7 +57,8 @@ def instance(src, axes, tmp):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('--src', type=Path, default=APP.parent.parent / 'research/fonts')
+    p.add_argument('--src', type=Path, required=True,
+                   help='Font input directory containing the concepts/ and something/ files listed in FONTS')
     p.add_argument('--converter', type=Path, default=APP.parent / 'node_modules/lv_font_conv/lv_font_conv.js')
     p.add_argument('--only')
     a = p.parse_args()
@@ -67,8 +70,9 @@ def main():
             for face, src, axes, sizes, rng in faces:
                 ttf = instance(a.src / src, axes, tmp)
                 for px in sizes:
-                    name = 'diskos_%s_%s_%d' % (theme, face, px)
-                    out = APP / ('font_%s_%s_%d.c' % (theme, face, px))
+                    stem = '_'.join(str(v) for v in (theme, face, px) if v != '')
+                    name = 'diskos_' + stem
+                    out = APP / ('font_' + stem + '.c')
                     subprocess.run(['node', str(a.converter), '--font', str(ttf), '--size', str(px), '--bpp', '4',
                                     '--format', 'lvgl', '--range', rng, '--no-compress', '--force-fast-kern-format',
                                     '--lv-font-name', name, '-o', str(out)], check=True)

@@ -24,7 +24,7 @@ typedef struct {
 } ota_paths_t;
 extern const ota_paths_t OTA_DEV;
 
-enum { OTA_OK = 0, OTA_E_CANCEL, OTA_E_NET, OTA_E_SPACE, OTA_E_UNSUPPORTED, OTA_E_SIG, OTA_E_OLDER, OTA_E_BAD, OTA_E_IO, OTA_E_OFF };
+enum { OTA_OK = 0, OTA_E_CANCEL, OTA_E_NET, OTA_E_SPACE, OTA_E_UNSUPPORTED, OTA_E_SIG, OTA_E_OLDER, OTA_E_BAD, OTA_E_IO, OTA_E_OFF, OTA_E_REJECTED };
 
 #define OTA_NFILES 6
 #define OTA_MAX_UI (32LL * 1024 * 1024)      /* same cap the verifier applies to mq_ui */
@@ -52,6 +52,11 @@ int  ota_allowed(void);                                               /* 1 = Set
 int  ota_discard_pending(const ota_paths_t *p);                       /* 1 = <updates>/pending (and pending.old) is gone; touches nothing else */
 int  ota_pending(const ota_paths_t *p, char *ver, size_t n);          /* 1 = a verified bundle waits for boot */
 int  ota_trial_version(const ota_paths_t *p, char *ver, size_t n);    /* 1 = this boot is a trial (run + launched files agree); cheap, no hashing */
+/* 1 = boot recognizes healthy/revert for this running trial (ota.c boot_marker_matches).
+ * Single intentional divergence from boot: at most 64 KiB total bytes per marker,
+ * including NULs; cap reached before LF/EOF means no valid decision (prompt may
+ * re-ask). Bounds UI-thread scanning of corrupt/hostile files diskOS never writes. */
+int  ota_trial_decided(const ota_paths_t *p);
 int  ota_pcm_running(const ota_paths_t *p);                           /* 1 = some playback substream is RUNNING */
 int  ota_health_write(const ota_paths_t *p);                          /* 1 = wrote <updates>/healthy for the running trial build */
 int  ota_revert_write(const ota_paths_t *p);                          /* 1 = wrote <updates>/revert (user chose "Go back") for the running trial */

@@ -13,6 +13,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+int ui_label_set_changed(lv_obj_t *obj, const char *txt);   /* ui.c: a label's text only when its input changes */
+
 /* Two Now Playing side panels:
  *  - SCR_NPMENU  (right "3-dot" icon): context - Song Info / Go to Album / Artist
  *  - SCR_TUNE    (left "tuning" icon): quick playback - Play Mode / Equalizer    */
@@ -26,8 +28,8 @@ static char g_path[256];
 static int  g_fav, g_have, g_pos_id;
 static lv_obj_t *g_fav_lbl;
 
-static void fav_refresh(void){
-    if(g_fav_lbl) lv_label_set_text(g_fav_lbl, tr(g_fav ? "Remove from Favourites" : "Add to Favourites"));
+static void fav_refresh(void){   /* every playback update: the text only when it changed */
+    ui_label_set_changed(g_fav_lbl, tr(g_fav ? "Remove from Favourites" : "Add to Favourites"));
 }
 void npmenu_set(const track_state_t *st, int playing, const void *thumb_src){
     (void)playing; (void)thumb_src;
@@ -267,7 +269,7 @@ static void pick_add_cb(lv_event_t *e){
     pick_added_toast(n, "Added to playlist", "Couldn't add");
 }
 static void pick_newname_done(const char *name){
-    if(!name) return;
+    if(!name || !name[0]) return;
     if(pick_refuse_unsure()) return;   /* before creating a playlist that would stay empty */
     long pid = mdb_playlist_create(name);
     plpick_reload();

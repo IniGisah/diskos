@@ -4,6 +4,8 @@
 #define SCANNER_H
 /* diskOS music scanner - walks the SD, reads ID3 tags, rebuilds song.db's SONG table.
  * All calls are safe from the LVGL/main thread; the scan itself runs on a worker thread. */
+enum { OLD_TAGS_AUTO, OLD_TAGS_WESTERN, OLD_TAGS_CYRILLIC };
+void scanner_set_old_tags(int mode);          /* main-thread config mirror; next scan snapshots it */
 void scanner_abort(void);                     /* stop a running walk (SD access revoked) */
 int  scanner_cancel(void);                    /* user cancel: 1 = accepted (stops within ~1 s, DB rolled back), 0 = refused (not scanning / already committing) */
 enum { SCAN_OUT_NONE, SCAN_OUT_COMMITTED, SCAN_OUT_CANCELLED, SCAN_OUT_FAILED, SCAN_OUT_NO_SD };
@@ -12,6 +14,7 @@ int  scanner_start(void);                     /* begin a rescan; 0 = started, -1
 int  scanner_active(void);                    /* 1 while a scan is running */
 void scanner_progress(int *done, int *total); /* files done so far; total is 0 until finished */
 int  scanner_take_finished(void);             /* returns 1 exactly once after a scan finishes */
+int  scanner_take_committed(void);            /* 1 once if any scan committed since the last call (survives a new start) */
 int  scanner_no_sd(void);                     /* 1 if the last scan aborted: no SD mounted (library kept) */
 int  scanner_skipped(void);                   /* unreadable/overlong files from the completed scan */
 int  scanner_unsupported(void);               /* count of audio files present but not indexable (AAC/M4A/OGG/...) */
@@ -21,5 +24,5 @@ int  scanner_unsupported(void);               /* count of audio files present bu
 typedef struct { long start_ms; char title[CHAP_TITLE]; } chapter_t;
 int  scan_read_chapters(const char *path, chapter_t *out, int max);   /* count read (0 if none); chpl only */
 int  scan_cue_files(const char *cue_path, char (*out)[1024], int max, int (*seen)(const char *));   /* Browse Files: the library files a .cue sheet names (the scanner's bounded resolver); count */
-int  scan_read_narrator(const char *path, char *out, int cap);        /* 1 if the m4b names a narrator (composer/©wrt) */
+int  scan_read_narrator(const char *path, char *out, int cap);        /* 1 if the m4b names a narrator (composer/0xA9 + "wrt") */
 #endif

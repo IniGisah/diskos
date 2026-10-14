@@ -19,17 +19,22 @@
 #include <sys/ioctl.h>
 #include <sys/mount.h>     /* mount(): direct SD mount fallback when the player's uevent listener won't (V2.40) */
 #include <sys/stat.h>
+#include <glob.h>
 #include <dirent.h>      /* mkdir() for the SD mount point */
 #include <linux/input.h>   /* EVIOCGKEY / KEY_MAX for the boot-time Vol-Up override */
 #include <net/if.h>
 #include "lvgl/lvgl.h"
+#include "lvgl/src/core/lv_refr_private.h"
 #include "theme.h"
+#include "theme_kit.h"
+#include "fontft.h"
 #include "fb_pan.h"
 #include "controls.h"
 #include "screens.h"
 #include "modes.h"
 #include "anim.h"
 #include "ipc.h"
+#include "opustitle_worker.h"
 #include "fwcaps.h"
 #include "musicdb.h"
 #include "prof.h"
@@ -42,10 +47,13 @@
 #include "art.h"
 #include "power.h"
 
+void mclock_sync(int backlight_on);
+void ui_np_title_scroll(int visible);
+void library_jump_cancel(void);
+
 static lv_indev_t *g_touch = NULL;
-static int         g_screen_off = 0;   /* mirrors (bl_state==2) each main-loop iteration; read by the
-                                          slow polls (status/clock) so screen-off work can be skipped
-                                          without exposing main()'s local bl_state. */
+static int         g_screen_off = 0;   /* mirrors (bl_state==2), including changes before navigation;
+                                          slow polls also use it to skip work while the panel is off. */
 static int         g_touch_raw = -1;   /* a 2nd, RAW read-only fd on the touch evdev, used ONLY to
                                           wake a screen-off panel: LVGL coalesces a quick tap into a
                                           final RELEASED (no press edge -> no wake), so we watch the
@@ -58,6 +66,35 @@ static int         g_touch_raw = -1;   /* a 2nd, RAW read-only fd on the touch e
 static volatile int g_manual_sleep = 0;
 static uint32_t g_manual_sleep_at = 0;
 void ui_request_sleep(void){ g_manual_sleep = 1; g_manual_sleep_at = lv_tick_get(); }
+int ui_screen_backlight_on(void){ return !g_screen_off; }
+void ui_backlight_hold(void);              /* settings.c: positive levels wait for the release */
+void ui_backlight_release(int fallback);   /* settings.c: light the latest held level (else fallback) */
+/* UI thread: hold drawing and brightness until wake content has caught up. The brightness hold is in settings.c's
+ * ui_backlight, so every writer (callbacks included) waits for the repaint; release lights the latest level. */
+static int g_draw_dark;
+static void draw_set_dark(int dark){
+    if(dark == g_draw_dark) return;
+    lv_display_t *d = lv_display_get_default();
+    if(!d) return;
+    g_draw_dark = dark;
+    if(dark){
+        /* Discard pending redraws before disabling the queue, including a saver pop. */
+        lv_inv_area(d, NULL);
+        lv_display_enable_invalidation(d, 0);
+        lv_timer_pause(lv_display_get_refr_timer(d));
+        ui_backlight_hold();
+    } else {
+        lv_display_enable_invalidation(d, 1);
+        lv_obj_invalidate(lv_display_get_screen_active(d));
+        lv_obj_invalidate(lv_display_get_layer_bottom(d));
+        lv_obj_invalidate(lv_display_get_layer_top(d));
+        lv_obj_invalidate(lv_display_get_layer_sys(d));
+        lv_refr_now(d);
+        ui_backlight_release(ui_effective_brightness());
+    }
+}
+static void wake_backlight(int v){ ui_backlight(v); }   /* a wake's light: held by ui_backlight while dark */
+void albumwall_poll_sync(int lit);
 static lv_obj_t   *g_dbgdot = NULL;
 static int         g_dbg = 0;          /* show tap dot (only if /usr/data/touch_dbg) */
 
@@ -105,7 +142,7 @@ void ui_set_swipe_thresh(int px){     /* live + persist */
     cfg_set_int("swipe_thresh", g_swipe_thresh);
 }
 static void swipe_thresh_load(void){
-    g_swipe_thresh = cfg_get_int("swipe_thresh", SWIPE_THRESH_DEFAULT);
+    ui_apply_swipe_thresh(cfg_get_int("swipe_thresh", SWIPE_THRESH_DEFAULT));   /* same clamp as the setter */
 }
 
 static void dbgdot_init(void){
@@ -127,6 +164,87 @@ static void go_settings(void){ screen_show(SCR_SETTINGS); }
 static int read_int_file(const char *path){
     FILE *f = fopen(path, "r"); if(!f) return -1;
     int v = -1; if(fscanf(f, "%d", &v) != 1) v = -1; fclose(f); return v;
+}
+
+/* The power button belongs to the player (it grabs event0). A short press toggles the player's screen: to sleep it
+ * suspends the LCD panel (SUSPEND_CMD on /dev/lcd_st77916) and the touch chip (CST8xx) and writes brightness 0; to wake
+ * it resumes both and writes its own saved level (mq_player V2.57 lcd_handler.c / echo_panel_sleep_in / _out strings;
+ * device-measured 2026-10-07: 6 -> 0 -> 9). diskOS can only follow: brightness is the one trace it can read, and a
+ * backlight lit over a sleeping panel shows nothing (device test 2026-10-07: a "wake" on the 0 write flashed and went
+ * black). So: the player sleeping (0) powers diskOS's rail down; the player waking (its level after a 0) lights the
+ * screen at the USER's level (it came back at the player's 9 instead of the user's 23). After diskOS's own Screen Off
+ * (rail down, panel still awake) the first press only sleeps the panel and the second wakes it. A write that is neither
+ * (the player rewriting a level while awake) keeps diskOS's level. A press that writes the value already there is
+ * invisible here (e.g. a user level equal to the player's). */
+typedef struct { int seen; int player_off; unsigned off_seq; } powerkey_t;
+    /* seen: brightness last seen; player_off: panel asleep; off_seq: diskOS's write count when it went to sleep */
+enum { PK_NONE, PK_OFF, PK_WAKE, PK_RELEVEL };
+/* ours / ours_seq: the value and write count of diskOS's own brightness writes. After a player sleep, a level is the
+ * player's wake unless diskOS has written since (its startup write, a tap) - so a player level that EQUALS the
+ * user's still wakes the screen. */
+static int powerkey_step(powerkey_t *k, int cbr, int ours, unsigned ours_seq, int dark){
+    if(cbr < 0 || cbr == k->seen) return PK_NONE;
+    k->seen = cbr;
+    if(cbr == 0){ k->player_off = 1; k->off_seq = ours_seq; return dark ? PK_NONE : PK_OFF; }   /* panel asleep */
+    if(k->player_off){
+        if(cbr == ours && ours_seq != k->off_seq) return PK_NONE;     /* diskOS's own write while the panel sleeps */
+        k->player_off = 0; return PK_WAKE;                    /* panel awake again: light it at the user's level */
+    }
+    if(cbr == ours) return PK_NONE;                            /* our own write landing */
+    return PK_RELEVEL;                                         /* the player rewrote a level - keep ours */
+}
+/* Zero during early boot may precede the player's first level. Prefer a lit boot if uptime is unknown too.
+ * After a conservative 150s boot window, preserve zero so an equal-level wake remains observable. */
+static int powerkey_defer_startup(int brightness){
+    if(brightness != 0 || fw_power_key_driveable()) return 0;
+    double up = -1; FILE *f = fopen("/proc/uptime", "r");
+    if(f){ if(fscanf(f, "%lf", &up) != 1) up = -1; fclose(f); }
+    return up > 150.0;
+}
+/* V2.57: one player screen frame (aa23 0 = it slept its panel and touch, 1 = it woke them) -> what diskOS does.
+ * Dark with the player awake can only be diskOS's own Screen Off, so a sleep frame then is a press meant to WAKE:
+ * the player is asked to undo its sleep (SF_INJECT; its wake frame follows), unless it is powering off. The press is
+ * sent only after the player's sleep has finished (~240 ms: two 120 ms waits after the frame) and only if no newer
+ * screen frame came in meanwhile (a USB plug or a library scan can wake the player on its own; a toggle then would
+ * put it back to sleep). That narrows, but cannot close, the window for such a wake - an event already queued in
+ * the key device cannot be recalled. */
+enum { SF_NONE, SF_OFF, SF_WAKE, SF_INJECT };
+static int screen_frame_step(int on, int bl_state, int *player_off, int poweroff_inhibit){
+    if(on){ *player_off = 0; return SF_WAKE; }
+    int own_off = bl_state == 2 && !*player_off;
+    *player_off = 1;
+    if(own_off) return poweroff_inhibit ? SF_NONE : SF_INJECT;
+    return SF_OFF;
+}
+/* One short power-button press into the player's key device (V2.57: mq_player reads event0 "x2000_key" without a
+ * grab and toggles its screen on EV_KEY 265 value 1). Used only to undo the
+ * player's sleep after a press that was meant to wake diskOS's own Screen Off, so the player and diskOS agree on
+ * whether the screen is on. Never codes 264 (power-off) or a held key. 1 = written. */
+static int power_key_inject(void){
+    char path[64], name[32];
+    for(int i = 0; i < 8; i++){
+        snprintf(path, sizeof path, "/sys/class/input/event%d/device/name", i);
+        FILE *f = fopen(path, "r"); if(!f) continue;
+        int got = fgets(name, sizeof name, f) != NULL; fclose(f);
+        if(!got || strncmp(name, "x2000_key", 9) || (name[9] && name[9] != '\n')) continue;
+        snprintf(path, sizeof path, "/dev/input/event%d", i);
+        int fd = open(path, O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+        if(fd < 0) return 0;
+        struct input_event ev[4]; memset(ev, 0, sizeof ev);
+        ev[0].type = EV_KEY; ev[0].code = 265; ev[0].value = 1;  ev[1].type = EV_SYN; ev[1].code = SYN_REPORT;
+        ev[2].type = EV_KEY; ev[2].code = 265; ev[2].value = 0;  ev[3].type = EV_SYN; ev[3].code = SYN_REPORT;
+        int ok = write(fd, ev, sizeof ev) == (ssize_t)sizeof ev;
+        close(fd);
+        fprintf(stderr, "power key: %s a press to wake the player's screen\n", ok ? "sent" : "could not send");
+        return ok;
+    }
+    return 0;
+}
+/* the dimmed level: the vinyl art-showcase saver keeps the user's brightness, everything else crushes to 6 */
+static int dim_level(void){
+    int dim = ui_effective_brightness();
+    if(dim > 6 && !(screen_current() == SCR_SAVER && saver_wants_bright())) dim = 6;
+    return dim;
 }
 
 static void clock_tick(lv_timer_t *t){
@@ -244,12 +362,13 @@ int ui_apply_eq(int preset){
 int ui_eq_select(int preset){
     if(preset < 0) preset = 0; if(preset > 20) preset = 20;
     if(ui_apply_eq(preset) < 0) return -1;
-    if(preset > 0) cfg_set_int("eq_last", preset);
-    cfg_set_int("eq_preset", preset);
+    if(preset > 0) cfg_set_int_deferred("eq_last", preset);
+    cfg_set_int_deferred("eq_preset", preset);
+    cfg_flush();   /* both keys in one rewrite */
     return 0;
 }
 
-/* --- Audio/DAC cluster (commands reverse-engineered 2026-06-30, RE_CATALOGUE §5c) ---------
+/* --- Audio/DAC cluster (commands reverse-engineered 2026-06-30, RE_CATALOGUE section 5c) ---------
  * These apply LIVE only; the player persists to SYSCONFIG on shutdown, not on the command.
  * So diskOS owns persistence: settings.c stores the chosen value in diskos.conf and we
  * re-send the commands once the player is ready (ui_reapply_audio). A value of -1 in cfg =
@@ -260,7 +379,7 @@ void ui_set_output(int spdif){  if(spdif<0) return; modes_output_switch(spdif ? 
 void ui_set_dac_filter(int idx){ if(idx<0||idx>5) return; char f[16]; snprintf(f,sizeof f,"0653000C%04X",idx); ipc_send_cmd(f); }
 /* ReplayGain / volume-levelling: 0718 (RE-confirmed, on-device-safe 2026-08-24). 0=Off 1=Track 2=Album. */
 void ui_set_replay_gain(int v){ if(v<0||v>2) return; char f[16]; snprintf(f,sizeof f,"0718000C%04X",(unsigned)v); ipc_send_cmd(f); }
-/* more settings decoded 2026-06-30 (RE_CATALOGUE §5d) - config/mixer commands, applied on
+/* more settings decoded 2026-06-30 (RE_CATALOGUE section 5d) - config/mixer commands, applied on
  * live user change only (never blind-sent at boot). */
 void ui_set_gapless(int on){   if(on<0) return; ipc_send_cmd(on ? "0647000C0001" : "0647000C0000"); }
 /* Artist / Album Artist grouping (0648, the player's ARTIST_CLASS_TYPE): the player builds its artist queues with it,
@@ -294,6 +413,117 @@ void ui_set_balance(int v){ if(v < -10 || v > 10) return;   /* enforce UI range;
  * frame shape matches stock. Pause/seek/play resumes the current track after routing.
  * g_route_mac = the MAC we've routed to ("" = local/analog; kept for validation + dedup). */
 static char g_route_mac[20] = "";
+static int g_startup_route_checked = 0;
+static void route_uppercase(const char *in, char *out, int cap);
+#ifndef ROUTE_STATE_PATH
+#define ROUTE_STATE_PATH "/tmp/.diskos-ui/route"
+#endif
+#ifndef ROUTE_STATE_DIR
+#define ROUTE_STATE_DIR "/tmp/.diskos-ui"
+#endif
+#ifndef ROUTE_STATE_UID
+#define ROUTE_STATE_UID 0
+#endif
+#ifndef ROUTE_PROC_ROOT
+#define ROUTE_PROC_ROOT "/proc"
+#endif
+/* /proc start time distinguishes a surviving player from a reused PID. The IPC
+ * generation is recorded for diagnosis, but resets when the UI process restarts. */
+static int route_player_identity(long *pid, unsigned long long *start){
+    DIR *dir = opendir(ROUTE_PROC_ROOT);
+    if(!dir) return -1;
+    int found = 0;
+    struct dirent *ent;
+    while((ent = readdir(dir))){
+        char *end; errno = 0;
+        long p = strtol(ent->d_name, &end, 10);
+        if(errno || p <= 0 || *end) continue;
+        char path[256];
+        if(snprintf(path, sizeof path, "%s/%ld/stat", ROUTE_PROC_ROOT, p) >= (int)sizeof path) continue;
+        FILE *f = fopen(path, "r");
+        if(!f) continue;
+        char line[1024]; int ok = fgets(line, sizeof line, f) != NULL && strchr(line, '\n') != NULL;
+        fclose(f);
+        if(!ok) continue;
+        char *lp = strchr(line, '('), *rp = strrchr(line, ')');
+        if(!lp || !rp || rp <= lp || (size_t)(rp-lp-1) != strlen("mq_player") ||
+           strncmp(lp+1, "mq_player", rp-lp-1) || rp[1] != ' ') continue;
+        char *save = NULL, *tok = strtok_r(rp+2, " \n", &save);
+        if(!tok || tok[0] == 'Z' || tok[0] == 'X') continue;
+        for(int field=3; field<22 && tok; field++) tok = strtok_r(NULL, " \n", &save);
+        if(!tok) continue;
+        errno = 0;
+        unsigned long long ticks = strtoull(tok, &end, 10);
+        if(errno || !ticks || *end) continue;
+        *pid = p; *start = ticks;
+        found++;
+        if(found > 1) break;  /* ambiguous player ownership: never persist a route */
+    }
+    closedir(dir);
+    return found == 1 ? 0 : -1;
+}
+static int route_state_dir(int create){
+    struct stat st;
+    if(create && mkdir(ROUTE_STATE_DIR, 0700) < 0 && errno != EEXIST) return 0;
+    return lstat(ROUTE_STATE_DIR, &st) == 0 && S_ISDIR(st.st_mode) &&
+           st.st_uid == ROUTE_STATE_UID && (st.st_mode & 07777) == 0700;
+}
+static void route_state_remove(void){ if(route_state_dir(0)) (void)unlink(ROUTE_STATE_PATH); }
+static void route_state_save(const char *mac){
+    if(!route_state_dir(1)) return;
+    long pid; unsigned long long start;
+    if(route_player_identity(&pid, &start) < 0){ route_state_remove(); return; }
+    char data[128];
+    int n = snprintf(data, sizeof data, "pid=%ld start=%llu gen=%u mac=%s\n",
+                     pid, start, ipc_generation(), mac);
+    if(n <= 0 || n >= (int)sizeof data){ route_state_remove(); return; }
+    char tmp[sizeof ROUTE_STATE_PATH + 16];
+    if(snprintf(tmp, sizeof tmp, "%s.XXXXXX", ROUTE_STATE_PATH) >= (int)sizeof tmp){ route_state_remove(); return; }
+    int fd = mkstemp(tmp);
+    if(fd < 0){ route_state_remove(); return; }
+    size_t pos = 0;
+    while(pos < (size_t)n){ ssize_t w = write(fd, data+pos, (size_t)n-pos);
+        if(w < 0 && errno == EINTR) continue;
+        if(w <= 0) break;
+        pos += (size_t)w;
+    }
+    int ok = pos == (size_t)n && fchmod(fd, 0600) == 0;
+    close(fd);
+    if(!ok || rename(tmp, ROUTE_STATE_PATH) != 0){ unlink(tmp); route_state_remove(); }
+}
+/* Return 1 only for this running player. Any other file is discarded. */
+static int route_state_restore(void){
+    if(!route_state_dir(0)) return 0;
+    int fd = open(ROUTE_STATE_PATH, O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
+    if(fd < 0){ if(errno != ENOENT) route_state_remove(); return 0; }
+    struct stat st;
+    char data[128]; ssize_t n = -1;
+    if(fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == ROUTE_STATE_UID &&
+       (st.st_mode & 07777) == 0600 && st.st_size > 0 && st.st_size < (off_t)sizeof data)
+        n = read(fd, data, sizeof data);
+    close(fd);
+    if(n <= 0 || n >= (ssize_t)sizeof data || n != st.st_size || memchr(data, 0, (size_t)n)){
+        route_state_remove(); return 0;
+    }
+    data[n] = 0;
+    long pid = -1, current_pid; unsigned long long start = 0, current_start;
+    unsigned gen; char mac[20], canonical[128];
+    if(sscanf(data, "pid=%ld start=%llu gen=%u mac=%19s", &pid, &start, &gen, mac) != 4 ||
+       snprintf(canonical, sizeof canonical, "pid=%ld start=%llu gen=%u mac=%s\n", pid, start, gen, mac) <= 0 ||
+       strcmp(data, canonical) || pid <= 0 || !start ||
+       route_player_identity(&current_pid, &current_start) < 0 ||
+       pid != current_pid || start != current_start){ route_state_remove(); return 0; }
+    char norm[20]; route_uppercase(mac, norm, sizeof norm);
+    if(strlen(norm) != 17){ route_state_remove(); return 0; }
+    for(int i=0;i<17;i++){
+        if((i+1)%3 == 0 ? norm[i] != ':' :
+           !((norm[i]>='0'&&norm[i]<='9') || (norm[i]>='A'&&norm[i]<='F'))){
+            route_state_remove(); return 0;
+        }
+    }
+    snprintf(g_route_mac, sizeof g_route_mac, "%s", norm);
+    return 1;
+}
 static int g_playing = 0;   /* published each tick by the main loop's play/pause inference; the routing
                              * fns read THIS, not the raw st.state (which reports 0 while playing). */
 /* After a player restart, the fresh player runs a ~7s late-init on its mode-control thread that can
@@ -351,14 +581,16 @@ int ui_route_bt(const char *mac){
     if(st.have_track && st.position_ms > 0) ui_seek_to(st.position_ms);  /* resume position, not restart */
     if(was_playing) ipc_send_cmd("0201000C0000");       /* play */
     snprintf(g_route_mac, sizeof g_route_mac, "%s", norm);
+    route_state_save(norm);
+    g_startup_route_checked = 1;                       /* an intentional BT route supersedes startup recovery */
     ui_bt_codec_upgrade_arm(norm, 1);                      /* AAC/LDAC chosen: switch once BlueALSA has the PCM (no-op for SBC) */
     fprintf(stderr,"route BT %s (playing=%d pos=%ldms)\n", norm, was_playing, st.position_ms); fflush(stderr);
     return 0;
 }
-int ui_route_analog(void){
+static int route_analog(int force){
     if(modes_output_busy()) return -1;
     if(!ui_local_playback_allowed()) return -1;
-    if(!g_route_mac[0]) return 0;                       /* already on local/analog */
+    if(!force && !g_route_mac[0]){ route_state_remove(); return 0; }
     track_state_t st; ipc_get_state(&st);
     int was_playing = g_playing;   /* real play state (raw st.state reports 0 while playing) */
     if(was_playing && ipc_send_cmd("0201000C0000") < 0) return -1;   /* pause; abort route if it can't be sent (don't switch output unpaused) */
@@ -369,9 +601,14 @@ int ui_route_analog(void){
     if(st.have_track && st.position_ms > 0) ui_seek_to(st.position_ms);
     if(was_playing) ipc_send_cmd("0201000C0000");       /* play */
     g_route_mac[0] = 0;
+    route_state_remove();
     ui_bt_codec_upgrade_cancel();                       /* a pending codec switch must not outlive this route */
     fprintf(stderr,"route analog (playing=%d)\n", was_playing); fflush(stderr);
     return 0;
+}
+int ui_route_analog(void){
+    if(modes_output_busy()) return -1;
+    return route_analog(0);
 }
 
 /* Working-mode (audio SOURCE) switch. Replays the stock V2.28 sequences captured + live-verified
@@ -684,13 +921,275 @@ void ui_reapply_audio(void){
 }
 /* When a play triggers a full list rebuild (seconds), we show "Starting..." and
  * confirm via the next a2 track update (the verified oracle); g_play_pending holds
- * the start tick (0 = nothing pending). Cleared on track update or a 6s timeout. */
+ * the start tick (0 = nothing pending). Track and stream evidence retire it. */
+/* Main loop is the controller's only owner. RX hands off copied evidence. */
+static void opus_title_tick(void){
+    static opus_title_worker *worker;
+    static int attempted, active;
+    static uint64_t token=UINT64_MAX;
+    ipc_title_event event; ipc_get_title_event(&event);
+    if(!attempted){ worker=otw_create(NULL,NULL); attempted=1; }
+    if(!worker){
+        if(event.state.player_confirmed && !event.state.title_ready)
+            ipc_publish_title(&event,event.player_title,1);
+        return;
+    }
+    otw_library_commit(worker,ipc_library_epoch());
+    for(unsigned polls=0;;polls++){
+        track_state_t *s=&event.state;
+        if(token!=s->playback_token){ otw_identity_end(worker); token=s->playback_token; active=0; }
+        otw_player_generation(worker,s->player_generation);
+        if(s->player_confirmed && (active || !s->title_ready)){
+            active=1;
+            unsigned flags=((s->is_cue_valid && s->is_sacd_valid) ||
+                (s->is_cue_valid && s->is_cue) || (s->is_sacd_valid && s->is_sacd) ? OTW_KIND_KNOWN : 0) |
+                (s->is_cue_valid && s->is_cue ? OTW_CUE : 0) |
+                (s->is_sacd_valid && s->is_sacd ? OTW_SACD : 0);
+            otw_identity id={s->player_generation,s->song_id_raw,s->pos_id_raw,s->song_id_valid,s->pos_id_valid};
+            otw_submit(worker,id,s->path,event.player_title,flags);
+        }
+        /* Bound retries under sustained RX changes, after reconciling the latest evidence. */
+        if(polls==2) return;
+        struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
+        otw_commit commit;
+        if(!otw_poll(worker,(uint64_t)now.tv_sec*1000+now.tv_nsec/1000000,&commit)) return;
+        int freeze=commit.result.outcome!=OPUS_TITLE_NOT_APPLICABLE;
+        if(ipc_publish_title(&event,commit.result.title,freeze)){
+            if(!freeze) active=0;
+            return;
+        }
+        /* IPC copied newer evidence on rejection. No controller call spans its lock. */
+        otw_reject_commit(worker);
+    }
+}
 static uint32_t g_play_pending = 0;
-static char g_play_initpath[256] = "";   /* track path at play-initiation (for the pending-clear) */
-static char g_play_inittitle[160] = "";  /* title at play-init: tracks of one CUE/ISO share a path, so a title change also confirms */
-static int g_play_initposid = 0;         /* a2 pos_id (LIST_SONG_0.ID) at play-init: a change is a row change even inside one shared file */
-static long g_play_initpos = 0;          /* position at play-init: a backward jump = restart (same-track replay) */
-/* V2.40 LOCALPLAYER work-mode one-shot. Mechanism (RE'd from mq_player_v240):
+/* Playback-start monitor: metadata is progress; raw a2 state is not play proof. */
+#ifndef PLAY_PCM_GLOB
+#define PLAY_PCM_GLOB "/proc/asound/card*/pcm*p/sub*/status"
+#endif
+static int play_pcm_running(void){
+    glob_t paths;
+    if(glob(PLAY_PCM_GLOB, 0, NULL, &paths) != 0){
+        globfree(&paths);
+        return 0;
+    }
+    int running = 0;
+    for(size_t i = 0; i < paths.gl_pathc && i < 16 && !running; i++){
+        char buf[512];
+        int fd = open(paths.gl_pathv[i],
+                      O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+        if(fd < 0) continue;
+        ssize_t n = read(fd, buf, sizeof buf - 1);
+        close(fd);
+        if(n > 0){
+            buf[n] = 0;
+            running = strstr(buf, "state: RUNNING") != NULL;
+        }
+    }
+    globfree(&paths);
+    return running;
+}
+
+/* Track fields are copied before the send. The transport epoch includes
+ * the successfully queued request. Serial distinguishes requests at one tick. */
+static struct {
+    uint32_t request, at;
+    unsigned serial, pos_seq, generation, transport;
+    uint64_t token;
+    long position, duration;
+    int have_track, playing, provisional;
+} g_play_pre;
+
+static void play_request_arm(const track_state_t *cur, int was_playing){
+    g_play_pending = lv_tick_get();
+    if(!g_play_pending) g_play_pending = 1;
+
+    g_play_pre.serial++;
+    g_play_pre.request = g_play_pre.at = g_play_pending;
+    g_play_pre.pos_seq = cur->pos_seq;
+    g_play_pre.position = cur->position_ms;
+    g_play_pre.generation = cur->player_generation;
+    g_play_pre.transport = ipc_transport_seq();
+    g_play_pre.token = cur->playback_token;
+    g_play_pre.duration = cur->duration_ms;
+    g_play_pre.have_track = cur->have_track;
+    g_play_pre.playing = was_playing;
+    g_play_pre.provisional = cur->provisional;
+}
+
+/* Routine observations are at least 500 ms apart. A terminal decision
+ * may force one fresh observation, without duplicating a read at this tick. */
+static int play_pcm_seen(uint32_t now, int fresh){
+    static uint32_t at;
+    static int valid, running;
+    if(!valid || now - at >= 500 || (fresh && at != now)){
+        running = play_pcm_running();
+        at = now;
+        valid = 1;
+    }
+    return running;
+}
+
+/* Only a track/restart transition attributes advances to this request.
+ * A stopped snapshot near zero is ambiguous: preserve possible start
+ * evidence to avoid a late error, but never use it to record health. */
+static int play_start_failed(const track_state_t *st){
+    static uint32_t request, progress, pos_at, adv_at;
+    static unsigned serial, pos_seq, generation, transport;
+    static uint64_t token;
+    static long position, duration;
+    static int active, had_track, seed, advances;
+    static int attrib, started, possible, may_start, seen;
+
+    uint32_t now = lv_tick_get();
+    if(!g_play_pending){
+        active = 0;
+        return 0;
+    }
+    if(!active || request != g_play_pending ||
+       serial != g_play_pre.serial){
+        active = 1;
+        request = g_play_pending;
+        serial = g_play_pre.serial;
+        progress = request;
+        advances = attrib = started = possible = seen = 0;
+        may_start = seed = 0;
+
+        if(g_play_pre.request == request){
+            pos_at = g_play_pre.at;
+            pos_seq = g_play_pre.pos_seq;
+            position = g_play_pre.position;
+            generation = g_play_pre.generation;
+            transport = g_play_pre.transport;
+            token = g_play_pre.token;
+            duration = g_play_pre.duration;
+            had_track = g_play_pre.have_track;
+            seed = g_play_pre.provisional;
+            may_start = !g_play_pre.playing &&
+                        (!had_track || position <= 1500);
+        } else {
+            pos_at = now;
+            pos_seq = st->pos_seq;
+            position = st->position_ms;
+            generation = st->player_generation;
+            transport = ipc_transport_seq();
+            token = st->playback_token;
+            duration = st->duration_ms;
+            had_track = st->have_track;
+        }
+    }
+
+    /* A new player or another transport attempt supersedes this request. */
+    if(generation != st->player_generation ||
+       transport != ipc_transport_seq()){
+        g_play_pending = 0;
+        active = 0;
+        return 0;
+    }
+
+    if(seed && st->player_confirmed){
+        /* First real metadata corrects a presentation seed, not a start. */
+        seed = 0;
+        attrib = 0;
+        advances = 0;
+        progress = now;
+        token = st->playback_token;
+        duration = st->duration_ms;
+        had_track = st->have_track;
+        pos_seq = st->pos_seq;
+        position = st->position_ms;
+        pos_at = now;
+    } else if(token != st->playback_token ||
+              had_track != st->have_track){
+        progress = now;
+        advances = 0;
+        attrib = !seed && st->have_track &&
+                 st->player_confirmed && !st->provisional;
+        token = st->playback_token;
+        duration = st->duration_ms;
+        had_track = st->have_track;
+        pos_seq = st->pos_seq;
+        position = st->position_ms;
+        pos_at = now;
+    } else if(duration != st->duration_ms){
+        /* Metadata progress buys time but establishes no attribution. */
+        progress = now;
+        advances = 0;
+        duration = st->duration_ms;
+        pos_seq = st->pos_seq;
+        position = st->position_ms;
+        pos_at = now;
+    }
+
+    if(st->pos_seq != pos_seq){
+        long long delta = (long long)st->position_ms - position;
+        uint32_t gap = now - pos_at;
+        long long slack = (long long)gap + 1500;
+        int fresh = st->have_track && st->player_confirmed &&
+                    !st->provisional &&
+                    (int32_t)(st->pos_seq - st->path_seq) > 0;
+        int wrap = delta < 0 && duration > 0 &&
+                   position >= 0 && position <= duration &&
+                   st->position_ms >= 0 &&
+                   st->position_ms <= duration &&
+                   (long long)duration - position +
+                       st->position_ms <= slack;
+
+        if(fresh && delta != 0) progress = now;
+        if(fresh && ((delta > 0 && delta <= slack) || wrap)){
+            advances++;
+            seen = 1;
+            adv_at = now;
+            if(attrib) started = 1;
+            else if(may_start) possible = 1;
+        } else {
+            advances = 0;
+            if(fresh && !wrap && delta < -1500)
+                attrib = 1;
+        }
+
+        pos_seq = st->pos_seq;
+        position = st->position_ms;
+        pos_at = now;
+        if(advances >= 2 && (attrib || possible)){
+            g_play_pending = 0;
+            if(attrib){
+                void system_ota_note_playback(void);
+                system_ota_note_playback();
+            }
+            active = 0;
+            return 0;
+        }
+    }
+
+    /* Unobserved rebuild: 15s. Progress: 6s quiet window. Hard limit: 45s. */
+    uint32_t age = now - request;
+    if(age < 45000 && (age < 15000 || now - progress < 6000))
+        return 0;
+
+    /* Established or ambiguous brief starts must not produce a late error.
+     * Neither branch records health here. */
+    if(started || possible){
+        g_play_pending = 0;
+        active = 0;
+        return 0;
+    }
+
+    int final = age >= 45000;
+    int out = seen && now - adv_at < 6000;
+    if(!out) out = play_pcm_seen(now, final);
+    if(!out && !final) out = play_pcm_seen(now, 1);
+    if(out){
+        if(final){
+            g_play_pending = 0;
+            active = 0;
+        }
+        return 0;
+    }
+    return 1;
+}
+/* End playback-start monitor. */
+/* Startup route recovery and V2.40 LOCALPLAYER work-mode one-shot. The latter's mechanism (RE'd from mq_player_v240):
  *  - v2.40's player needs 0666(local route)+0657(LOCALPLAYER work-mode) set at runtime or local
  *    start_local fails ("work mode NULL"/NO_WORK_MODE -> g_fiio_local null). Protocol 0657=8 maps to
  *    internal work-mode 1 (LOCALPLAYER); 0 = NO_WORK_MODE.
@@ -704,11 +1203,90 @@ static long g_play_initpos = 0;          /* position at play-init: a backward ju
  *    liveness only, a714=volume. The best anchor is: solicit a2 with 02020008, then a fixed settle delay.
  *  - IDLE PLAYER IS SILENT: a fresh cold-boot player emits NOTHING unsolicited, so ipc_rx_frames() stays
  *    0 forever unless we poke it. We therefore actively send 02020008 every tick until it answers (a2),
- *    anchor the settle timer on that first response, then send 0666+0657 EXACTLY ONCE per player
- *    generation. Gated Local source + analog output (g_route_mac empty) so it never stomps a BT A2DP
- *    route, never while a play is pending. The play-timeout handler re-asserts once as a safety net. */
+ *    anchor the settle timer on that first response. The V2.40/V2.57 local init then sends 0666+0657
+ *    once per player generation; the saved-BT-route check runs only once per UI process. Both require
+ *    Local source + analog output intent (g_route_mac empty), and wait while a play is pending. */
 static unsigned g_play_sent_gen = 0xFFFFFFFFu;   /* ipc generation in which a play command was last sent: that generation's one-shot is moot */
-void ui_note_transport_sent(void){ g_play_sent_gen = ipc_generation(); }
+static uint32_t g_play_sent_at;
+static unsigned g_play_track_seen_gen = 0xFFFFFFFFu;
+void ui_note_transport_sent(void){ g_play_sent_gen = ipc_generation(); g_play_sent_at = lv_tick_get(); }
+/* A sent play can precede its first track reply. A loaded track may still be paused,
+ * so wait for the player to unload it and for the last play evidence to age out. */
+static int startup_playback_busy(unsigned gen){
+    if(g_playing) g_play_track_seen_gen = gen;
+    if(g_play_pending || g_playing || book_session_active()) return 1;
+    if(g_play_sent_gen != gen) return 0;
+    track_state_t st; ipc_get_state(&st);
+    if(st.have_track) g_play_track_seen_gen = gen;
+    return st.have_track || g_play_track_seen_gen != gen || lv_tick_elaps(g_play_sent_at) < 10000;
+}
+/* Read the live player's age once per generation. An old idle player need not answer
+ * the track probe before a route recovery; a young player still uses the reply/settle path. */
+static int startup_player_old(void){
+    long pid, hz = sysconf(_SC_CLK_TCK);
+    unsigned long long start;
+    if(hz <= 0 || route_player_identity(&pid, &start) < 0) return 0;
+    char path[sizeof ROUTE_PROC_ROOT + 16];
+    if(snprintf(path, sizeof path, "%s/uptime", ROUTE_PROC_ROOT) >= (int)sizeof path) return 0;
+    FILE *f = fopen(path, "r");
+    if(!f) return 0;
+    double uptime = 0;
+    int ok = fscanf(f, "%lf", &uptime) == 1;
+    fclose(f);
+    return ok && uptime >= 0 && uptime - (double)start / (double)hz >= 12.0;
+}
+/* 0666 updates the player's live output first; its saved OUT_DEV is written by the
+ * player's bulk config save. There is no verified /ui reply for the live out_dev.
+ * A saved BT route is therefore a conservative startup recovery hint. */
+static int startup_saved_bt_route(void){
+    char buf[32] = {0};
+    ui_run_cap_bounded("sqlite3 /usr/data/fiio/db/sysconfig.db 'SELECT OUT_DEV FROM SYSCONFIG WHERE ID=1' 2>/dev/null",
+                       buf, sizeof buf, 250);
+    if(!strcmp(buf, "2\n") || !strcmp(buf, "2")) return 1;
+    if(!strcmp(buf, "6\n") || !strcmp(buf, "6") || !strcmp(buf, "4\n") || !strcmp(buf, "4")) return 0;
+    return -1;   /* absent, locked, malformed or unreadable: do not infer BT */
+}
+/* Same A2DP PCM evidence as bt.c's auto-route poll. The completion marker makes
+ * an empty successful list distinct from a failed or timed-out bluealsa probe. */
+static int startup_connected_sink(const char *mac){
+    if(cfg_get_int("bt_on", 0) != 1) return 0;   /* Bluetooth is off by user intent: no auto-route */
+    char buf[2048] = {0};
+    ui_run_cap_bounded("if ! pidof bluealsa >/dev/null 2>&1; then echo DISKOS_NO_BLUEALSA; "
+                       "else bluealsa-cli list-pcms 2>/dev/null && printf '\\nDISKOS_LIST_DONE\\n'; fi",
+                       buf, sizeof buf, 250);
+    if(strstr(buf, "DISKOS_NO_BLUEALSA\n")) return 0;
+    if(!strstr(buf, "DISKOS_LIST_DONE\n")) return -1;
+    if(!mac || !mac[0]) return strstr(buf, "a2dpsrc") != NULL;
+    char needle[32]; snprintf(needle, sizeof needle, "dev_%s/a2dpsrc", mac);
+    for(char *p=needle; *p; p++) if(*p == ':') *p = '_';
+    route_uppercase(needle, needle, sizeof needle);
+    route_uppercase(buf, buf, sizeof buf);
+    return strstr(buf, needle) != NULL;
+}
+/* 1 = this generation needs no other local init, 0 = normal init may continue,
+ * -1 = evidence or a route send is pending. An inconclusive sink probe waits
+ * at least five seconds before another shell probe on this generation. */
+static int startup_route_reconcile(void){
+    static unsigned sink_retry_gen = 0xFFFFFFFFu;
+    static uint32_t sink_retry_at = 0;
+    if(g_startup_route_checked) return 0;
+    unsigned gen = ipc_generation();
+    if(modes_output_route() != OUT_INTERNAL || cfg_get_int("spdif", 0)){
+        g_startup_route_checked = 1; return 0;
+    }
+    if(sink_retry_gen == gen && lv_tick_elaps(sink_retry_at) < 5000) return -1;
+    /* A route from this live player is newer than its bulk-saved OUT_DEV. */
+    if(!g_route_mac[0]){
+        int saved_bt = startup_saved_bt_route();
+        if(saved_bt <= 0){ g_startup_route_checked = 1; return 0; }
+    }
+    int sink = startup_connected_sink(g_route_mac);
+    if(sink < 0){ sink_retry_gen = gen; sink_retry_at = lv_tick_get(); return -1; }
+    if(sink){ g_startup_route_checked = 1; return 1; }   /* the auto-route poll owns this speaker */
+    if(route_analog(1) < 0) return -1;
+    g_startup_route_checked = 1;
+    return 1;   /* route_analog logs the single recovery line */
+}
 static void localplayer_workmode_cb(lv_timer_t *t){
     /* These commands drive the player and its USB/card ownership, so they need the same admission as any
      * other card access: a qualified launch verdict, SD not held, no decoder fault. A pending verdict waits
@@ -719,24 +1297,38 @@ static void localplayer_workmode_cb(lv_timer_t *t){
     static uint32_t wait_start = 0;
     static unsigned rx_gen  = 0xFFFFFFFFu;    /* generation the rx_base snapshot belongs to */
     static unsigned rx_base = 0;              /* cumulative rx_frames at the start of THIS generation */
-    if(!fw_needs_localplayer_init()){ lv_timer_del(t); return; }
-    if(ui_get_source_mode() != 0 || g_route_mac[0]) return;   /* only while Local source + analog output */
+    static unsigned age_gen = 0xFFFFFFFFu;
+    static int player_old = 0;
+    if(ui_get_source_mode() != 0) return;                     /* only while Local source */
     if(modes_output_busy()) return;                            /* an output switch owns 0666/0642/0657 right now */
-    if(g_play_pending) return;                                 /* never inject 0666 into a starting play */
-    if(book_session_active()) return;                          /* never re-init the route under an active book: 0666 interrupts the stream (books clear g_play_pending, so this is the remaining guard) */
     unsigned gen = ipc_generation();
+    if(age_gen != gen){ age_gen = gen; player_old = !g_startup_route_checked && startup_player_old(); }
+    if(!g_startup_route_checked && player_old && !startup_playback_busy(gen)){
+        int startup = startup_route_reconcile();
+        if(startup > 0) done_gen = gen;
+        if(startup > 0 && !fw_needs_localplayer_init()){
+            lv_timer_del(t); return;
+        }
+    }
+    if(g_play_pending || book_session_active()) return;
+    if(gen == done_gen) return;
     unsigned rx  = ipc_rx_frames();           /* CUMULATIVE across generations -> anchor per-generation via rx_base */
     if(rx_gen != gen){ rx_gen = gen; rx_base = rx; }           /* new generation -> snapshot the count */
     if(rx == rx_base){ ipc_send_probe("02020008"); return; }   /* SOLICIT: THIS generation's player hasn't answered yet (idle player is silent) */
-    if(gen == done_gen) return;                                /* already sent this generation */
+    uint32_t now = lv_tick_get();
+    if(wait_gen != gen){ wait_gen = gen; wait_start = now; return; }   /* first response this gen -> start settle */
+    if(now - wait_start < 9000) return;                        /* settle past the ~7s mode-control-thread window */
+    if(!g_startup_route_checked && startup_playback_busy(gen)) return;
+    int startup = startup_route_reconcile();
+    if(startup < 0) return;
+    if(g_route_mac[0]){ done_gen = gen; if(!fw_needs_localplayer_init()) lv_timer_del(t); return; }
+    if(!fw_needs_localplayer_init()){ lv_timer_del(t); return; }
+    if(startup > 0){ done_gen = gen; return; }
     if(g_play_sent_gen == gen){                                /* a play was started this generation (the play path sends its own preamble while stopped): g_playing is only inferred, so never risk 0666 mid-stream */
         done_gen = gen;
         fprintf(stderr,"v2.40 workmode: local-init skipped, play already sent (gen %u)\n", gen); fflush(stderr);
         return;
     }
-    uint32_t now = lv_tick_get();
-    if(wait_gen != gen){ wait_gen = gen; wait_start = now; return; }   /* first response this gen -> start settle */
-    if(now - wait_start < 9000) return;                        /* settle past the ~7s mode-control-thread window */
     /* Already PLAYING locally (the user started a song inside the settle window): the player has a working local
      * route and work-mode and the card isn't exported - exactly the state this one-shot exists to establish - and
      * 0666 would close the stream mid-song (seen live on V2.57). Count this generation as initialised. */
@@ -787,15 +1379,20 @@ static void playlist_port_cb(lv_timer_t *t){
 static void scanner_poll(lv_timer_t *t){
     (void)t;
     if(scanner_take_finished()){
-        mdb_load();               /* reload the in-memory library (also invalidates the group caches) */
-        library_ensure_capacity(); /* grow row buffers if a clean first-boot 1-song alloc just gained thousands */
-        library_refresh();        /* rebuild whatever Library view is showing */
-        albumwall_prewarm_seed(); /* queue covers for any newly-scanned albums (no Album-view visit required) */
+        int oc = scanner_outcome();
+        /* Only a committed scan changed song.db. Test the commit latch, not the outcome: a scan started before this
+         * poll resets the outcome, and its cancel or failure must not hide the earlier commit. Reload anyway when the
+         * last load failed, so a scan's end still recovers. */
+        if(scanner_take_committed() || mdb_load_failed()){
+            mdb_load();               /* reload the in-memory library (also invalidates the group caches) */
+            library_ensure_capacity(); /* grow row buffers if a clean first-boot 1-song alloc just gained thousands */
+            library_refresh();        /* rebuild whatever Library view is showing */
+            albumwall_prewarm_seed(); /* queue covers for any newly-scanned albums (no Album-view visit required) */
+        }
         int done=0, total=0; scanner_progress(&done, &total);
         int skipped = scanner_skipped();
         int unsup = scanner_unsupported();   /* AAC/M4A/OGG/... present but not indexable yet */
         char b[80];
-        int oc = scanner_outcome();
         if(mdb_load_failed()) snprintf(b, sizeof b, "Library busy - reopen to refresh");  /* DB error on RELOAD (busy/IO): the shown list is stale/empty, so don't claim the scan's count */
         else if(oc == SCAN_OUT_CANCELLED) snprintf(b, sizeof b, "Scan cancelled");   /* rolled back: the library is exactly as it was */
         else if(oc == SCAN_OUT_NO_SD)  snprintf(b, sizeof b, "Insert an SD card to scan");    /* SD not mounted; library kept */
@@ -889,7 +1486,7 @@ static int ui_play_list_ex(int list_type, const char *name, int pos1, int build_
     if(strlen(name) >= 380){ ui_toast("Couldn't play that list"); return 0; }   /* the frame must hold the WHOLE name (a type-7 artist+album name is up to ~2x160 chars) */
     char f[420];
     int sent = 0;
-    g_play_sent_gen = ipc_generation();
+    ui_note_transport_sent();
     /* V2.40 local-play preamble (live-confirmed on device 2026-09-01). The player's mode-control
      * thread drifts the output route to BT (out_dev=2) and resets the work-mode to NULL when idle,
      * so a play from stopped fails: it hangs ~15s trying to open a BT PCM ("Failed to get BT device
@@ -918,12 +1515,8 @@ static int ui_play_list_ex(int list_type, const char *name, int pos1, int build_
             /* rebuild can take seconds - acknowledge + arm completion/timeout.
              * Capture the current track path so we clear only on a REAL track change
              * (a1 position frames from the old track must not falsely clear it). */
-            snprintf(g_play_initpath, sizeof g_play_initpath, "%s", cur.path);
-            snprintf(g_play_inittitle, sizeof g_play_inittitle, "%s", cur.title);
-            g_play_initpos = cur.position_ms;
-            g_play_initposid = cur.pos_id;
+            play_request_arm(&cur, g_playing);   /* cur and g_playing are the pre-send state */
             ui_toast("Starting...");
-            g_play_pending = lv_tick_get(); if(!g_play_pending) g_play_pending = 1;
         } else {
             ui_toast("Couldn't start playback");
         }
@@ -973,7 +1566,7 @@ int ui_queue_jump(int ord1){
     if(fw_needs_localplayer_init() && ui_get_source_mode() == 0 && !g_route_mac[0] && !g_playing && !play_recent()){
         modes_local_init(0);   /* 0666 local route (6 internal, 4 SPDIF, 3 + 0642 5 USB audio), then 0657 8 LOCALPLAYER work-mode */
     }
-    g_play_sent_gen = ipc_generation();
+    ui_note_transport_sent();
     char f[24]; snprintf(f, sizeof f, "0100%04X%04X0000", 16, (ord1 - 1) & 0xFFFF);
     int rc = ipc_send_cmd(f);
     if(rc == 0) play_note_sent();
@@ -1149,7 +1742,7 @@ int ui_play_book(const char *path, long resume_ms){
     if(send_play_mode(4) != 0){ ui_toast("Couldn't start book"); return 0; }   /* Single play-mode is REQUIRED for clean EOF isolation; if it can't be set, don't start the book unguarded */
     g_book_single_mode = 1;                                 /* remember to restore the music mode on the next music play */
     if(!ui_play_list(5, "", 1)) return 0;                   /* frame 0100001000000005 -> reserved slot (seq 0): an isolated 1-item queue; not sent -> no session */
-    g_play_pending = 0;                                     /* a book owns its own load-confirmation via the book session (book_tick's deadline), not the music-scope 6s "Couldn't start playback" timeout - which false-fires when re-tapping the already-current book (path unchanged) */
+    g_play_pending = 0;                                     /* a book owns its own load-confirmation via the book session (book_tick's deadline), not the music-scope playback-start monitor - which false-fires when re-tapping the already-current book (path unchanged) */
     /* Arm the session AFTER the play call: ui_play_list clears the session, so setting it here makes
      * THIS book the active context. */
     snprintf(g_book_sess, sizeof g_book_sess, "%s", path);
@@ -1441,6 +2034,50 @@ static void app_run(const char *exec){
 static void state_sync_retry_cb(lv_timer_t *t){
     (void)t;
     ipc_send_probe("02020008");   /* silent: a miss during the connect race must not toast */
+}
+
+/* Bounded recovery; only a new identity or active transport cancellation restores eligibility. */
+static void advance_probe_tick(int visible){
+    static uint64_t token;
+    static unsigned transport;
+    static unsigned pos_seq;
+    static uint32_t started, sent, pos_at;
+    static long position;
+    static int active, used, have_pos, was_visible = 1;
+    uint32_t now = lv_tick_get();
+    unsigned tx = ipc_transport_seq();
+    track_state_t s; ipc_get_state(&s);
+    int wake = visible && !was_visible;
+    was_visible = visible;
+    int changed = s.playback_token != token;
+    if(changed){
+        token = s.playback_token; active = used = have_pos = 0; pos_seq = 0;
+    }
+    if(!changed && tx != transport){
+        if(active){ active = used = 0; }
+        have_pos = 0; pos_seq = s.pos_seq; /* require progress after the action */
+    }
+    if(g_play_pending || book_session_active()){
+        active = 0; used = 1;
+    }
+    transport = tx;
+    int forward = 0;
+    if(s.pos_seq != pos_seq && (int32_t)(s.pos_seq - s.path_seq) > 0){
+        forward = have_pos && (uint32_t)(now - pos_at) <= 3000 && s.position_ms > position;
+        if(have_pos && s.position_ms < position) active = 0;
+        position = s.position_ms; pos_at = now; pos_seq = s.pos_seq; have_pos = 1;
+    }
+    if(active && (uint32_t)(now - started) >= 60000) active = 0;
+    if(!visible) return;
+    if(wake){ ipc_send_probe("02020008"); sent = now; }
+    if(!s.have_track || !s.player_confirmed || s.provisional){ active = 0; return; }
+    if(!used && forward && s.duration_ms > 1000 && s.position_ms >= s.duration_ms - 1000){
+        used = active = 1; started = now;
+        if(!wake){ ipc_send_probe("02020008"); sent = now; }
+    }
+    if(active && (uint32_t)(now - sent) >= 2000){
+        ipc_send_probe("02020008"); sent = now;
+    }
 }
 
 static int run_bounded(char *const argv[], int timeout_ms);   /* fork+exec with a hard timeout (defined below) */
@@ -1748,6 +2385,7 @@ static int rim_move(int x, int y){
         if(tang < RIM_COMMIT_TANG || tang < fabsf(radial)) return 0;  /* not a rim drag (yet) */
         if(r < RIM_REL_R_MIN){ rim_state=RIM_IDLE; rim_scroller=NULL; return 0; }  /* wandered off the rim before committing -> let normal handling have it */
         lv_indev_wait_release(g_touch);               /* LVGL: drop this touch, we own it now */
+        if(rim_scroller && rim_scroller == library_scroller()) library_jump_cancel();  /* no scroll yet, so no SCROLL_BEGIN */
         if(rim_scroller) lv_obj_scroll_to_y(rim_scroller, lv_obj_get_scroll_y(rim_scroller), LV_ANIM_OFF); /* stop any momentum */
         rim_state=RIM_OWN; rim_last_ang=rim_ang(x,y); rim_last_ms=lv_tick_get(); rim_accum=0;
         return 1;
@@ -2600,9 +3238,15 @@ int main(int argc, char **argv){
         fprintf(stderr,"fbpan try %d failed, retry\n",i); fflush(stderr); usleep(250000); }
     if(!fbok){ fprintf(stderr,"fbpan failed (gave up)\n"); return 1; }
     cfg_load();
+    (void)route_state_restore();  /* restore the live player's route before BT-off/disconnect handlers run */
+    fontft_init();
     theme_init();   /* the palette for this run: before any screen is built */
     swipe_thresh_load();
-    settings_apply_startup();   /* restore saved brightness */
+    int boot_br = read_int_file("/sys/class/backlight/backlight/brightness");   /* the player's value before ours */
+    int startup_deferred = powerkey_defer_startup(boot_br);
+    settings_apply_startup(!startup_deferred);   /* all settings now; late sleeping fallback keeps brightness 0 */
+    if(boot_br == 0 && !startup_deferred && !fw_power_key_driveable())
+        (void)ui_backlight_take_foreign(NULL, NULL);   /* discard only the zero our boot restore overwrote */
     wifi_init_intent();         /* seed wifi_on intent from stock WIFI_STATUS (first run only) */
     fprintf(stderr,"step:screens_init\n");fflush(stderr); screens_init();
     home_set_settings_click_cb(go_settings);
@@ -2628,7 +3272,7 @@ int main(int argc, char **argv){
     lv_timer_create(playlist_port_cb, 5000, NULL);       /* bring pre-1.2.0 / stock-migrated playlists into agreement (see playlist_port_cb) */
     lv_timer_create(sd_features_gate_cb, 500, NULL);     /* start SD-backed features only on a positive launcher verdict */
     g_t_art = lv_timer_create(ui_art_poll, 120, NULL);    /* apply finished album-art decode (worker thread) */
-    lv_timer_create(localplayer_workmode_cb, 500, NULL);  /* V2.40: solicit a2, settle past the mode-control thread, then set LOCALPLAYER work-mode once */
+    lv_timer_create(localplayer_workmode_cb, 500, NULL);  /* solicit a2 and settle before startup route recovery / V2.40 local init */
     /* Background cover/accent prewarm. The worker self-gates on the user's "Album art
      * caching" setting (off/idle/charging) + a battery-temp throttle, so it's safe to
      * always spawn - it just sleeps while disabled or while the player is warm. */
@@ -2719,6 +3363,7 @@ int main(int argc, char **argv){
     int sleep_touch=0; /* press began while the sleep popover was up -> swallow the whole gesture (no ring seek) */
     playstate_t g_ps = { -1, 0 }; int last_playing=-1;   /* play/pause inference (playstate.c, host-tested) */
     char np_last_path[256] = "";   /* last track whose art/backdrop was pushed - so a mere position tick doesn't re-invalidate the 360px backdrop */
+    char np_last_title[sizeof st.title] = "", np_last_artist[sizeof st.artist] = "";
     /* screensaver + screen-off timeouts come from the Settings cyclers (index ->
      * seconds via TMAP), re-read each loop so changes apply live. */
     static const int TMAP[5] = {0,30,60,120,300};
@@ -2726,7 +3371,18 @@ int main(int argc, char **argv){
     int woke = 0;   /* a press that only wakes the saver is swallowed */
     int bl_state = 0;   /* 0 = normal, 1 = saver-dim, 2 = off */
     uint32_t last_blpoll = 0;   /* PW-10 backlight-rail poll cadence */
-    int player_blanked = 0;     /* PW-10: we forced bl_power=4 because the player blanked via brightness=0 */
+    /* A late fallback zero stays untouched until the player's wake. Early boot zeros are treated as startup,
+     * not sleep: light promptly and follow the next player write without retaining a stale sleep flag. */
+    powerkey_t pk = { boot_br, boot_br == 0, 0 };   /* off_seq 0: no diskOS write yet when boot_br was read */
+    if(boot_br == 0 && !startup_deferred){
+        pk.seen = ui_backlight_written(); pk.player_off = 0;
+    }
+    if(startup_deferred){ ui_backlight(0); bl_state = 2; g_screen_off = 1; }
+    /* V2.57: the player's own screen frames (aa23) drive the state; aa03 = it is powering off or prompting to (never
+     * inject until the player restarts). The cursors start at 0 like the ipc counters, so frames that arrived during
+     * startup are handled on the first pass, not skipped. */
+    unsigned scr_seq_seen = 0, aa03_seq_seen = 0, screen_gen_seen = 0, inject_for = 0, inject_gen = 0;
+    int poweroff_inhibit = 0, inject_pending = 0; uint32_t inject_due = 0;
     unsigned last_vol_seq = 0;
     /* Start the boot splash HERE - after all the blocking startup init (hwclock, bt_boot_restore,
      * IPC connect, etc.). Created earlier, its time-based animation would elapse during that
@@ -2743,6 +3399,7 @@ int main(int argc, char **argv){
      * disarming (a blocked write must never leave us alive-but-disarmed), and mask
      * SIGALRM across alarm(0) so an already-pending timer can't fire after we disarm. */
     lv_refr_now(NULL);
+    if(bl_state == 2) draw_set_dark(1);
     if(g_sd_hold){
         ui_toast("SD protection unavailable - library and artwork are off");
         lv_timer_create(sd_degraded_notice_cb, 300000, NULL);   /* keep saying so; a toast is missable */
@@ -2777,11 +3434,13 @@ int main(int argc, char **argv){
              * so ui_reapply_audio's local re-init isn't suppressed, then recover the still-connected speaker
              * via the (settle-deferred) auto-route poll. */
             g_route_mac[0] = 0;
+            route_state_remove();
             bt_notify_player_restart();
             ui_reapply_audio();           /* re-send managed audio config (DRE/filter/etc.); the v2.40 local-init
                                            * is NOT here - it's sent from the play path when the player is ready. */
         }
         if(g_settle_armed) (void)ui_player_settling();   /* service the settle expiry every loop so a dormant armed flag can never wrap (~24.9d) into a false "settling" */
+        opus_title_tick();
         ipc_get_state(&st);
         wifi_supervise();   /* keep wpa_supplicant alive when Wi-Fi should be on (auto-reconnect) */
         /* NOTE: the MAIN LOOP never re-sends audio settings per-tick. Managed settings are (re)applied
@@ -2819,47 +3478,57 @@ int main(int argc, char **argv){
          * original heuristic except a backward/rewind jump no longer counts as advancing. max_adv_ms=0
          * keeps "any forward change counts"; the paused-forward-seek bound is device-tunable. */
         int playing = playstate_playing(&g_ps, st.have_track, st.position_ms, lv_tick_get(), 1600, 0);
-        if(playing) g_play_sent_gen = ipc_generation();   /* playback observed this generation (any start, incl. hardware keys): its one-shot is moot */
+        if(playing) ui_note_transport_sent();   /* playback observed this generation (any start, incl. hardware keys): its one-shot is moot */
         g_playing = playing;   /* publish for ui_route_bt/ui_route_analog (raw st.state is unreliable) */
         st.state = playing ? 2 : 1;
         /* when the backlight is off (deep idle) nothing is visible - skip the whole
          * UI refresh; it catches up on wake (last/ last_playing stay stale). */
-        /* clear a pending play on a REAL track change (different path) OR a restart of
-         * the SAME track (position jumped backwards >1.5s - covers replaying the current
-         * track, which keeps the same path). NOT on st.seq, which a1 frames from the old
-         * still-streaming track also bump (would clear prematurely). */
-        /* Confirm: the pending-clear acknowledges playback so "Starting..." / the 6s "Couldn't start" timeout stop.
-         * Tracks of one CUE/ISO file share a path, so a title or a2 pos_id change also counts. */
-        if(g_play_pending && st.have_track &&
-           (strcmp(st.path, g_play_initpath) != 0 ||
-            (st.title[0] && strcmp(st.title, g_play_inittitle) != 0) ||        /* another track of one CUE/ISO file (an empty title is NOT a change) */
-            (g_play_initposid > 0 && st.pos_id > 0 && st.pos_id != g_play_initposid) ||
-            st.position_ms + 1500 < g_play_initpos)){
-            g_play_pending = 0;
-            { void system_ota_note_playback(void); system_ota_note_playback(); }   /* OTA health: a real playback start was confirmed */
+        /* playback-start timeout: retire only after a quiet, bounded wait with no stream. */
+        if(play_start_failed(&st)){
+            if(g_play_pending && lv_tick_elaps(g_play_pending) > 6000){
+                g_play_pending = 0;
+                ui_toast("Couldn't start playback");
+                /* No automatic 0666/0657: 0666 releases a live local output. */
+            }
         }
-        if(bl_state != 2 && (st.seq != last || playing != last_playing || ui_take_art_force())){
+        ui_np_title_scroll(bl_state != 2);
+        if(bl_state != 2 && (g_draw_dark || st.seq != last || playing != last_playing || ui_take_art_force())){
             last = st.seq; last_playing = playing;
             ui_update(&st);
-            home_set_now_playing(st.have_track?st.title:NULL,
+            home_set_now_playing(st.have_track?ipc_display_title(&st):NULL,
                                  st.have_track?st.artist:NULL,
                                  ui_current_accent(), playing);
+            { void home_set_progress(int, int); int ui_np_progress(void);
+              home_set_progress(ui_np_progress(), st.have_track); }
+            { void saver_set_playing(int); saver_set_playing(playing); }
             /* The art + backdrop surfaces only change on a TRACK change (or when a decode completes -
              * re-pushed below), NOT on every position tick. Re-setting the 360px backdrop image each
              * second re-invalidated the whole screen and defeated partial rendering. Track identity is
              * "" when nothing is playing (so stopping clears the art). */
             const char *idnow = st.have_track ? st.path : "";
-            if(strcmp(idnow, np_last_path) != 0){
+            const char *tnow = st.have_track ? ipc_display_title(&st) : "", *anow = st.have_track ? st.artist : "";
+            int art_changed = strcmp(idnow, np_last_path) != 0;
+            int song_changed = strcmp(tnow, np_last_title) != 0 || strcmp(anow, np_last_artist) != 0;
+            if(art_changed){
                 snprintf(np_last_path, sizeof np_last_path, "%s", idnow);
                 home_set_art_src(ui_current_thumb_src());
                 home_set_backdrop(ui_current_backdrop_src());
-                saver_set_track(st.have_track?st.title:NULL,
+            }
+            if(art_changed || song_changed){
+                snprintf(np_last_title, sizeof np_last_title, "%s", tnow);
+                snprintf(np_last_artist, sizeof np_last_artist, "%s", anow);
+                saver_set_track(st.have_track?ipc_display_title(&st):NULL,
                                 st.have_track?st.artist:NULL,
                                 ui_current_backdrop_src(), st.have_track?st.path:NULL);
             }
             quicksettings_refresh(playing);
             songinfo_set(&st);
             npmenu_set(st.have_track ? &st : NULL, playing, ui_current_thumb_src());
+        }
+        if(bl_state != 2 && g_draw_dark){   /* waking: art that landed while dark, checked against the track set above */
+            ui_art_poll(NULL);
+            lv_timer_pause(g_t_art);
+            clock_tick(NULL);
         }
         /* album art decodes off-thread now, so it usually lands AFTER the seq-gated
          * push above - re-push the art-dependent surfaces when a decode completes.
@@ -2868,18 +3537,10 @@ int main(int argc, char **argv){
         if(bl_state != 2 && ui_take_art_applied()){
             home_set_art_src(ui_current_thumb_src());
             home_set_backdrop(ui_current_backdrop_src());
-            saver_set_track(st.have_track?st.title:NULL,
+            saver_set_track(st.have_track?ipc_display_title(&st):NULL,
                             st.have_track?st.artist:NULL,
                             ui_current_backdrop_src(), st.have_track?st.path:NULL);
             npmenu_set(st.have_track ? &st : NULL, playing, ui_current_thumb_src());
-        }
-        /* playback-start timeout: no track update within 6s of a rebuild-play */
-        if(g_play_pending && lv_tick_elaps(g_play_pending) > 6000){
-            g_play_pending = 0;
-            ui_toast("Couldn't start playback");   /* early confirm covers path/title/pos_id changes; a rare false toast (equal titles, no row change) is cosmetic since nothing is sent to the player */
-            /* No automatic 0666/0657 here: g_playing is only inferred from position updates, so it is not proof
-             * that output stopped, and 0666 into a live stream releases the local output (release_local, then
-             * NO_WORK_MODE, seen live). The next tap's preamble above re-asserts local init while stopped. */
         }
         /* spin the vinyl only while it's the visible, playing, lit Now Playing */
         ui_vinyl_spin(playing && screen_current()==SCR_NOWPLAYING && bl_state==0);
@@ -2902,7 +3563,14 @@ int main(int argc, char **argv){
 #ifdef DISKOS_PROFILE
         struct timespec pa, pb; clock_gettime(CLOCK_MONOTONIC, &pa);
 #endif
+        mclock_sync(bl_state != 2);
+        kit_cursor_sync(bl_state != 2);
+        albumwall_poll_sync(bl_state != 2);
         uint32_t wait = lv_timer_handler();
+        if(bl_state != 2 && g_draw_dark){   /* waking: repaint everything, then light it (draw_set_dark) */
+            lv_timer_resume(g_t_art);
+            draw_set_dark(0);
+        }
 #ifdef DISKOS_PROFILE
         clock_gettime(CLOCK_MONOTONIC, &pb);
         unsigned long long prof_h = (unsigned long long)(pb.tv_sec - pa.tv_sec) * 1000000000ULL + (unsigned long long)(pb.tv_nsec - pa.tv_nsec);
@@ -2928,7 +3596,7 @@ int main(int argc, char **argv){
                 last_activity = lv_tick_get();
                 if(screen_current()==SCR_SAVER){
                     /* any touch wakes the saver; restore backlight, swallow gesture */
-                    if(bl_state){ ui_backlight(ui_effective_brightness()); bl_state = 0; }
+                    if(bl_state && !pk.player_off){ wake_backlight(ui_effective_brightness()); bl_state = 0; g_screen_off = 0; }
                     screen_back();
                     woke = 1;
                 } else {
@@ -3091,24 +3759,78 @@ int main(int argc, char **argv){
             }
         }
 
-        /* PW-10: the player owns the power button (event0) and blanks the screen by writing
-         * brightness=0 while leaving bl_power=0 (FB_BLANK_UNBLANK) - the panel is black but the LED
-         * rail is still powered (device-measured 2026-09-02: power-off -> br 6->0, bl_power stays 0).
-         * diskOS never writes brightness=0 itself (ui_backlight(0) writes ONLY bl_power=4), so
-         * brightness==0 && bl_power==0 is unambiguously a player-side blank. Catch it on a slow poll,
-         * fully power the rail down (bl_power=4) and sync bl_state=2 so only a touch wakes. When the
-         * player raises brightness again (a second power press), bring the panel back to match. */
-        if(lv_tick_elaps(last_blpoll) >= 250){
+        /* PW-10: power-button presses, seen only as the player's brightness writes - see powerkey_step(). */
+        if(fw_power_key_driveable()){
+            int on; unsigned sq, pq, gen; ipc_screen_snapshot(&on, &sq, &pq, &gen);
+            if(gen != screen_gen_seen){
+                screen_gen_seen = gen; scr_seq_seen = aa03_seq_seen = 0;
+                poweroff_inhibit = inject_pending = 0; pk.player_off = 0;
+            }
+            if(pq != aa03_seq_seen){ aa03_seq_seen = pq; poweroff_inhibit = 1; }
+            if(on >= 0 && sq != scr_seq_seen){
+                scr_seq_seen = sq;
+                inject_pending = 0;                       /* a newer frame cancels a press not yet sent */
+                power_note_input();                       /* a press is input: restarts the idle power-off countdown */
+                switch(screen_frame_step(on, bl_state, &pk.player_off, poweroff_inhibit)){
+                case SF_INJECT: inject_pending = 1; inject_for = sq; inject_gen = gen; inject_due = lv_tick_get() + 300; break;
+                case SF_OFF:      /* the player slept its panel: power the rail down to match */
+                    ui_backlight(0); bl_state = 2; g_screen_off = 1;
+                    mclock_sync(0);
+                    kit_cursor_sync(0);
+                    if(screen_current() == SCR_SAVER) screen_back();
+                    break;
+                case SF_WAKE:     /* the player woke its panel: light it at the user's level */
+                    wake_backlight(ui_effective_brightness());
+                    bl_state = 0; g_screen_off = 0; last_activity = lv_tick_get();
+                    if(screen_current() == SCR_SAVER) screen_back();
+                    break;
+                default: break;
+                }
+            }
+            if(inject_pending && (int32_t)(lv_tick_get() - inject_due) >= 0){   /* the player's sleep has finished */
+                inject_pending = 0;
+                int on2; unsigned sq2, pq2, gen2; ipc_screen_snapshot(&on2, &sq2, &pq2, &gen2);
+                if(gen2 == inject_gen && sq2 == inject_for && on2 == 0 && pq2 == aa03_seq_seen && !poweroff_inhibit) (void)power_key_inject();
+            }
+            /* the player writes its own level ~50 ms after its wake frame: keep the user's (lit or dimmed) */
+            if(lv_tick_elaps(last_blpoll) >= 250){
+                last_blpoll = lv_tick_get();
+                int cbr = read_int_file("/sys/class/backlight/backlight/brightness");
+                (void)ui_backlight_take_foreign(NULL, NULL);   /* the frames carry the presses here */
+                if(cbr > 0 && cbr != ui_backlight_written() && !pk.player_off){
+                    if(bl_state == 0) wake_backlight(ui_effective_brightness());
+                    else if(bl_state == 1) wake_backlight(dim_level());
+                }
+            }
+        } else if(lv_tick_elaps(last_blpoll) >= 250){
             last_blpoll = lv_tick_get();
-            int cbr = read_int_file("/sys/class/backlight/backlight/brightness");
-            int cbp = read_int_file("/sys/class/backlight/backlight/bl_power");
-            if(cbr == 0 && cbp == 0){
-                /* player blanked via brightness-only -> cut the rail. Won't re-fire (bl_power now 4). */
-                ui_backlight(0); bl_state = 2; player_blanked = 1;
-            } else if(player_blanked && cbr > 0){
-                /* player un-blanked (2nd power press restored brightness) -> restore the panel. */
-                ui_backlight(theme_outdoor() ? ui_effective_brightness() : cbr);   /* Outdoor holds full */
-                bl_state = 0; last_activity = lv_tick_get(); player_blanked = 0;
+            /* a press our own write overwrote since the last poll first (a tap or the dim timer in the same 250 ms),
+             * then the live value */
+            for(int pass = 0; pass < 2; pass++){
+                int was_dark = bl_state == 2; unsigned at_seq = ui_backlight_write_seq();
+                int cbr = pass == 0 ? ui_backlight_take_foreign(&was_dark, &at_seq) : read_int_file("/sys/class/backlight/backlight/brightness");
+                if(cbr < 0) continue;
+                if(pk.seen < 0){ pk.seen = cbr; pk.player_off = (cbr == 0); pk.off_seq = ui_backlight_write_seq(); continue; }
+                int act = powerkey_step(&pk, cbr, pass == 0 ? -1 : ui_backlight_written(), at_seq, was_dark);
+                if(act != PK_NONE) power_note_input();   /* a press is input: restarts the idle power-off countdown */
+                switch(act){
+                case PK_OFF:      /* the player put the panel to sleep: power the rail down to match */
+                    ui_backlight(0); bl_state = 2; g_screen_off = 1;
+                    mclock_sync(0);
+                    kit_cursor_sync(0);
+                    if(screen_current() == SCR_SAVER) screen_back();
+                    break;
+                case PK_WAKE:     /* the player woke the panel: light it at the user's level (Outdoor: full), not the player's */
+                    wake_backlight(ui_effective_brightness());
+                    bl_state = 0; g_screen_off = 0; last_activity = lv_tick_get();
+                    if(screen_current() == SCR_SAVER) screen_back();
+                    break;
+                case PK_RELEVEL:  /* the player rewrote a level on a showing screen: keep diskOS's (lit or dimmed) */
+                    if(bl_state == 0) wake_backlight(ui_effective_brightness());
+                    else if(bl_state == 1) wake_backlight(dim_level());
+                    break;
+                default: break;
+                }
             }
         }
 
@@ -3127,10 +3849,9 @@ int main(int argc, char **argv){
         if(g_touch_raw >= 0){
             char rb[512]; int any = 0;
             while(read(g_touch_raw, rb, sizeof rb) > 0) any = 1;
-            if(any && bl_state){
+            if(any && bl_state && !pk.player_off){   /* the player's sleep (panel off): only its button wakes */
                 last_activity = lv_tick_get();
-                ui_backlight(ui_effective_brightness()); bl_state = 0;
-                player_blanked = 0;   /* touch woke it; don't let the PW-10 poll re-restore */
+                wake_backlight(ui_effective_brightness()); bl_state = 0; g_screen_off = 0;
                 if(screen_current() == SCR_SAVER) screen_back();
             }
         }
@@ -3167,16 +3888,16 @@ int main(int argc, char **argv){
                 /* the vinyl art-showcase saver stays at the user's brightness; everything else
                  * (incl. a suppressed art saver just dimming the current screen) crushes to a
                  * low dim. bl_state still -> 1 so the screen-off timer powers the panel down. */
-                int dim = ui_effective_brightness();
-                if(dim > 6 && !(in_saver && saver_wants_bright())) dim = 6;
-                ui_backlight(dim); bl_state = 1;
+                ui_backlight(dim_level()); bl_state = 1;
             }
             /* full off after the screen-off delay. Manual sleep uses the configured Screen Off
              * delay when set, else a 10s default so the tile actually powers the panel down. */
             uint32_t off_at = manual ? (uint32_t)(screenoff_extra > 0 ? screenoff_extra : 10)*1000
                                      : (uint32_t)(saver_timeout+screenoff_extra)*1000;
             if(bl_state==1 && (manual || screenoff_extra > 0) && idle > off_at){
-                ui_backlight(0); bl_state = 2;
+                ui_backlight(0); bl_state = 2; g_screen_off = 1;
+                mclock_sync(0);
+                kit_cursor_sync(0);
                 /* screen fully off -> STOP the screensaver. Leaving SCR_SAVER: (a) satisfies "the
                  * saver stops when the screen turns off"; (b) pops back to the screen shown BEFORE
                  * the saver, so a later wake lands there, not on the saver; (c) makes saver_anim_cb
@@ -3193,8 +3914,13 @@ int main(int argc, char **argv){
         /* screen fully off (pocket playback): pause the frequent polls + idle longer
          * so the loop wakes ~5x/s (touch poll) instead of ~33x/s. Derived from
          * bl_state each iteration so every wake path is covered. */
+        mclock_sync(bl_state != 2);
+        kit_cursor_sync(bl_state != 2);
         polls_set_paused(bl_state == 2);
+        if(bl_state == 2) draw_set_dark(1);
+        albumwall_poll_sync(bl_state != 2);
         g_screen_off = (bl_state == 2);   /* publish for the slow polls (skip the hcitool spawn while off) */
+        advance_probe_tick(bl_state != 2);
         g_bl_idle = (bl_state >= 1);   /* prewarm worker reads this: only work while dimmed/off */
         int busy = lv_anim_count_running() > 0 || prev_ts == LV_INDEV_STATE_PRESSED;
         if(bl_state == 2){

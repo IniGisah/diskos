@@ -1,0 +1,3 @@
+# Preserve committed bytes in every checkout and archive.
+# This includes upstream CRLF notices, Windows scripts and device binaries.
+* -text

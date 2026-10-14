@@ -400,7 +400,7 @@ typedef struct {
     int kind; uint32_t gen;
     char api_key[48], secret[48], sk[48];
     char token[64];
-    char artist[160], track[160], album[160];
+    char artist[160], track[IPC_TITLE_CAPACITY], album[160];
     long duration_s, timestamp;
 } lfm_job_t;
 
@@ -419,11 +419,11 @@ static int  g_auth_state; static char g_auth_token[64]; static char g_auth_url[3
 static int  g_auth_want_token;              /* getToken requested; started when the worker is idle */
 static int64_t g_auth_next_ms, g_auth_deadline_ms, g_auth_started_ms, g_backoff_ms;
 /* watcher candidate */
-static char g_cur_artist[160], g_cur_track[160], g_cur_album[160];
+static char g_cur_artist[160], g_cur_track[IPC_TITLE_CAPACITY], g_cur_album[160];
 static char g_cur_path[520];   /* file path: part of track identity so consecutive distinct files with the
                                 * SAME title+artist each scrobble separately (not merged into one) */
 static long g_cur_dur_ms, g_cur_lastpos_ms, g_cur_listened_ms, g_cur_start_unix;
-static int  g_np_pending, g_scrobbled, g_have_cur;
+static int  g_np_pending, g_scrobbled, g_have_cur, g_title_pending;
 int ui_is_playing(void);   /* main.c: authoritative normalized play state (raw st->state is unreliable) */
 
 static int lfm_busy(void){ pthread_mutex_lock(&g_mu); int b=g_inflight||g_result_ready; pthread_mutex_unlock(&g_mu); return b; }
@@ -504,28 +504,34 @@ static int lfm_start_job(lfm_job_t *j){
 static void lfm_q_san(char *dst, const char *src, int cap){
     int o=0; for(int i=0; src[i] && o<cap-1; i++){ char c=src[i]; if(c=='\t'||c=='\n'||c=='\r') c=' '; dst[o++]=c; } dst[o]=0;
 }
+/* Line count of the queue file, cached after a clean read (UI thread only); -1 = read the file. */
+static int g_qcount = -1, g_qopen;   /* g_qopen: file ends in an unterminated line */
 int lastfm_queue_count(void){
-    FILE *f=fopen(LFM_QUEUE,"r"); if(!f) return 0;
+    if(g_qcount>=0) return g_qcount;
+    FILE *f=fopen(LFM_QUEUE,"r"); if(!f){ if(errno==ENOENT){ g_qcount=0; g_qopen=0; } return 0; }
     int n=0, c, last=0;
     while((c=fgetc(f))!=EOF){ last=c; if(c=='\n') n++; }
+    int ok=!ferror(f);
     fclose(f);
     if(last!=0 && last!='\n') n++;       /* final line without a trailing newline */
+    if(ok){ g_qcount=n; g_qopen=last!=0 && last!='\n'; }
     return n;
 }
 /* 1=appended, 0=intentionally dropped (cap/empty), -1=I/O error (caller should retry) */
 static int lfm_queue_append(const char *artist,const char *track,const char *album,long dur_s,long ts){
     if(lastfm_queue_count() >= LFM_QUEUE_MAX) return 0;   /* cap: drop, but don't retry-loop */
-    char a[160],t[160],al[160]; lfm_q_san(a,artist,sizeof a); lfm_q_san(t,track,sizeof t); lfm_q_san(al,album,sizeof al);
+    char a[160],t[IPC_TITLE_CAPACITY],al[160]; lfm_q_san(a,artist,sizeof a); lfm_q_san(t,track,sizeof t); lfm_q_san(al,album,sizeof al);
     if(!a[0]||!t[0]) return 0;
     FILE *f=fopen(LFM_QUEUE,"a"); if(!f) return -1;
     int rc = fprintf(f,"%ld\t%ld\t%s\t%s\t%s\n", ts, dur_s>0?dur_s:0, a, t, al);
-    if(fclose(f)!=0 || rc<0) return -1;
+    if(fclose(f)!=0 || rc<0){ g_qcount=-1; return -1; }   /* a partial row may be on disk: recount */
+    if(g_qcount>=0){ if(g_qopen) g_qopen=0; else g_qcount++; }   /* one '\n'-terminated row */
     return 1;
 }
 /* read the oldest queued scrobble into j (0 ok, -1 empty) */
 static int lfm_queue_peek(lfm_job_t *j){
     FILE *f=fopen(LFM_QUEUE,"r"); if(!f) return -1;
-    char line[720]; if(!fgets(line,sizeof line,f)){ fclose(f); return -1; }
+    char line[IPC_TITLE_CAPACITY + 2*160 + 64]; if(!fgets(line,sizeof line,f)){ fclose(f); return -1; }
     fclose(f);
     char *nl=strpbrk(line,"\r\n"); if(nl)*nl=0;
     /* ts \t dur \t artist \t track \t album */
@@ -543,10 +549,14 @@ static int lfm_queue_peek(lfm_job_t *j){
 }
 /* drop the oldest queued scrobble (rewrite without line 1) */
 static void lfm_queue_pop(void){
-    FILE *f=fopen(LFM_QUEUE,"r"); if(!f) return;
+    FILE *f=fopen(LFM_QUEUE,"r"); if(!f){ g_qcount=-1; return; }   /* unreadable: recount from the file */
     FILE *o=fopen(LFM_QUEUE_TMP,"w"); if(!o){ fclose(f); return; }
-    char line[720]; int first=1, ok=1;
-    while(fgets(line,sizeof line,f)){ if(first){ first=0; continue; } if(fputs(line,o)==EOF){ ok=0; break; } }
+    char line[IPC_TITLE_CAPACITY + 2*160 + 64]; int first=1, ok=1, n=0, last=0;
+    while(fgets(line,sizeof line,f)){
+        if(first){ first=0; continue; }
+        if(fputs(line,o)==EOF){ ok=0; break; }
+        size_t l=strlen(line); if(l){ last=line[l-1]; n+=last=='\n'; }   /* count what was written */
+    }
     if(ferror(f)) ok=0;
     fclose(f);
     if(fflush(o)!=0) ok=0;
@@ -556,7 +566,8 @@ static void lfm_queue_pop(void){
      * partial tmp and leave the queue intact - a partial rename would DROP still-unsent scrobbles. */
     if(ok){
         if(rename(LFM_QUEUE_TMP, LFM_QUEUE)!=0) unlink(LFM_QUEUE_TMP);
-        else { int dfd=open("/usr/data", O_RDONLY|O_DIRECTORY); if(dfd>=0){ fsync(dfd); close(dfd); } }  /* persist the rename */
+        else { g_qopen=last!=0 && last!='\n'; g_qcount=n+g_qopen;
+               int dfd=open("/usr/data", O_RDONLY|O_DIRECTORY); if(dfd>=0){ fsync(dfd); close(dfd); } }  /* persist the rename */
     }
     else unlink(LFM_QUEUE_TMP);
 }
@@ -634,7 +645,7 @@ static void lfm_drive_auth(void){
 static void lfm_drive_jobs(void){
     if(!g_enabled||!g_connected) return;
     if(lfm_now_ms()<g_backoff_ms || lfm_busy()) return;
-    if(g_np_pending && g_have_cur && ui_is_playing()){   /* a candidate started while playing but dispatch was delayed
+    if(!g_title_pending && g_np_pending && g_have_cur && ui_is_playing()){   /* a candidate started while playing but dispatch was delayed
                                                           * (backoff/busy) then paused -> do not send Now Playing while paused */
         lfm_job_t *j=lfm_new_job(JOB_NOWPLAYING); if(!j) return;
         snprintf(j->artist,sizeof j->artist,"%s",g_cur_artist);
@@ -899,6 +910,8 @@ void lastfm_watch(const track_state_t *st){
      * a paused seek) must never advertise Now Playing. */
     /* Audiobooks are not music: never advertise Now Playing or scrobble them. Treated as "no track" so
      * the outgoing music candidate still finalizes and a book never becomes a candidate. */
+    g_title_pending = st->have_track && !st->title_ready;
+    if(g_title_pending) return; /* Hold the outgoing candidate; pending is not a stop. */
     int have = st->have_track && st->title[0] && st->artist[0] && !mdb_is_book_path(st->path);
     if(!have){                          /* truly stopped / no track / a book: finalize + forget so a replay counts as new */
         lfm_finalize_candidate();
@@ -997,7 +1010,7 @@ int main(void){
     const char *j4 = "{\"error\":10,\"message\":\"Invalid API key\"}";
     lfm_parse_response(j4, strlen(j4), &r);
     printf("parse error2: code=%d %s\n", r.api_error, r.api_error==10?"ok":"FAIL");
-    /* 5) escapes + unicode: \/ \n, BMP é (é=C3 A9), surrogate pair 😀 (😀=F0 9F 98 80) */
+    /* 5) escapes + unicode: \/ \n, BMP U+00E9 (C3 A9), surrogate pair U+1F600 (F0 9F 98 80) */
     const char *j5 = "{\"session\":{\"name\":\"a\\/b\\nc\\u00e9\\uD83D\\uDE00\",\"key\":\"K1\"}}";
     lfm_parse_response(j5, strlen(j5), &r);
     const char *want5 = "a/b\nc\xc3\xa9\xf0\x9f\x98\x80";

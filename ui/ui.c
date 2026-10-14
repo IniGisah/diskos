@@ -17,6 +17,8 @@
 #include "sdio.h"
 #include "anim.h"
 #include "fonts_intl.h"   /* Cyrillic/Greek/Latin-ext fallback (issue #3) */
+#include "fontft.h"
+int screen_figure_number(int which);
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -26,6 +28,8 @@
 #include <string.h>
 #include <math.h>
 #include <pthread.h>
+#include <errno.h>
+#include <time.h>
 #include <unistd.h>
 #include <ctype.h>
 
@@ -53,7 +57,8 @@ static lv_obj_t *fsart, *fsart_img, *fsart_title, *fsart_artist;
 static int fsart_on;
 static lv_obj_t *title;
 static lv_obj_t *artist;
-static lv_obj_t *album;   /* also hosts the track position: "N / M" or "Album · N/M" */
+static lv_obj_t *album;   /* also hosts the track position: "N / M" or "Album [U+00B7] N/M" */
+static lv_obj_t *album_pos;   /* the position on its own line, for a theme that shows it (hidden otherwise) */
 static lv_obj_t *btn_pp;
 static lv_obj_t *btn_prev;
 static lv_obj_t *btn_next;
@@ -86,7 +91,7 @@ static char g_stat_path[256];   /* last track counted in play history (count onc
  * folders. For a flat library it degrades to album-only - no worse than before. */
 static char last_art_key[420];  /* key of the art currently shown */
 static char want_art_key[420];  /* key the CURRENT track wants; a finished decode applies only if it matches */
-static char last_seed_a[160];
+static char last_seed_a[IPC_TITLE_CAPACITY];
 static char last_seed_b[160];
 static char cover_src[48];
 static int  cover_valid;     /* 1 when cover_src points at a freshly decoded cover */
@@ -194,17 +199,45 @@ void ui_pp_glyph(lv_obj_t *label, int playing)
     }
 }
 
+/* The input a label was last given, kept beside it: a LONG_DOT label edits its own copy ("Long na..."), so comparing
+ * with lv_label_get_text() never matched and every update set and fitted the text again. A new width, font or style
+ * needs no new text: the label refits its kept original itself. Theme, font size and language change only with a
+ * restart. Owned by the label (freed with it); UI thread only. The label's text is set only through these. */
+typedef struct { char *text; } label_input_t;
+static void label_input_free(lv_event_t *e)
+{
+    label_input_t *in = lv_event_get_user_data(e);
+    if(in){ free(in->text); free(in); }
+}
+/* 1 when txt differs from the label's last input (or none is kept), and keeps txt as the new one */
+int ui_label_input_changed(lv_obj_t *obj, const char *txt)
+{
+    if(obj == NULL) return 0;
+    if(txt == NULL) txt = "";
+    label_input_t *in = NULL;
+    for(uint32_t i = 0; i < lv_obj_get_event_count(obj); i++){
+        lv_event_dsc_t *d = lv_obj_get_event_dsc(obj, i);
+        if(lv_event_dsc_get_cb(d) == label_input_free){ in = lv_event_dsc_get_user_data(d); break; }
+    }
+    if(in && in->text && strcmp(in->text, txt) == 0) return 0;
+    if(!in){
+        in = calloc(1, sizeof *in);
+        if(!in) return 1;                                   /* nothing kept: always set, as before */
+        if(!lv_obj_add_event_cb(obj, label_input_free, LV_EVENT_DELETE, in)){ free(in); return 1; }
+    }
+    free(in->text);
+    in->text = strdup(txt);                                 /* NULL: compares unequal next time */
+    return 1;
+}
+int ui_label_set_changed(lv_obj_t *obj, const char *txt)
+{
+    if(!ui_label_input_changed(obj, txt)) return 0;
+    lv_label_set_text(obj, txt ? txt : "");
+    return 1;
+}
 static void set_label_text_changed(lv_obj_t *obj, const char *txt)
 {
-    const char *cur;
-
-    if(obj == NULL) return;
-    if(txt == NULL) txt = "";
-
-    cur = lv_label_get_text(obj);
-    if(cur == NULL || strcmp(cur, txt) != 0) {
-        lv_label_set_text(obj, txt);
-    }
+    ui_label_set_changed(obj, txt);
 }
 
 /* ---- Now Playing seek recognizer ---------------------------------------
@@ -226,9 +259,83 @@ static int g_pp_filled;               /* the theme's play key is an accent-fille
 void ui_np_pp_filled(int on){ g_pp_filled = on; }
 static lv_obj_t *g_seek_bar;          /* the line-seek bar (lv_bar or lv_slider), NULL = ring */
 static int32_t g_seek_shown;          /* the value last shown by seek_show() */
+#define SOME_RING_DOTS 112
+static lv_obj_t *g_some_ring_dot[SOME_RING_DOTS];
+static int g_some_ring_bucket;
+/* The hi-fi bezel has minute marks at 6 degree intervals. Only marks whose lit state
+ * changes are invalidated; the arc below them still supplies the seek recognizer. */
+#define HIFI_TICKS 47
+static lv_obj_t *g_hifi_tick[HIFI_TICKS];
+static lv_point_precise_t g_hifi_tick_pts[HIFI_TICKS][2];
+static int g_hifi_bucket;
+static int hifi_np_active(void){ return !strcmp(theme_kit()->id, "hi-fi"); }
+static void hifi_ticks_show(int value){
+    int bucket = (value * HIFI_TICKS + 500) / 1000;
+    if(bucket < 0) bucket = 0;
+    if(bucket > HIFI_TICKS) bucket = HIFI_TICKS;
+    int lo = bucket < g_hifi_bucket ? bucket : g_hifi_bucket;
+    int hi = bucket > g_hifi_bucket ? bucket : g_hifi_bucket;
+    for(int i = lo; i < hi; i++)
+        if(g_hifi_tick[i]) lv_obj_set_style_line_color(g_hifi_tick[i],
+                                i < bucket ? TC(ACCENT_PRIMARY) : TC(DOT_GRID), 0);
+    g_hifi_bucket = bucket;
+}
+static void hifi_ticks_create(lv_obj_t *parent){
+    g_hifi_bucket = 0;
+    for(int i = 0; i < HIFI_TICKS; i++){
+        int deg = 132 + 6 * i;
+        double a = deg * 3.141592653589793 / 180.0;
+        int major = (deg % 30) == 0;
+        g_hifi_tick_pts[i][0] = (lv_point_precise_t){ 180 + (major ? 166 : 170) * cos(a),
+                                                       180 + (major ? 166 : 170) * sin(a) };
+        g_hifi_tick_pts[i][1] = (lv_point_precise_t){ 180 + 175 * cos(a), 180 + 175 * sin(a) };
+        lv_obj_t *tick = lv_line_create(parent);
+        lv_line_set_points(tick, g_hifi_tick_pts[i], 2);
+        lv_obj_set_style_line_width(tick, major ? 2 : 1, 0);
+        lv_obj_set_style_line_color(tick, TC(DOT_GRID), 0);
+        lv_obj_clear_flag(tick, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        g_hifi_tick[i] = tick;
+    }
+}
+static void some_ring_show(int value){
+    int bucket = (value * SOME_RING_DOTS + 500) / 1000;
+    if(bucket < 0) bucket = 0;
+    if(bucket > SOME_RING_DOTS) bucket = SOME_RING_DOTS;
+    if(bucket == g_some_ring_bucket) return;
+    int lo = bucket < g_some_ring_bucket ? bucket : g_some_ring_bucket;
+    int hi = bucket > g_some_ring_bucket ? bucket : g_some_ring_bucket;
+    for(int i = lo; i < hi; i++){
+        lv_obj_t *dot = g_some_ring_dot[i];
+        if(dot) lv_obj_set_style_bg_color(dot, i < bucket ? accent : TC(CONTROL_TRACK), 0);
+    }
+    g_some_ring_bucket = bucket;
+}
+static void some_ring_create(lv_obj_t *parent){
+    int radius = g_ring_d / 2 - 3;
+    for(int i = 0; i < SOME_RING_DOTS; i++){
+        double a = (ARC_ROT + (double)ARC_SWEEP * i / (SOME_RING_DOTS - 1)) * 3.141592653589793 / 180.0;
+        lv_obj_t *dot = lv_obj_create(parent);
+        lv_obj_remove_style_all(dot);
+        lv_obj_set_size(dot, 4, 4);
+        lv_obj_set_pos(dot, RING_CX + (int)lround(radius * cos(a)) - 2,
+                            RING_CY + (int)lround(radius * sin(a)) - 2);
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(dot, TC(CONTROL_TRACK), 0);
+        lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        g_some_ring_dot[i] = dot;
+    }
+    lv_obj_set_style_arc_opa(ring, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(ring, LV_OPA_TRANSP, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(ring, LV_OPA_TRANSP, LV_PART_KNOB);
+}
 static void seek_show(int32_t v){
     g_seek_shown = v;
-    lv_arc_set_value(ring, v);
+    int hifi = hifi_np_active();
+    if(theme_trait(THEME_TRAIT_MATRIX_CLOCK)) some_ring_show(v);
+    else if(!hifi) lv_arc_set_value(ring, v);
+    if(hifi) hifi_ticks_show(v);
+    if(theme_kit()->np_progress) theme_kit()->np_progress(v);
     if(g_seek_bar){
         if(lv_obj_check_type(g_seek_bar, &lv_slider_class)) lv_slider_set_value(g_seek_bar, v, LV_ANIM_OFF);
         else lv_bar_set_value(g_seek_bar, v, LV_ANIM_OFF);
@@ -359,6 +466,7 @@ static void set_progress_changed(int32_t value)
         shown_progress = value;
     }
 }
+int ui_np_progress(void){ return shown_progress; }
 
 static void style_text(lv_obj_t *obj, const lv_font_t *font, lv_color_t color)
 {
@@ -583,6 +691,7 @@ lv_obj_t *kit_default_header(lv_obj_t *root, const char *title, lv_event_cb_t ba
         lv_label_set_text(ic, "\xEF\x81\xA0");                /* f060 arrow-left */
         lv_obj_set_style_text_font(ic, TF(ICON_20), 0);
         lv_obj_set_style_text_color(ic, TC(TEXT_PRIMARY), 0);
+        if(theme_trait(THEME_TRAIT_MATRIX_CLOCK)) kit_some_dot_arrow(ic, 1);
     } else {
     theme_title_text(t, title);                     /* the theme's title case (Default: as given) */
     /* Screen-centred (label centre = 104+76 = 180) but bounded to a zone that clears the back chevron on
@@ -645,10 +754,14 @@ static void fav_refresh(int on, int have)
 {
     g_np_fav = on; g_np_have = have;
     if(!btn_fav || !fav_icon) return;
-    if(have) lv_obj_remove_flag(btn_fav, LV_OBJ_FLAG_HIDDEN);
-    else     lv_obj_add_flag(btn_fav, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(fav_icon, on ? HEART_FILLED : HEART_OUTLINE);
-    lv_obj_set_style_text_color(fav_icon, on ? accent : TC(TEXT_MUTED), LV_PART_MAIN);
+    /* every playback update lands here: change only what differs (each set marks the shared screen for layout) */
+    if(have == lv_obj_has_flag(btn_fav, LV_OBJ_FLAG_HIDDEN)){
+        if(have) lv_obj_remove_flag(btn_fav, LV_OBJ_FLAG_HIDDEN);
+        else     lv_obj_add_flag(btn_fav, LV_OBJ_FLAG_HIDDEN);
+    }
+    set_label_text_changed(fav_icon, on ? HEART_FILLED : HEART_OUTLINE);
+    lv_color_t c = on ? accent : TC(TEXT_MUTED);
+    if(!lv_color_eq(lv_obj_get_style_text_color(fav_icon, LV_PART_MAIN), c)) lv_obj_set_style_text_color(fav_icon, c, LV_PART_MAIN);
 }
 
 static void fav_click_cb(lv_event_t *e)
@@ -719,6 +832,24 @@ static void mode_click_cb(lv_event_t *e)
     }
 }
 
+static lv_label_long_mode_t g_title_scroll_mode = LV_LABEL_LONG_CLIP;
+
+/* Hidden metadata updates must not recreate the title animation. */
+void ui_np_title_scroll(int visible)
+{
+    if(!title) return;
+    visible = visible && !lv_obj_has_flag(lv_obj_get_parent(title), LV_OBJ_FLAG_HIDDEN);
+    lv_label_long_mode_t mode = lv_label_get_long_mode(title);
+    if(visible){
+        if(mode == LV_LABEL_LONG_CLIP && g_title_scroll_mode != LV_LABEL_LONG_CLIP)
+            lv_label_set_long_mode(title, g_title_scroll_mode);
+        g_title_scroll_mode = LV_LABEL_LONG_CLIP;
+    } else if(mode == LV_LABEL_LONG_SCROLL || mode == LV_LABEL_LONG_SCROLL_CIRCULAR){
+        g_title_scroll_mode = mode;
+        lv_label_set_long_mode(title, LV_LABEL_LONG_CLIP);
+    }
+}
+
 static int g_np_vinyl = 0;
 static int g_spinning  = 0;
 
@@ -730,7 +861,8 @@ static void spin_cb(void *var, int32_t v){ lv_image_set_rotation((lv_obj_t *)var
  * at the current angle (no reset) and resumes from there. */
 void ui_vinyl_spin(int want)
 {
-    want = want && g_np_vinyl && cover_img;
+    want = want && g_np_vinyl && cover_img &&
+           !lv_obj_has_flag(cover_img, LV_OBJ_FLAG_HIDDEN) && lv_image_get_src(cover_img);
     if(want == g_spinning) return;
     g_spinning = want;
     if(want){
@@ -752,7 +884,7 @@ void ui_set_np_style(int vinyl)
 {
     if(!cover) return;
     g_np_vinyl = vinyl;
-    lv_obj_set_style_radius(cover, vinyl ? (COVER_D/2) : 14, LV_PART_MAIN);
+    lv_obj_set_style_radius(cover, !strcmp(theme_kit()->id, "bauhaus") ? 0 : vinyl ? (COVER_D/2) : 14, LV_PART_MAIN);
     if(spindle) {
         if(vinyl) lv_obj_remove_flag(spindle, LV_OBJ_FLAG_HIDDEN);
         else      lv_obj_add_flag(spindle, LV_OBJ_FLAG_HIDDEN);
@@ -763,16 +895,35 @@ void ui_set_np_style(int vinyl)
     }
 }
 
-static void set_cover_fallback(bool show)
+static void set_cover_fallback(bool show, bool loading)
 {
     if(show) {
+        ui_vinyl_spin(0);
         if(cover_img) lv_obj_add_flag(cover_img, LV_OBJ_FLAG_HIDDEN);
         if(cover_note) lv_obj_remove_flag(cover_note, LV_OBJ_FLAG_HIDDEN);
     } else {
         if(cover_img) lv_obj_remove_flag(cover_img, LV_OBJ_FLAG_HIDDEN);
         if(cover_note) lv_obj_add_flag(cover_note, LV_OBJ_FLAG_HIDDEN);
     }
+    theme_kit()->np_cover_state(cover, cover_note, show, loading);
 }
+
+#ifdef DISKOS_HOST
+void ui_host_cover_state(int state){
+    if(state == 0){
+        enum { HOST_ART_SIZE = 148 };
+        static uint32_t pixels[HOST_ART_SIZE * HOST_ART_SIZE];
+        static lv_image_dsc_t art;
+        for(int y = 0; y < HOST_ART_SIZE; y++) for(int x = 0; x < HOST_ART_SIZE; x++)
+            pixels[y * HOST_ART_SIZE + x] = 0xff000000u | ((uint32_t)(30 + x) << 16) | ((uint32_t)(35 + y) << 8) | 90u;
+        art.header.magic = LV_IMAGE_HEADER_MAGIC; art.header.cf = LV_COLOR_FORMAT_ARGB8888;
+        art.header.w = HOST_ART_SIZE; art.header.h = HOST_ART_SIZE; art.header.stride = HOST_ART_SIZE * 4;
+        art.data = (const uint8_t *)pixels; art.data_size = sizeof pixels;
+        lv_image_set_src(cover_img, &art);
+    }
+    set_cover_fallback(state != 0, state == 1);
+}
+#endif
 
 /* Decode the 148px cover BMP into a RAM ARGB8888 descriptor. A file-sourced
  * lv_bmp image can't be rotated by the SW renderer (renders black) because the
@@ -1007,7 +1158,7 @@ static void update_accent_seed(const track_state_t *st)
         return;
     }
     g_accent_gray = 0;
-    const char *seed_a = st->album[0] ? st->album : st->title;
+    const char *seed_a = st->album[0] ? st->album : (st->title_ready ? st->title : "");
     const char *seed_b = st->artist;
 
     if(strcmp(last_seed_a, seed_a) == 0 && strcmp(last_seed_b, seed_b) == 0) {
@@ -1028,6 +1179,32 @@ static void update_accent_seed(const track_state_t *st)
  * art-dependent surfaces (Home pill / Saver backdrop / Options thumb) when set. */
 static int g_art_applied = 0;
 
+/* Only current small artwork may act as the NP placeholder. */
+static int g_np_small_valid, g_np_cover_loading;
+
+/* The parent supplies the crop; the provider supplies borrowed sharp pixels. */
+void ui_np_cover_changed(void)
+{
+    if (!cover_img) return;
+    int bauhaus = !strcmp(theme_kit()->id, "bauhaus");
+    const lv_image_dsc_t *sharp = bauhaus ? sharp_cover_get() : NULL;
+    int d = sharp ? 360 : COVER_D;
+    lv_image_set_src(cover_img, NULL);   /* detach even if the next file source fails to open */
+    lv_image_set_src(cover_img, sharp ? (const void *)sharp :
+                     g_np_small_valid ? (coverdsc_valid ? (const void *)&g_coverdsc : (const void *)cover_src) : NULL);
+    lv_obj_set_size(cover_img, d, d);
+    lv_image_set_inner_align(cover_img, LV_IMAGE_ALIGN_CENTER);
+    lv_image_set_pivot(cover_img, d / 2, d / 2);
+    lv_image_set_scale(cover_img, bauhaus && !sharp ? 623 : 256);
+    lv_obj_center(cover_img);
+    set_cover_fallback(!sharp && !g_np_small_valid, g_np_cover_loading != 0);
+}
+
+static void np_sharp_demand(void)
+{
+    if (!strcmp(theme_kit()->id, "bauhaus") && screen_current() == SCR_NOWPLAYING) sharp_cover_request();
+}
+
 /* Drop all album-art state to the no-art fallback (used for no-track, empty
  * path, and failed decode) so stale art isn't republished to Home/Saver. */
 static void clear_art_state(void)
@@ -1037,7 +1214,8 @@ static void clear_art_state(void)
     last_art_key[0] = '\0';
     if(backdrop) lv_obj_add_flag(backdrop, LV_OBJ_FLAG_HIDDEN);
     if(cover_note) lv_label_set_text(cover_note, LV_SYMBOL_AUDIO);  /* no-art / failed decode = music note */
-    set_cover_fallback(true);
+    g_np_small_valid = g_np_cover_loading = 0;
+    ui_np_cover_changed();
     g_art_applied = 1;   /* re-push: clears Home/Saver since validity flags are now 0 */
 }
 
@@ -1055,8 +1233,9 @@ typedef struct {
     char out[40], tout[40], bout[40];
     char art_key[420];       /* album+dir reuse/staleness key (see last_art_key) */
     int  is_clear;           /* "no track" - handled on the main thread; worker skips */
-    char artist[160], album[160], title[160];   /* for the online-art fallback (netart.c) */
+    char artist[160], album[160], title[IPC_TITLE_CAPACITY];   /* for the online-art fallback (netart.c) */
     int  online;             /* Online Album Art was on when this was requested (read on the main thread) */
+    int  online_only;        /* committed-title retry after a local miss */
     int  from_net;           /* (result) the picture came from Online Album Art */
 } art_req_t;
 
@@ -1076,16 +1255,39 @@ void ui_decode_unlock(void){ pthread_mutex_unlock(&g_decode_mu); }
 static char            pwq[PWQ_MAX][512];
 static int             pwq_head, pwq_tail;
 static pthread_mutex_t pwq_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  pwq_cv;
+static pthread_once_t  pwq_once = PTHREAD_ONCE_INIT;
+static _Atomic int g_prewarm_mode = 0;   /* cfg mirror: settings (main) writes, worker reads */
+static unsigned pwq_mode_seq;                     /* guarded by pwq_mu */
+static void pwq_init(void){
+    pthread_condattr_t attr;
+    pthread_condattr_init(&attr);
+    pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+    pthread_cond_init(&pwq_cv, &attr);
+    pthread_condattr_destroy(&attr);
+}
+void ui_set_prewarm_mode(int m){                 /* 0=covers only 1=idle 2=idle&charging */
+    m = (m<0)?0:(m>2?2:m);
+    pthread_once(&pwq_once, pwq_init);
+    pthread_mutex_lock(&pwq_mu);
+    if(g_prewarm_mode != m){
+        g_prewarm_mode = m;
+        pwq_mode_seq++;
+        pthread_cond_signal(&pwq_cv);
+    }
+    pthread_mutex_unlock(&pwq_mu);
+}
 int ui_prewarm_enqueue(const char *path){          /* MAIN thread; returns 1 if queued, 0 if full/dup */
     if(!path || !path[0]) return 1;
     int ok = 0;
+    pthread_once(&pwq_once, pwq_init);
     pthread_mutex_lock(&pwq_mu);
     int nt = (pwq_tail+1) % PWQ_MAX;
     if(nt != pwq_head){
         int dup = 0;                                /* cheap dedup: same path already pending */
         for(int i=pwq_head; i!=pwq_tail; i=(i+1)%PWQ_MAX) if(!strcmp(pwq[i], path)){ dup=1; break; }
         if(dup) ok = 1;
-        else { copy_cstr(pwq[pwq_tail], sizeof pwq[pwq_tail], path); pwq_tail = nt; ok = 1; }
+        else { copy_cstr(pwq[pwq_tail], sizeof pwq[pwq_tail], path); pwq_tail = nt; ok = 1; pthread_cond_signal(&pwq_cv); }
     }
     pthread_mutex_unlock(&pwq_mu);
     return ok;
@@ -1097,12 +1299,25 @@ static int pwq_pop(char *out, int cap){            /* worker thread; 1 if an ite
     pthread_mutex_unlock(&pwq_mu);
     return got;
 }
-static int pwq_pending(void){ pthread_mutex_lock(&pwq_mu); int p = (pwq_head != pwq_tail); pthread_mutex_unlock(&pwq_mu); return p; }
 static void pw_sleep(int secs){                    /* idle sleep, but wake early the moment cover work is queued */
-    for(int i=0;i<secs;i++){ if(pwq_pending()) return; sleep(1); }
+    struct timespec until;
+    clock_gettime(CLOCK_MONOTONIC, &until);
+    until.tv_sec += secs;
+    pthread_once(&pwq_once, pwq_init);
+    pthread_mutex_lock(&pwq_mu);
+    unsigned seq = pwq_mode_seq;
+    while(pwq_head == pwq_tail && seq == pwq_mode_seq){
+        /* Mode 0 has no sweep window to recheck. Active modes keep their delay. */
+        if(g_prewarm_mode == 0) pthread_cond_wait(&pwq_cv, &pwq_mu);
+        else if(pthread_cond_timedwait(&pwq_cv, &pwq_mu, &until) == ETIMEDOUT) break;
+    }
+    pthread_mutex_unlock(&pwq_mu);
 }
 
 static pthread_mutex_t g_art_mu = PTHREAD_MUTEX_INITIALIZER;
+static int g_art_title_pending;   /* main thread: local work started before title commitment */
+static uint64_t g_art_token;
+static unsigned g_art_generation;
 static art_req_t g_art_target;      /* latest requested decode          (guarded) */
 static unsigned  g_art_req      = 0;/* bumps on each request            (guarded) */
 static int       g_art_inflight = 0;/* a worker is running              (guarded) */
@@ -1119,12 +1334,10 @@ static void apply_art(const art_req_t *job)
     snprintf(thumb_src,    sizeof thumb_src,    "A:/tmp/thumb%d.bmp",    job->idx);
     snprintf(backdrop_src, sizeof backdrop_src, "A:/tmp/backdrop%d.bmp", job->idx);
     coverdsc_valid = (load_cover_dsc(job->out) == 0);   /* track whether g_coverdsc is THIS track's */
-    if(coverdsc_valid) lv_image_set_src(cover_img, &g_coverdsc);
-    else               lv_image_set_src(cover_img, cover_src);
-    lv_image_set_inner_align(cover_img, LV_IMAGE_ALIGN_CENTER);
-    lv_image_set_pivot(cover_img, COVER_D/2, COVER_D/2);
-    set_cover_fallback(false);
     cover_valid = thumb_valid = backdrop_valid = 1;
+    g_np_small_valid = 1; g_np_cover_loading = 0;
+    ui_np_cover_changed();
+    np_sharp_demand();
     /* accent was computed + cached off the UI thread (art worker / prewarm), so just
      * read it - never run OKLab on the UI thread. If absent (no art, or no usable
      * colour), keep the text-hash accent set by update_accent_seed().
@@ -1157,14 +1370,14 @@ static void *art_worker(void *arg)
         int rc, from_net = 0;                             /* from_net: the picture came from Online Album Art */
         char fp0[24] = "";                                /* the cover's fingerprint (for the accent's freshness) */
         if(job.is_clear) rc = -1;
-        else if(artcache_get(job.track, job.out, job.tout, job.bout) == 0){ rc = 0;   /* cached -> fast copy, no decode */
+        else if(!job.online_only && artcache_get(job.track, job.out, job.tout, job.bout) == 0){ rc = 0;   /* cached -> fast copy, no decode */
                if(artcache_key(job.track, fp0, sizeof fp0) != 0) fp0[0] = 0; }
         else { int have_fp = artcache_key(job.track, fp0, sizeof fp0) == 0;   /* identity BEFORE decoding */
                pthread_mutex_lock(&g_decode_mu);                                     /* miss -> decode (killable), then cache */
                /* Pass OUR captured token: if a skip supersedes this decode any time after the snapshot (it
                 * always bumps g_cancel_gen via art_cancel), the per-child gen check trips and no obsolete
                 * decode runs - closing the window between request-validation and the decode. */
-               rc = art_make_all_ex_gen(job.track, job.out, job.tout, job.bout, 1, my_gen);
+               rc = job.online_only ? -1 : art_make_all_ex_gen(job.track, job.out, job.tout, job.bout, 1, my_gen);
                /* no cover of its own: a picture saved by Online Album Art (netart.c), decoded the same way */
                char np[300];
                if(rc != 0 && rc != -2 && job.online && netart_have(job.artist, job.album, job.title, np, sizeof np)){
@@ -1208,6 +1421,9 @@ static void *art_worker(void *arg)
  * was mid-decode can't publish stale art after a no-track / clear). */
 static void art_request_clear(void)
 {
+    g_art_title_pending = 0;
+    g_np_small_valid = 0;
+    sharp_cover_set_source("");
     clear_art_state();
     pthread_mutex_lock(&g_art_mu);
     g_art_req++;
@@ -1237,12 +1453,12 @@ static int book_meta_line(const track_state_t *st, char *out, int cap)
     int cur = 0;
     for(int i = 0; i < g_nchaps; i++){ if(g_chaps[i].start_ms <= st->position_ms) cur = i; else break; }
     /* The chpl reader fills untitled chapters with "Chapter N"; if this chapter has only that
-     * auto-name, show "Chapter N/M" rather than the redundant "N/M · Chapter N". */
+     * auto-name, show "Chapter N/M" rather than the redundant "N/M [U+00B7] Chapter N". */
     char autoname[24]; snprintf(autoname, sizeof autoname, "Chapter %d", cur + 1);
     if(strcmp(g_chaps[cur].title, autoname) == 0)
         snprintf(out, cap, "Chapter %d/%d", cur + 1, g_nchaps);
     else
-        snprintf(out, cap, "%d/%d  \xC2\xB7  %s", cur + 1, g_nchaps, g_chaps[cur].title);   /* 2/3 · Into the Future */
+        snprintf(out, cap, "%d/%d  \xC2\xB7  %s", cur + 1, g_nchaps, g_chaps[cur].title);   /* 2/3 [U+00B7] Into the Future */
     return 1;
 }
 
@@ -1357,6 +1573,14 @@ static void sleep_click_cb(lv_event_t *e)
     lv_label_set_text(hdr, tr("Sleep Timer"));
     lv_obj_set_style_text_font(hdr, TF(UI_16), 0);
     lv_obj_set_style_text_color(hdr, TC(TEXT_PRIMARY), 0);
+    if(!strcmp(theme_kit()->id, "blueprint")){
+        char figure[96];
+        lv_snprintf(figure, sizeof figure, "fig.%d  %s", screen_figure_number(screen_current()), tr("Sleep Timer"));
+        lv_point_t size;
+        lv_text_get_size(&size, figure, TF(UI_16), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        if(size.x <= 188) lv_label_set_text(hdr, figure); /* keep the translated title when a prefix would dot */
+        lv_obj_set_style_text_color(hdr, TC(ACCENT_PRIMARY), 0);
+    }
 
     static const char *OPT_T[] = { "15 min", "30 min", "45 min", "60 min", "End of chapter", "Off" };
     static const int   OPT_V[] = { 15, 30, 45, 60, -1, 0 };
@@ -1392,27 +1616,81 @@ static void make_art_key(const track_state_t *st, char *out, int cap)
  * e.g. by a theme change - failed and is never retried for the same song. Forget the path so the next track-state
  * update requests it again. */
 static int g_art_force;   /* main thread only: run ui_update on the next loop (no player frame needed) */
-void ui_art_retry(void){ last_path[0] = '\0'; g_art_force = 1; }
+void ui_art_retry(void){ sharp_cover_invalidate(); last_path[0] = '\0'; last_art_key[0] = '\0'; g_art_force = 1; }
 /* redo the current song's cover from scratch (no same-album reuse): Online Album Art was switched */
-void ui_art_redo(void){ last_path[0] = '\0'; last_art_key[0] = '\0'; g_art_force = 1; }
+void ui_art_redo(void){ ui_art_retry(); }
 /* main.c: 1 once after a redo/landed picture, so the main loop runs its update even without a player frame */
 int ui_take_art_force(void){ int f = g_art_force; g_art_force = 0; return f; }
 
-/* main thread: decide whether art needs (re)decoding and dispatch to the worker */
+/* Entry also handles unchanged state after a fresh theme process or SD denial. */
+void ui_np_enter(void)
+{
+    if (!g_np_small_valid && (strcmp(theme_kit()->id, "bauhaus") || !sharp_cover_get())) ui_art_retry();
+    g_art_force = 1;
+    ui_np_cover_changed();
+    if (!strcmp(theme_kit()->id, "bauhaus")) sharp_cover_request();
+}
+
+/* Two independent state pieces: last_path owns local decoding/display; the token,
+ * generation and pending flag own the title-dependent online request.
+ * Invariant: a title ready on the first snapshot (non-Opus, CUE/SACD,
+ * streams) preserves the pre-Opus PATH lifecycle exactly: same path means
+ * no restart, loading state or refetch. Only a pending identity adds work:
+ * local/path work starts immediately; netart_* waits for its committed title
+ * and is submitted once for that playback identity after a local miss.
+ *
+ * path    identity    title             local/decode       action
+ * changed any         ready (even empty) any                normal path request
+ * changed any         pending           any                local only; arm online
+ * same    changed     ready (even empty) any                keep path; disarm online
+ * same    changed     pending           any                keep path; arm new identity
+ * same    same        pending           any                wait for commitment
+ * same    same        committed         running/unconsumed wait for local result
+ * same    same        committed         present/cancelled  disarm; keep cover
+ * same    same        committed         absent             disarm; online only once
+ * Commitment before/after decode uses the same consumed-result barrier.
+ * Empty ready titles retain netart's existing artist/album fallbacks. */
 static void update_cover_for_path(const track_state_t *st)
 {
-    if(strcmp(last_path, st->path) == 0) return;
+    int path_changed = strcmp(last_path, st->path) != 0;
+    int identity_changed = st->playback_token != g_art_token ||
+                           st->player_generation != g_art_generation;
+    if(path_changed) g_np_small_valid = 0;
+    sharp_cover_set_source(st->path);
+    if(path_changed || identity_changed){
+        g_art_token = st->playback_token;
+        g_art_generation = st->player_generation;
+        g_art_title_pending = st->have_track && !st->title_ready &&
+                              cfg_get_int("online_art", 0);
+    }
+    int online_only = 0;
+    if(!path_changed){
+        if(!g_art_title_pending) return;
+        if(!st->have_track){ g_art_title_pending = 0; return; }
+        if(!st->title_ready) return;
+        pthread_mutex_lock(&g_art_mu);
+        int waiting = g_art_inflight || g_art_ready;
+        int missed = g_art_rc != 0 && g_art_rc != -2;
+        pthread_mutex_unlock(&g_art_mu);
+        if(waiting) return;   /* finish and apply local work before reconciling */
+        g_art_title_pending = 0;
+        if(!missed || !cfg_get_int("online_art", 0)) return;
+        online_only = 1;
+    }
+    np_sharp_demand();
     char art_key[420]; make_art_key(st, art_key, sizeof art_key);
     copy_cstr(want_art_key, sizeof want_art_key, art_key);   /* what the live track wants now */
 
     /* Art is shared within an album/folder: same key + valid art -> reuse, skip decoding. */
     if(st->album[0] && cover_valid && strcmp(last_art_key, art_key) == 0) {
+        g_art_title_pending = 0;
         copy_cstr(last_path, sizeof(last_path), st->path);
         /* art is already valid for this album - ensure the cover is shown (recovers
          * if a previous in-flight load had swapped in the loading glyph and then a
          * same-album track arrived before that decode landed). */
         if(cover_note) lv_label_set_text(cover_note, LV_SYMBOL_AUDIO);
-        set_cover_fallback(false);
+        g_np_small_valid = 1; g_np_cover_loading = 0;
+        ui_np_cover_changed();
         return;
     }
 
@@ -1427,7 +1705,8 @@ static void update_cover_for_path(const track_state_t *st)
      * vinyl saver, which (like the Home thumb/backdrop) keeps last-good art until the
      * new decode lands; only this prominent NP cover shows the loading state. */
     if(cover_note) lv_label_set_text(cover_note, LV_SYMBOL_REFRESH);
-    set_cover_fallback(true);
+    g_np_small_valid = 0; g_np_cover_loading = 1;
+    ui_np_cover_changed();
     coverdsc_valid = 0;   /* the RAM decode is now the PREVIOUS album's - don't let the accent use stale art */
 
     /* ALWAYS target the non-displayed buffer so an in-flight decode never
@@ -1439,8 +1718,9 @@ static void update_cover_for_path(const track_state_t *st)
     copy_cstr(job.art_key, sizeof job.art_key, art_key);
     copy_cstr(job.artist, sizeof job.artist, st->artist);
     copy_cstr(job.album,  sizeof job.album,  st->album);
-    copy_cstr(job.title,  sizeof job.title,  st->title);
-    job.online = cfg_get_int("online_art", 0);
+    copy_cstr(job.title,  sizeof job.title,  st->title_ready ? st->title : "");
+    job.online_only = online_only;
+    job.online = st->title_ready && cfg_get_int("online_art", 0);
     snprintf(job.out,  sizeof job.out,  "/tmp/cover%d.bmp",    nidx);
     snprintf(job.tout, sizeof job.tout, "/tmp/thumb%d.bmp",    nidx);
     snprintf(job.bout, sizeof job.bout, "/tmp/backdrop%d.bmp", nidx);
@@ -1475,6 +1755,9 @@ static void update_cover_for_path(const track_state_t *st)
 void ui_art_poll(lv_timer_t *t)
 {
     (void)t;
+    if(g_art_title_pending){
+        track_state_t st; ipc_get_state(&st); update_cover_for_path(&st);
+    }
     { char got[512];                        /* Online Album Art saved a picture: redo that song's cover if it's on */
       if(netart_take_ready(got, sizeof got) && cfg_get_int("online_art", 0) && strcmp(got, last_path) == 0) ui_art_retry(); }
     int ready = 0, rc = -1; art_req_t res; unsigned done_req = 0, cur_req = 0;
@@ -1537,8 +1820,6 @@ void ui_set_accent_config(int mode, int rgb){
  * instant even on first play. The earlier always-on version overheated the device
  * to 50C, so this only works while the user-chosen window holds AND the battery is
  * cool, and it paces hard. Modes: 0=covers only (album covers preload; no per-track sweep) 1=+per-track sweep when idle 2=+sweep when idle AND charging. */
-static _Atomic int g_prewarm_mode = 0;   /* cfg mirror: settings (main) writes, worker reads */
-void ui_set_prewarm_mode(int m){ g_prewarm_mode = (m<0)?0:(m>2?2:m); }   /* 0=covers only 1=+sweep when idle 2=+sweep idle&charging */
 
 static int pw_temp_dc(void){            /* battery temp, tenths-C; -1 on read failure */
     FILE *f=fopen("/sys/class/power_supply/cw221X-bat/temp","r"); if(!f) return -1;
@@ -1596,9 +1877,10 @@ static void *art_prewarm_worker(void *arg)
         char qpath[512];
         if(pwq_pop(qpath, sizeof qpath)){
             pw_wait_window(&hot);                        /* heat gate + yields to the live decode */
-            if(artcache_has(qpath)){ usleep(15*1000); continue; }   /* already cached (the UI thread no longer checks) */
             char fp0[24];
-            if(!artcache_has(qpath) && artcache_key(qpath, fp0, sizeof fp0) == 0){
+            int cached = artcache_lookup(qpath, fp0, sizeof fp0);   /* one fingerprint: hit, or the key to store under */
+            if(cached == 1){ usleep(15*1000); continue; }   /* already cached (the UI thread no longer checks) */
+            if(cached == 0){
                 pthread_mutex_lock(&g_decode_mu);
                 int r = art_make_all(qpath, PC, PT, PB);
                 pthread_mutex_unlock(&g_decode_mu);
@@ -1646,7 +1928,7 @@ static void *art_prewarm_worker(void *arg)
              * sweep), PC still holds the PREVIOUS track's image; computing+storing an accent from it would
              * mislabel this path permanently (a nonzero accent skips future correction). Only proceed on a
              * confirmed fresh cover for this path (a just-decoded !have_art cover is already in PC). */
-            int cover_ready = have_art ? (artcache_get(path, PC, PT, PB) == 0) : 1;
+            int cover_ready = have_art ? (artcache_get_cover(path, PC) == 0) : 1;   /* the accent reads only the cover */
             if(cover_ready){
                 uint8_t *buf = malloc(CBMP*CBMP*4);
                 if(buf){
@@ -1698,46 +1980,54 @@ const char *ui_current_backdrop_src(void)
 }
 
 /* Montserrat covers Latin + Latin-Extended only; it has no Cyrillic/Greek (issue #3:
- * "Ленинград" rendered as boxes) and no CJK ("北京"). Build a per-size fallback chain:
+ * "Cyrillic metadata" rendered as boxes) and no CJK ("CJK metadata"). Build a per-size fallback chain:
  *   Montserrat(size) -> font_intl(size) [Cyrillic/Greek/Latin-ext, Noto, uncompressed]
- *                    -> Source Han 16 [CJK] -> LVGL placeholder.
+ *                    -> stock TTC [CJK, matched size] -> Source Han 16 -> supplement.
  * The intl fonts are generated at matched ascent/descent (base_line 4/5/6 == Montserrat's)
  * so fallback glyphs sit on the same baseline; LVGL uses the PRIMARY font's line-height, and
  * each intl line-height (20/23/28) fits within Montserrat's (20/24/28) so nothing clips.
  * We keep mutable copies because .fallback must be set on non-const fonts. */
 static lv_font_t s_cjk; /* existing subset plus the small music-metadata supplement */
-static lv_font_t s_font20, s_font18, s_font16, s_font14;      /* Montserrat, chain heads */
-static lv_font_t s_intl20, s_intl18, s_intl16, s_intl14;      /* intl link (fallback -> Source Han) */
+static lv_font_t s_ft[41], s_font[41], s_intl[41];
+static const lv_font_t *ui_intl_font(int px)
+{
+    switch(px) {
+    case 14: return &font_intl_14;
+    case 16: return &font_intl_16;
+    case 18: return &font_intl_18;
+    case 20: return &font_intl_20;
+    default: return NULL;
+    }
+}
 static void ui_fonts_init(void)
 {
-    if(s_font20.get_glyph_dsc) return;   /* once */
+    if(s_cjk.get_glyph_dsc) return;
     s_cjk = lv_font_source_han_16_cjk; s_cjk.fallback = &font_cjk_extra_16;
-    s_intl20 = font_intl_20; s_intl20.fallback = &s_cjk;
-    s_intl18 = font_intl_18; s_intl18.fallback = &s_cjk;
-    s_intl16 = font_intl_16; s_intl16.fallback = &s_cjk;
-    s_intl14 = font_intl_14; s_intl14.fallback = &s_cjk;
-    s_font20 = *theme_font_base(20); s_font20.fallback = &s_intl20;
-    s_font18 = *theme_font_base(18); s_font18.fallback = &s_intl18;
-    s_font16 = *theme_font_base(16); s_font16.fallback = &s_intl16;
-    s_font14 = *theme_font_base(14); s_font14.fallback = &s_intl14;
 }
 
 /* Public accessor for the fallback-chained text font (Montserrat -> intl -> CJK) so other screens
- * render user text (track/album/artist names) with full glyph coverage. px = 14/16/18/20. */
+ * render user text (track/album/artist names) with full glyph coverage. */
 const lv_font_t *ui_text_font(int px){
-    ui_fonts_init();
-    switch(px){ case 20: return &s_font20; case 18: return &s_font18; case 14: return &s_font14; default: return &s_font16; }
+    return ui_font_cjk(px);
 }
 
-/* Shared CJK-capable user-text font (montserrat + Source Han Sans fallback) for any screen
- * that shows track/artist/album/lyrics text. Idempotently initialises on first use. */
+/* Shared CJK-capable chain at each available Montserrat role size. */
 const lv_font_t *ui_font_cjk(int size)
 {
     ui_fonts_init();
-    if(size >= 20) return &s_font20;
-    if(size >= 18) return &s_font18;
-    if(size >= 16) return &s_font16;
-    return &s_font14;
+    if(size != 10 && size != 12 && size != 14 && size != 16 && size != 18 && size != 20 &&
+       size != 22 && size != 24 && size != 28 && size != 32 && size != 36 && size != 40) size = 16;
+    const lv_font_t *base = theme_font_base(size);
+    if(!s_font[size].get_glyph_dsc) {
+        const lv_font_t *intl = ui_intl_font(size);
+        const lv_font_t *ft = fontft_font(size);
+        const lv_font_t *next = &s_cjk;
+        if(ft) { s_ft[size] = *ft; s_ft[size].fallback = next; next = &s_ft[size]; }
+        if(intl) { s_intl[size] = *intl; s_intl[size].fallback = next; next = &s_intl[size]; }
+        s_font[size] = *base;
+        s_font[size].fallback = next;
+    }
+    return &s_font[size];
 }
 
 void ui_create(lv_obj_t *root)
@@ -1806,6 +2096,8 @@ void ui_create(lv_obj_t *root)
     /* display-only: seek is driven by the NP recognizer (ui_np_seek_*) fed from
      * main.c's raw touch loop, so nav swipes / drawer pulls never grab the arc */
     lv_obj_clear_flag(ring, LV_OBJ_FLAG_CLICKABLE);
+    if(theme_trait(THEME_TRAIT_MATRIX_CLOCK)) some_ring_create(scr);
+    if(hifi_np_active()) hifi_ticks_create(scr);
 
     cover = lv_obj_create(scr);
     lv_obj_remove_style_all(cover);
@@ -1837,6 +2129,7 @@ void ui_create(lv_obj_t *root)
     lv_obj_set_style_text_opa(cover_note, LV_OPA_90, LV_PART_MAIN);
     lv_obj_center(cover_note);
     lv_obj_clear_flag(cover_note, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    set_cover_fallback(true, false);
 
     /* vinyl centre label: accent disc with a small spindle hole, on top of the
      * art. Shown only in Vinyl style. */
@@ -1914,6 +2207,7 @@ void ui_create(lv_obj_t *root)
     mode_refresh(cfg_get_int("work_mode", 0));
 
     title = lv_label_create(scr);
+    g_title_scroll_mode = LV_LABEL_LONG_CLIP;
     lv_obj_set_width(title, 260);
     style_text(title, TF(USER_20), TC(TEXT_PRIMARY));
     lv_label_set_long_mode(title, LV_LABEL_LONG_SCROLL_CIRCULAR);
@@ -1933,6 +2227,12 @@ void ui_create(lv_obj_t *root)
     lv_label_set_long_mode(album, LV_LABEL_LONG_DOT);
     lv_label_set_text(album, "");
     lv_obj_align(album, LV_ALIGN_TOP_MID, 0, 246);
+
+    album_pos = lv_label_create(scr);
+    style_text(album_pos, TF(USER_14), TC(TEXT_MUTED));
+    lv_label_set_long_mode(album_pos, LV_LABEL_LONG_DOT);
+    lv_label_set_text(album_pos, "");
+    lv_obj_add_flag(album_pos, LV_OBJ_FLAG_HIDDEN);
 
     btn_prev = lv_label_create(scr);
     style_text(btn_prev, TF(UI_28), TC(TEXT_MUTED));
@@ -2006,7 +2306,7 @@ void ui_create(lv_obj_t *root)
     if(theme_kit()->nowplaying){                   /* the active theme lays Now Playing out its own way */
         np_parts_t np = { scr, backdrop, ring, cover, cover_img, cover_note, btn_fav, fav_icon, btn_sleep, sleep_icon,
                           btn_mode, mode_icon, mode_one, title, artist, album, btn_prev, btn_pp, btn_next, t_elapsed,
-                          t_sep, t_remain, { dots[0], dots[1] } };
+                          t_sep, t_remain, { dots[0], dots[1] }, album_pos };
         theme_kit()->nowplaying(&np);
     }
 
@@ -2079,6 +2379,7 @@ void ui_update(const track_state_t *st)
         set_label_text_changed(title, "No Track");
         set_label_text_changed(artist, "");
         set_label_text_changed(album, "");
+        if(album_pos) set_label_text_changed(album_pos, "");
         set_label_text_changed(t_elapsed, "0:00");
         set_label_text_changed(t_remain, "0:00");
         ui_pp_glyph(btn_pp, 0);
@@ -2114,13 +2415,18 @@ void ui_update(const track_state_t *st)
     }
     /* Secondary line. For a BOOK it shows the current chapter (an album tag is meaningless for an
      * audiobook, and the all-songs queue position is noise); for music it's the album, carrying the
-     * track position as "Album · N/M". */
+     * track position as "Album [U+00B7] N/M". */
     {
         char ab[240];
+        int pos_own_line = album_pos && !lv_obj_has_flag(album_pos, LV_OBJ_FLAG_HIDDEN);
+        const char *pos_text = "";
         if(!book_meta_line(st, ab, sizeof ab)){        /* not a book -> album + position */
             const char *alb = st->album;
-            if(alb[0] && st->playing_num[0])
-                snprintf(ab, sizeof ab, "%s  \xC2\xB7  %s", alb, st->playing_num);          /* Album · 3/19 */
+            if(pos_own_line){                                                              /* Album, then N/M below */
+                snprintf(ab, sizeof ab, "%s", alb);
+                pos_text = st->playing_num;
+            } else if(alb[0] && st->playing_num[0])
+                snprintf(ab, sizeof ab, "%s  \xC2\xB7  %s", alb, st->playing_num);          /* Album [U+00B7] 3/19 */
             else if(alb[0])
                 snprintf(ab, sizeof ab, "%s", alb);                                         /* Album */
             else if(st->playing_num[0]){
@@ -2130,6 +2436,7 @@ void ui_update(const track_state_t *st)
             } else ab[0] = '\0';
         }
         set_label_text_changed(album, ab);
+        if(pos_own_line) set_label_text_changed(album_pos, pos_text);
     }
     /* honour an optimistic-favourite hold so a1 position frames don't bounce the heart back */
     snprintf(g_np_curpath, sizeof g_np_curpath, "%s", st->path);

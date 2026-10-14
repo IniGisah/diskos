@@ -157,6 +157,27 @@ static void apply_theme_preset(int v){ (void)v; theme_reload_or_revert("theme_pr
 static void apply_font_size(int v){ (void)v; theme_reload_or_revert("font_size"); }
 static void apply_language(int v){ (void)v; theme_reload_or_revert("language"); }
 
+static void apply_old_tags(int v){
+    (void)v;
+    scanner_set_old_tags(cfg_get_int("old_tags", OLD_TAGS_AUTO));
+}
+static void old_tags_rescan_cb(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED && !scanner_active()) ui_rescan_library();
+}
+/* The button owns this timer; cleaning or deleting the page deletes it too. */
+static void old_tags_rescan_tick(lv_timer_t *t){
+    lv_obj_t *bt = lv_timer_get_user_data(t);
+    if(scanner_active()) lv_obj_add_state(bt, LV_STATE_DISABLED);
+    else lv_obj_remove_state(bt, LV_STATE_DISABLED);
+}
+static void old_tags_rescan_del_cb(lv_event_t *e){
+    lv_timer_delete(lv_event_get_user_data(e));
+}
+static void old_tags_rescan_watch(lv_obj_t *bt){
+    lv_timer_t *t = lv_timer_create(old_tags_rescan_tick, 400, bt);
+    old_tags_rescan_tick(t);
+    lv_obj_add_event_cb(bt, old_tags_rescan_del_cb, LV_EVENT_DELETE, t);
+}
 static void apply_rescan(int v){ (void)v;
     ui_rescan_library();
 }
@@ -518,20 +539,56 @@ static void apply_restart(int v){ (void)v;
  * v==0 fully powers the panel backlight DOWN: writing brightness 0 alone leaves the
  * LED driver enabled at its minimum (screen looks black but the backlight glows), so
  * we also toggle bl_power (0 = FB_BLANK_UNBLANK on, 4 = FB_BLANK_POWERDOWN off). */
-void ui_backlight(int v){
-    if(v < 0) v = 0; if(v > 40) v = 40;
+static int g_bl_written = -1;   /* the brightness diskOS itself last wrote (-1 = none yet) */
+static unsigned g_bl_write_seq; /* bumps on every brightness diskOS writes (equal values stay distinguishable) */
+unsigned ui_backlight_write_seq(void){ return g_bl_write_seq; }
+static int g_bl_foreign = -1;   /* a player value (a power press) our write is about to overwrite, for the poll */
+static int g_bl_foreign_dark;   /* the panel was off (rail down) when that press landed */
+static unsigned g_bl_foreign_seq; /* diskOS's write count when it landed (before the write that overwrote it) */
+int ui_backlight_written(void){ return g_bl_written; }
+int ui_backlight_take_foreign(int *dark, unsigned *seq){
+    int v = g_bl_foreign; g_bl_foreign = -1;
+    if(dark) *dark = g_bl_foreign_dark;
+    if(seq) *seq = g_bl_foreign_seq;
+    return v;
+}
+static void backlight_write(int v){
     if(v > 0){                     /* set target level first, then power on (no flash) */
+        FILE *r = fopen("/sys/class/backlight/backlight/brightness", "r");
+        if(r){ int cur = -1;
+               if(fscanf(r, "%d", &cur) == 1 && cur >= 0 && cur != g_bl_written && cur != v){
+                   FILE *pw = fopen("/sys/class/backlight/backlight/bl_power", "r"); int bp = 0;
+                   if(pw){ if(fscanf(pw, "%d", &bp) != 1) bp = 0; fclose(pw); }
+                   g_bl_foreign = cur; g_bl_foreign_dark = (bp != 0); g_bl_foreign_seq = g_bl_write_seq;
+               }
+               fclose(r); }
         FILE *f = fopen("/sys/class/backlight/backlight/brightness", "w");
-        if(f){ fprintf(f, "%d", v); fclose(f); }
+        if(f){ fprintf(f, "%d", v); fclose(f); g_bl_written = v; g_bl_write_seq++; }
         else  fprintf(stderr, "backlight brightness open failed: %s\n", strerror(errno));
     }
     FILE *p = fopen("/sys/class/backlight/backlight/bl_power", "w");
     if(p){ fprintf(p, "%d", v ? 0 : 4); fclose(p); }
     else  fprintf(stderr, "backlight bl_power open failed: %s\n", strerror(errno));
 }
+/* Every brightness write passes here. While main.c holds drawing (screen off, until the wake's full repaint) a
+ * positive level only replaces the deferred one - a callback, a Settings row, a wake or a player-level correction
+ * alike - and the release lights the latest. Zero still goes out at once (screen off is immediate). */
+static int g_bl_hold, g_bl_held;   /* UI thread */
+void ui_backlight(int v){
+    if(v < 0) v = 0; if(v > 40) v = 40;
+    if(g_bl_hold){ g_bl_held = v; if(v > 0) return; }
+    backlight_write(v);
+}
+void ui_backlight_hold(void){ g_bl_hold = 1; g_bl_held = 0; }
+void ui_backlight_release(int fallback){   /* after the repaint: the latest level, else fallback */
+    if(!g_bl_hold) return;
+    g_bl_hold = 0;
+    ui_backlight(g_bl_held > 0 ? g_bl_held : fallback);
+}
 static void apply_brightness(int v){ if(v < 1) v = 1; ui_backlight(v); }
-void settings_apply_startup(void){
-    apply_brightness(ui_effective_brightness());
+void settings_apply_startup(int restore_brightness){
+    scanner_set_old_tags(cfg_get_int("old_tags", OLD_TAGS_AUTO));
+    if(restore_brightness) apply_brightness(ui_effective_brightness());
     { int at = mdb_sysconfig_auto_time();              /* mirror the player's switch (it owns the value) */
       if(at >= 0 && at != cfg_get_int("auto_time", 1)) cfg_set_int("auto_time", at); }
     { int ac = mdb_artist_class_type();                 /* the player's Artist / Album Artist grouping (it owns it) */
@@ -578,7 +635,7 @@ static const char *const OPT_APPEARANCE[] = { "Dark", "Light" };
 static const char *const OPT_FONTSIZE[] = { "Small", "Medium", "Large" };
 static const char *const OPT_ALBUMVIEW[] = { "List", "Cover Flow" };
 static const char *const OPT_SAVERSTYLE[] = { "Cover", "Analog", "Minimal", "Digital", "Vinyl" };
-static const char *const OPT_DISCCOLOUR[] = { "Black", "Turquoise", "Pink" };
+static const char *const OPT_OLDTAGS[] = { "Auto", "Western", "Cyrillic" };
 static const char *const OPT_BOOTDEF[] = { "diskOS", "Stock" };
 static const char *const OPT_ARTCACHE[] = { "Covers only","When Idle","Idle & Charging" };
 
@@ -687,8 +744,6 @@ static const setting_t TABLE[] = {
       "Use a 24-hour clock instead of AM/PM.", NULL },
     { "Display",  "Animations",  ST_TOGGLE, "anim",      0,1,1, NULL, 0, NULL, apply_anim, 1,
       "Slide animations between screens.", NULL },
-    { "Display",  "Disc Colour", ST_CYCLER, "disc_colour", 0,0,0, OPT_DISCCOLOUR, 3, NULL, NULL, 0,
-      "The colour of the Disc drawn on the startup screen. Set it to match yours.", NULL },
     { "Display",  "Weather on Home", ST_TOGGLE, "weather_on", 0,1,1, NULL, 0, NULL, apply_weather, 1,
       "Show the weather glance on the home screen and screensaver (tap it to open the full forecast). Off skips the background fetch to save battery.", NULL },
     { "Display",  "Back-swipe",  ST_SLIDER, "swipe_thresh", 30,120,5, NULL,0, NULL, apply_swipe, 60,
@@ -715,6 +770,8 @@ static const setting_t TABLE[] = {
       "What the volume keys do on a double press: adjust the volume or switch track.", NULL },
     { "System",   "Vol Keys: Long Press", ST_CYCLER, "key_long", 0,0,0, OPT_VOLKEY, 2, NULL, apply_key_long, CTL_ACT_VOLUME,
       "What the volume keys do when held: adjust the volume or switch track.", NULL },
+    { "System",   "Old tags", ST_CYCLER, "old_tags", 0,0,0, OPT_OLDTAGS, 3, NULL, apply_old_tags, OLD_TAGS_AUTO,
+      "Legacy text: guess, Latin-1 or CP1251. Rescan Library to apply.", NULL },
     { "System",   "Rescan Library", ST_ACTION, NULL, 0,0,0, NULL,0, "Scan", apply_rescan, 0,
       "Re-scan the SD card for new or removed music.", NULL },
     { "System",   "Import Playlists", ST_ACTION, NULL, 0,0,0, NULL,0, "Import", apply_import_m3u, 0,
@@ -788,7 +845,7 @@ static void read_batt_temp(char *buf, int n){
     int t;
     if(f && fscanf(f, "%d", &t) == 1){ fclose(f);
         unsigned at = t<0 ? 0u-(unsigned)t : (unsigned)t;   /* unsigned negate: INT_MIN-safe; sign explicit */
-        snprintf(buf, n, "%s%u.%u\xC2\xB0""C", t<0?"-":"", at/10, at%10);   /* 305->"30.5°C", -5->"-0.5°C" */
+        snprintf(buf, n, "%s%u.%u\xC2\xB0""C", t<0?"-":"", at/10, at%10);   /* 305->"30.5 degrees C", -5->"-0.5 degrees C" */
     } else { if(f) fclose(f); snprintf(buf, n, "--"); }
 }
 /* Format a slider value WITH its unit - shared by val_text (committed value) and the live drag
@@ -885,7 +942,9 @@ static int outdoor_holds(const setting_t *s){ return theme_outdoor() && s->cfg_k
 static void detail_slider_release_cb(lv_event_t *e){
     lv_obj_t *sl = lv_event_get_target(e);
     if(outdoor_holds(g_active)) return;                 /* Outdoor keeps the user's own level untouched */
-    if(g_active->cfg_key) cfg_set_int(g_active->cfg_key, lv_slider_get_value(sl));
+    /* brightness is applied again: a wake during the drag lit the saved level */
+    if(g_active->apply == apply_brightness_row) ui_set_brightness(lv_slider_get_value(sl));
+    else if(g_active->cfg_key) cfg_set_int(g_active->cfg_key, lv_slider_get_value(sl));
 }
 static void detail_cycle_cb(lv_event_t *e){
     if(theme_outdoor() && g_active->cfg_key && !strcmp(g_active->cfg_key, "theme_variant")){
@@ -961,6 +1020,7 @@ void setting_detail_refresh(void){
             int cur = (i == v);
             if(cur) lv_obj_set_style_bg_color(row, TC(SURFACE_SELECTED), 0);
             ui_on(row, detail_choice_cb, LV_EVENT_CLICKED, (void*)(intptr_t)i, "settings.detail_choice", UI_CORE);
+            if(is_theme) kit_row_layout(row, KIT_ROW_SWATCH);
             int x = 18;
             if(is_theme){
                 static const theme_color_role_t DOTS[3] = { THEME_CLR_CANVAS, THEME_CLR_SURFACE_RAISED, THEME_CLR_ACCENT_PRIMARY };
@@ -996,19 +1056,19 @@ void setting_detail_refresh(void){
         lv_obj_t *vl = lv_label_create(g_detail_root);
         char b[24]; lv_label_set_text(vl, val_text(s,b,sizeof b));
         lv_obj_set_size(vl, 220, 32); lv_label_set_long_mode(vl, LV_LABEL_LONG_DOT);
-        lv_obj_align(vl, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_align(vl, LV_ALIGN_CENTER, 0, s->apply == apply_old_tags ? -20 : 0);
         lv_obj_set_style_text_align(vl, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(vl, ui_current_accent(), 0);
         lv_obj_set_style_text_font(vl, TF(UI_24), 0);
         lv_obj_t *lb = lv_button_create(g_detail_root);
         lv_obj_remove_style_all(lb); lv_obj_set_size(lb, 48, 48);
-        lv_obj_align(lb, LV_ALIGN_CENTER, -110, 0);
+        lv_obj_align(lb, LV_ALIGN_CENTER, -110, s->apply == apply_old_tags ? -20 : 0);
         lv_obj_t *li = lv_label_create(lb); lv_label_set_text(li, LV_SYMBOL_LEFT);
         lv_obj_set_style_text_color(li, TC(TEXT_PRIMARY), 0); lv_obj_center(li);
         ui_on(lb, detail_cycle_cb, LV_EVENT_CLICKED, (void*)(uintptr_t)-1, "settings.detail_cycle", UI_CORE);
         lv_obj_t *rb = lv_button_create(g_detail_root);
         lv_obj_remove_style_all(rb); lv_obj_set_size(rb, 48, 48);
-        lv_obj_align(rb, LV_ALIGN_CENTER, 110, 0);
+        lv_obj_align(rb, LV_ALIGN_CENTER, 110, s->apply == apply_old_tags ? -20 : 0);
         lv_obj_t *ri = lv_label_create(rb); lv_label_set_text(ri, LV_SYMBOL_RIGHT);
         lv_obj_set_style_text_color(ri, TC(TEXT_PRIMARY), 0); lv_obj_center(ri);
         ui_on(rb, detail_cycle_cb, LV_EVENT_CLICKED, (void*)(uintptr_t)1, "settings.detail_cycle", UI_CORE);
@@ -1019,6 +1079,19 @@ void setting_detail_refresh(void){
         lv_obj_set_style_text_align(vl, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(vl, TC(TEXT_SECONDARY), 0);
         lv_obj_set_style_text_font(vl, TF(UI_20), 0);
+    }
+
+    /* Offer the existing scan action here; choosing a decoder never starts or cancels a scan. */
+    if(s->apply == apply_old_tags){
+        lv_obj_t *bt = lv_button_create(g_detail_root);
+        lv_obj_set_size(bt, 240, 36);
+        lv_obj_align(bt, LV_ALIGN_CENTER, 0, 28);
+        old_tags_rescan_watch(bt);
+        lv_obj_t *l = lv_label_create(bt);
+        lv_label_set_text(l, tr("Rescan Library"));
+        lv_obj_set_style_text_font(l, TF(UI_14), 0);
+        lv_obj_center(l);
+        ui_on(bt, old_tags_rescan_cb, LV_EVENT_CLICKED, NULL, "settings.old_tags_rescan", UI_CORE);
     }
 
     /* description at the bottom - per-option for cyclers (refreshes on change) */

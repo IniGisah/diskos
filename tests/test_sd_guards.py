@@ -10,6 +10,7 @@ from unittest import mock
 from diskos_installer import imagebuild
 
 
+@unittest.skipIf(os.name == 'nt', 'needs POSIX file modes and symlinks')
 class ImageGuardTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='diskos-image-guard-')
@@ -93,6 +94,7 @@ class ImageGuardTests(unittest.TestCase):
             imagebuild._validate_sd_guards(str(self.rf), digest)
 
 
+@unittest.skipUnless(os.name != 'nt' and os.access('/bin/sh', os.X_OK), 'needs POSIX /bin/sh and symlinks')
 class ShellGuardTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='diskos-shell-guard-')
@@ -190,6 +192,8 @@ def _supervisor_wrapper(text):
     return re.sub(r'\b180\b', '2', text[begin:end])
 
 
+@unittest.skipUnless(os.name != 'nt' and os.access('/bin/sh', os.X_OK)
+                     and Path('/proc/self/stat').is_file(), 'needs POSIX /bin/sh and Linux /proc')
 class InstallHookSupervisorTests(unittest.TestCase):
     """The boot runs S97 synchronously, so a hung worker must not hold the boot.
 
@@ -289,12 +293,13 @@ class ReadinessGateTests(unittest.TestCase):
         self.assertNotIn('/usr/data/.diskos_ready', text)
 
 
-_STOCK_FIIO_INIT = Path(os.environ.get(
-    'DISKOS_STOCK_FIIO_INIT',
-    Path(__file__).resolve().parents[2] / 'research/analysis/firmware-audit-2026-09-05/stock-v240/usr/project/fiio_init.sh'))
+_stock_location = os.environ.get('DISKOS_STOCK_FIIO_INIT')
+_STOCK_FIIO_INIT = Path(_stock_location) if _stock_location else None
 
 
-@unittest.skipUnless(_STOCK_FIIO_INIT.is_file(), 'needs a pristine stock fiio_init.sh (not shipped in this repo)')
+@unittest.skipUnless(_STOCK_FIIO_INIT is not None and _STOCK_FIIO_INIT.is_file(),
+                     'Set DISKOS_STOCK_FIIO_INIT to a pristine stock fiio_init.sh (not shipped in this repo)')
+@unittest.skipUnless(os.name != 'nt' and os.access('/bin/sh', os.X_OK), 'needs POSIX /bin/sh')
 class BootHookValidatorOnRealFirmwareTests(unittest.TestCase):
     """The output validator, run on the REAL stock boot script after the real patch.
 
@@ -377,6 +382,7 @@ class BootHookValidatorOnRealFirmwareTests(unittest.TestCase):
 class DecisionFileCheckTests(unittest.TestCase):
     """_check_decision_file: the per-file output check for S96/S97/diskos-selected/diskos-bootprobe."""
 
+    @unittest.skipIf(os.name == 'nt', 'needs POSIX file modes and symlinks')
     def test_only_an_exact_regular_0755_copy_passes(self):
         import stat
         with tempfile.TemporaryDirectory() as t:
@@ -417,14 +423,19 @@ class DecisionFileCheckTests(unittest.TestCase):
 
 
 
+# Hosts that restrict unprivileged user namespaces (e.g. Ubuntu with AppArmor) can point this at an allowed unshare.
+UNSHARE = os.environ.get('DISKOS_UNSHARE') or 'unshare'
+
+
 def _userns_ok():
     try:
-        return subprocess.run(['unshare', '-Urm', 'true'], capture_output=True, timeout=10).returncode == 0
+        return subprocess.run([UNSHARE, '-Urm', 'true'], capture_output=True, timeout=10).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
 
 
-@unittest.skipUnless(_STOCK_FIIO_INIT.is_file(), 'needs a pristine stock fiio_init.sh (not shipped in this repo)')
+@unittest.skipUnless(_STOCK_FIIO_INIT is not None and _STOCK_FIIO_INIT.is_file(),
+                     'Set DISKOS_STOCK_FIIO_INIT to a pristine stock fiio_init.sh (not shipped in this repo)')
 @unittest.skipUnless(_userns_ok(), 'needs unprivileged user+mount namespaces (unshare -Urm)')
 class BootHookExecutionTests(unittest.TestCase):
     """EXECUTES the launch block of the real patched boot script and records which UI/player it starts.
@@ -490,7 +501,7 @@ class BootHookExecutionTests(unittest.TestCase):
             if ready:
                 setup.append(': > /tmp/.diskos_ready')
             inner = ' && '.join(setup) + f' && PATH={stockbin}:$PATH busybox sh {t / "block.sh"}'
-            r = subprocess.run(['unshare', '-Urm', 'sh', '-c', inner], capture_output=True, text=True, timeout=20)
+            r = subprocess.run([UNSHARE, '-Urm', 'sh', '-c', inner], capture_output=True, text=True, timeout=20)
             self.assertEqual(r.returncode, 0, r.stderr)
             return log.read_text().split() if log.exists() else []
 

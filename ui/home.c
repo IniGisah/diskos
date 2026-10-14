@@ -10,6 +10,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+int ui_label_input_changed(lv_obj_t *obj, const char *txt);   /* ui.c: a label's text only when its input changes */
+int ui_label_set_changed(lv_obj_t *obj, const char *txt);
+
 LV_FONT_DECLARE(font_weather16)
 static lv_font_t s_wfont;   /* montserrat_14 with the weather-icon font as fallback */
 
@@ -35,8 +38,11 @@ static lv_obj_t *g_np_artist;
 static lv_obj_t *g_np_state;
 /* "something" theme (THEME_TRAIT_MATRIX_CLOCK): a block-matrix clock drawn into one canvas. Two can exist: Home's
  * (handle 0) and the screensaver's (handle 1); each has its own canvas, buffer and AM/PM label. */
-typedef struct { lv_obj_t *canvas, *ampm; uint8_t *buf; int y; } mclock_t;
+typedef struct { lv_obj_t *canvas, *ampm, *colon[2]; uint8_t *buf; int y; int drawn; char time[16]; } mclock_t;   /* time: drawn text */
 static mclock_t g_mc[2];
+static lv_timer_t *g_mc_blink;
+static int g_mc_phase = 1;
+static int g_mc_active = -1;
 #define g_mclock (g_mc[0].canvas)
 #define MC_CELL 9      /* 7 px block + 2 px gap */
 #define MC_W   360     /* the full screen width, so the time is centred on the screen itself */
@@ -75,12 +81,10 @@ static void mc_draw(mclock_t *m, const char *t, int ampm_w, int *ampm_x){
         int group = ink + (ampm_w > 0 ? 6 + ampm_w : 0);
         int x = (MC_W - group) / 2 - lead * MC_CELL;
         if(ampm_x) *ampm_x = x + width - trail * MC_CELL + 6;
-        uint32_t fg = theme_rgb(THEME_CLR_TEXT_PRIMARY), acc = theme_rgb(THEME_CLR_ACCENT_PRIMARY);
+        uint32_t fg = theme_rgb(THEME_CLR_TEXT_PRIMARY);
         for(int i = 0; i < n; i++){
             if(i == hd){                               /* the colon: two accent plus signs, one row apart */
-                for(int k = 0; k < 2; k++){ int cy = k ? 4 : 0;
-                    mc_block(buf, x + MC_CELL, cy, acc); mc_block(buf, x, cy + 1, acc); mc_block(buf, x + MC_CELL, cy + 1, acc);
-                    mc_block(buf, x + 2 * MC_CELL, cy + 1, acc); mc_block(buf, x + MC_CELL, cy + 2, acc); }
+                for(int k = 0; k < 2; k++) lv_obj_set_pos(m->colon[k], x, m->y + k * 4 * MC_CELL);
                 x += 4 * MC_CELL;
             }
             for(int r = 0; r < 7; r++) for(int col = 0; col < 5; col++)
@@ -89,6 +93,57 @@ static void mc_draw(mclock_t *m, const char *t, int ampm_w, int *ampm_x){
         }
     }
     lv_obj_invalidate(m->canvas);
+}
+static void mc_blink_cb(lv_timer_t *timer){
+    int h = screen_current() == SCR_HOME ? 0 : screen_current() == SCR_SAVER ? 1 : -1;
+    if(h != g_mc_active || h < 0 || !g_mc[h].canvas || lv_obj_has_flag(g_mc[h].canvas, LV_OBJ_FLAG_HIDDEN)){
+        lv_timer_pause(timer);
+        g_mc_active = -1;
+        return;
+    }
+    g_mc_phase = !g_mc_phase;
+    for(int k = 0; k < 2; k++){
+        if(g_mc_phase) lv_obj_remove_flag(g_mc[h].colon[k], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(g_mc[h].colon[k], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+/* Called after navigation and backlight changes, before the next timer pass. */
+void mclock_sync(int backlight_on){
+    int h = screen_current() == SCR_HOME ? 0 : screen_current() == SCR_SAVER ? 1 : -1;
+    if(!backlight_on || h < 0 || !g_mc[h].canvas ||
+       lv_obj_has_flag(g_mc[h].canvas, LV_OBJ_FLAG_HIDDEN)) h = -1;
+    if(h < 0){
+        if(g_mc_blink) lv_timer_pause(g_mc_blink);
+        g_mc_active = -1;
+        return;
+    }
+    if(h == g_mc_active && g_mc_blink && !lv_timer_get_paused(g_mc_blink)) return;
+    g_mc_active = h;
+    g_mc_phase = 1;
+    for(int k = 0; k < 2; k++) lv_obj_remove_flag(g_mc[h].colon[k], LV_OBJ_FLAG_HIDDEN);
+    if(g_mc_blink){
+        lv_timer_reset(g_mc_blink);
+        lv_timer_resume(g_mc_blink);
+    }
+}
+static void mc_colon_new(mclock_t *m, lv_obj_t *parent){
+    static const uint8_t xy[5][2] = {{1,0},{0,1},{1,1},{2,1},{1,2}};
+    for(int k = 0; k < 2; k++){
+        lv_obj_t *group = lv_obj_create(parent);
+        lv_obj_remove_style_all(group);
+        lv_obj_set_size(group, 3 * MC_CELL, 3 * MC_CELL);
+        lv_obj_clear_flag(group, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        m->colon[k] = group;
+        for(int i = 0; i < 5; i++){
+            lv_obj_t *dot = lv_obj_create(group);
+            lv_obj_remove_style_all(dot);
+            lv_obj_set_size(dot, MC_CELL - 2, MC_CELL - 2);
+            lv_obj_set_pos(dot, xy[i][0] * MC_CELL, xy[i][1] * MC_CELL);
+            lv_obj_set_style_bg_color(dot, TC(ACCENT_PRIMARY), 0);
+            lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+            lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        }
+    }
 }
 /* a matrix clock on parent at y (handle 0 = Home, 1 = screensaver); 0 on success */
 int mclock_new(int h, lv_obj_t *parent, int y){
@@ -100,6 +155,11 @@ int mclock_new(int h, lv_obj_t *parent, int y){
     lv_canvas_set_buffer(m->canvas, m->buf, MC_W, MC_H, LV_COLOR_FORMAT_ARGB8888);
     lv_obj_set_pos(m->canvas, 0, y);
     m->y = y;
+    mc_colon_new(m, parent);
+    if(!g_mc_blink){
+        g_mc_blink = lv_timer_create(mc_blink_cb, 500, NULL);
+        if(g_mc_blink) lv_timer_pause(g_mc_blink);
+    }
     m->ampm = lv_label_create(parent);
     lv_label_set_text(m->ampm, "");
     lv_obj_set_style_text_font(m->ampm, TF(UI_12), 0);
@@ -110,6 +170,10 @@ int mclock_new(int h, lv_obj_t *parent, int y){
 void mclock_set(int h, const char *time_text){
     if(h < 0 || h > 1 || !g_mc[h].canvas) return;
     mclock_t *m = &g_mc[h];
+    const char *t = time_text ? time_text : "";
+    if(m->drawn && !strcmp(m->time, t)) return;   /* the buffer, colon and AM/PM follow from the text alone */
+    m->drawn = strlen(t) < sizeof m->time;
+    if(m->drawn) strcpy(m->time, t);
     const char *a = time_text ? strpbrk(time_text, "AaPp") : NULL;
     const char *mer = (a && (a[1] == 'M' || a[1] == 'm')) ? (a[0] == 'A' || a[0] == 'a' ? "AM" : "PM") : "";
     int ax = 0;
@@ -121,15 +185,33 @@ void mclock_set(int h, const char *time_text){
 void mclock_place(int h, int y, int shown){
     if(h < 0 || h > 1 || !g_mc[h].canvas) return;
     mclock_t *m = &g_mc[h];
+    int old_y = m->y;
     m->y = y;
     lv_obj_set_y(m->canvas, y);
     lv_obj_set_y(m->ampm, y + MC_H - lv_obj_get_height(m->ampm) - 2);
+    for(int k = 0; k < 2; k++){
+        lv_obj_set_y(m->colon[k], lv_obj_get_y(m->colon[k]) + y - old_y);
+        if(!shown || !g_mc_phase) lv_obj_add_flag(m->colon[k], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_remove_flag(m->colon[k], LV_OBJ_FLAG_HIDDEN);
+    }
     if(shown){ lv_obj_remove_flag(m->canvas, LV_OBJ_FLAG_HIDDEN); lv_obj_remove_flag(m->ampm, LV_OBJ_FLAG_HIDDEN); }
     else     { lv_obj_add_flag(m->canvas, LV_OBJ_FLAG_HIDDEN);    lv_obj_add_flag(m->ampm, LV_OBJ_FLAG_HIDDEN); }
 }
+#ifdef DISKOS_HOST
+int mclock_host_timer_paused(void){ return !g_mc_blink || lv_timer_get_paused(g_mc_blink); }
+int mclock_host_phase_get(void){ return g_mc_phase; }
+void mclock_host_phase(int on){
+    g_mc_phase = !!on;
+    for(int h = 0; h < 2; h++) for(int k = 0; k < 2; k++) if(g_mc[h].colon[k]){
+        if(on && !lv_obj_has_flag(g_mc[h].canvas, LV_OBJ_FLAG_HIDDEN)) lv_obj_remove_flag(g_mc[h].colon[k], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(g_mc[h].colon[k], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+#endif
 static void something_home(lv_obj_t *root, lv_obj_t *lib_pill, lv_obj_t *search_btn);
 static home_settings_click_cb_t g_settings_cb;
 static lv_color_t g_accent;
+static int g_progress, g_has_track;
 
 #define HOME_TAP_SLOP 16   /* a press that moved further was a swipe (Home -> Apps), not a tap */
 static void nav_event_cb(lv_event_t *e)
@@ -140,7 +222,7 @@ static void nav_event_cb(lv_event_t *e)
 }
 
 /* Tap the home weather glance -> open the full weather app (the natural glance->detail flow, so the
- * app no longer needs a buried Apps entry). No-op when the line is empty (weather off/not fetched). */
+ * app no longer needs a buried Apps entry). No-op when the line is empty (weather off). */
 static void weather_event_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
@@ -254,9 +336,10 @@ void home_set_settings_click_cb(home_settings_click_cb_t cb)
 
 void home_set_clock(const char *time_text, const char *sub_text)
 {
-    if (g_clock) lv_label_set_text(g_clock, time_text ? time_text : "--:--");
-    if (theme_kit()->home_clock) theme_kit()->home_clock(time_text ? time_text : "--:--");
-    if (g_clock_sub){
+    /* minute-resolution text on a 10 s tick: a theme's clock drawing follows from the time text alone */
+    if (ui_label_set_changed(g_clock, time_text ? time_text : "--:--") && theme_kit()->home_clock)
+        theme_kit()->home_clock(time_text ? time_text : "--:--");
+    if (ui_label_input_changed(g_clock_sub, sub_text)){
         theme_case_text(g_clock_sub, sub_text);            /* the theme's case (Default: as given) */
     }
     if (g_mclock) mclock_set(0, time_text);
@@ -279,6 +362,7 @@ void home_set_weather(const char *text)
             if (sz.x > room) { t += 3; while (*t == ' ') t++; }
         }
     }
+    if (!strcmp(lv_label_get_text(g_weather), t)) return;   /* unchanged fallback: no redraw every poll */
     lv_label_set_text(g_weather, t);
 }
 
@@ -296,15 +380,14 @@ void home_set_status(int batt, int charging, int wifi, int bt)
     /* while charging show just the bolt + % (the % gives the level); a bolt jammed against the
      * battery glyph looked mashed. Not charging -> the battery-level glyph. */
     if (batt >= 0) p += sprintf(p, "%s %d%%", charging ? LV_SYMBOL_CHARGE : bs, batt);
-    lv_label_set_text(g_status, buf);
+    ui_label_set_changed(g_status, buf);
 }
 
 /* Fit the now-playing text in its box, whatever the theme did to the box or the fonts: the title + artist pair is
  * centred vertically as one block (each line exactly its font's height), and both lines run up to the play key. Each
  * theme sets its own box height and faces, and fixed y offsets left taller faces sitting low (the owner's Disc, hi-fi:
  * the artist line touched the bottom edge) and stopped the title well short of the key. */
-static void np_fit(void){
-    if(!g_np_capsule || !g_np_title || !g_np_artist) return;
+static void np_fit_run(void){
     lv_obj_update_layout(g_np_capsule);
     int32_t h = lv_obj_get_content_height(g_np_capsule);
     /* keep the theme's own line spacing (fonts carry different leading); move the pair so the space above the title
@@ -331,20 +414,59 @@ static void np_fit(void){
         if(w > 40){ lv_obj_set_width(g_np_title, w); lv_obj_set_width(g_np_artist, w); }
     }
 }
-static void np_fit_async(void *p){ (void)p; np_fit(); }
+/* What the fit reads, as requested (styles and flags): a value set after a layout pass is already here, while
+ * coordinates still show the old one until the next refresh. New text refits as well (np_fit's force). */
+#define NP_GEOM_N 17
+static void np_geom(intptr_t g[4][NP_GEOM_N]){
+    lv_obj_t *o[4] = { g_np_capsule, g_np_title, g_np_artist, g_np_state ? lv_obj_get_parent(g_np_state) : NULL };
+    memset(g, 0, sizeof(intptr_t) * 4 * NP_GEOM_N);
+    for(int i = 0; i < 4; i++){
+        if(!o[i]) continue;
+        intptr_t *v = g[i];
+        v[0] = (intptr_t)lv_obj_get_parent(o[i]); v[1] = lv_obj_has_flag(o[i], LV_OBJ_FLAG_HIDDEN);
+        v[2] = lv_obj_get_style_x(o[i], 0); v[3] = lv_obj_get_style_y(o[i], 0);
+        v[4] = lv_obj_get_style_width(o[i], 0); v[5] = lv_obj_get_style_height(o[i], 0);
+        v[6] = lv_obj_get_style_align(o[i], 0);
+        v[7] = lv_obj_get_style_pad_left(o[i], 0); v[8] = lv_obj_get_style_pad_right(o[i], 0);
+        v[9] = lv_obj_get_style_pad_top(o[i], 0); v[10] = lv_obj_get_style_pad_bottom(o[i], 0);
+        v[11] = lv_obj_get_style_border_width(o[i], 0);
+        v[12] = lv_obj_get_style_translate_x(o[i], 0); v[13] = lv_obj_get_style_translate_y(o[i], 0);
+        v[14] = (intptr_t)lv_obj_get_style_text_font(o[i], 0);
+        v[15] = lv_obj_get_style_text_letter_space(o[i], 0); v[16] = lv_obj_get_style_text_line_space(o[i], 0);
+    }
+}
+/* The fit reads what it last set (the two lines' y and width), so a run that changed them runs once more; once a run
+ * leaves them as it found them, the same geometry gives the same fit and an update (a position tick) skips it. */
+static int g_np_fit_settled;
+static intptr_t g_np_fit_geom[4][NP_GEOM_N];
+static void np_fit(int force){
+    if(!g_np_capsule || !g_np_title || !g_np_artist) return;
+    intptr_t before[4][NP_GEOM_N];
+    np_geom(before);
+    if(!force && g_np_fit_settled && !memcmp(before, g_np_fit_geom, sizeof before)) return;
+    np_fit_run();
+    np_geom(g_np_fit_geom);
+    g_np_fit_settled = !memcmp(before, g_np_fit_geom, sizeof before);
+}
+static void np_fit_async(void *p){ (void)p; np_fit(1); }
 
 void home_set_now_playing(const char *title, const char *artist,
                           lv_color_t accent, bool playing)
 {
     g_accent = accent;
 
-    if (g_np_title) lv_label_set_text(g_np_title, title ? title : tr("Not Playing"));
-    if (g_np_artist) lv_label_set_text(g_np_artist, artist ? artist : tr("Library"));
+    int changed = ui_label_set_changed(g_np_title, title ? title : tr("Not Playing"));
+    changed |= ui_label_set_changed(g_np_artist, artist ? artist : tr("Library"));
     if (g_np_state) ui_pp_glyph(g_np_state, ui_pp_icon_playing(playing));
-    np_fit();
+    np_fit(changed);
 
     if (g_np_thumb) lv_obj_set_style_bg_color(g_np_thumb, accent, 0);
     if (g_status_arc) lv_obj_set_style_arc_color(g_status_arc, accent, LV_PART_INDICATOR);
+}
+
+void home_set_progress(int progress, int have_track){
+    g_progress = progress; g_has_track = have_track;
+    theme_kit()->home_progress(g_np_capsule, progress, have_track, g_accent);
 }
 
 /* repaint the now-playing capsule with the live accent (called from ui.c apply_accent so
@@ -354,6 +476,7 @@ void home_set_accent(lv_color_t accent)
     g_accent = accent;
     if (g_np_thumb) lv_obj_set_style_bg_color(g_np_thumb, accent, 0);
     if (g_status_arc) lv_obj_set_style_arc_color(g_status_arc, accent, LV_PART_INDICATOR);
+    if(g_np_capsule) theme_kit()->home_progress(g_np_capsule, g_progress, g_has_track, accent);
 }
 
 /* full-screen blurred backdrop (the 360px gblur'd cover), or NULL to clear -> black */
@@ -614,4 +737,3 @@ static void something_home(lv_obj_t *root, lv_obj_t *lib_pill, lv_obj_t *search_
         lv_obj_center(ic);
     }
 }
-

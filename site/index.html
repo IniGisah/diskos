@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>diskOS - Made round, from the centre out</title>
+<meta name="description" content="diskOS is a free, open-source interface for the FiiO Snowsky Disc, made for its round screen. Eight themes, Cover Flow, timed lyrics, audiobooks and search.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#050506">
+<link rel="canonical" href="https://b0hemia.github.io/diskos/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="diskOS">
+<meta property="og:url" content="https://b0hemia.github.io/diskos/">
+<meta property="og:title" content="diskOS - Made round, from the centre out">
+<meta property="og:description" content="A free, open-source interface for the FiiO Snowsky Disc, made for its round screen. Eight themes, Cover Flow, timed lyrics, audiobooks and search.">
+<meta property="og:image" content="https://b0hemia.github.io/diskos/img/og-hero.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:alt" content="Made round, from the centre out: a reflective disc with the round diskOS halo Now Playing screen at its centre.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://b0hemia.github.io/diskos/img/og-hero.png">
+<meta name="twitter:image:alt" content="Made round, from the centre out: a reflective disc with the round diskOS halo Now Playing screen at its centre.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%2312121a'/%3E%3Ccircle cx='16' cy='16' r='15' fill='none' stroke='%233a3c42' stroke-width='1.2'/%3E%3Ccircle cx='16' cy='16' r='8.5' fill='%23050506'/%3E%3Ccircle cx='16' cy='16' r='9.5' fill='none' stroke='%23ff375f' stroke-width='2' stroke-linecap='round' stroke-dasharray='44 60' transform='rotate(-90 16 16)'/%3E%3Ccircle cx='16' cy='16' r='2.2' fill='%23ff375f'/%3E%3C/svg%3E">
+<link rel="preload" href="fonts/archivo-100-900.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/michroma-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="img/np-default-dark.webp" as="image">
+<link rel="stylesheet" href="css/site.css">
+<script src="js/site.js"></script>
+</head>
+<body>
+<!--
+ONE STORY, FOUR ACTS, ONE LIGHT.
+1 The pressing: the page is the data side of a disc under a moving light; the real screen sits at its hub.
+2 The tracklist: the same disc settles beside eight everyday things; a laser reads the active track and the hub shows it.
+3 Eight worlds: the screen grows, the record dissolves into halo, and scrolling sweeps the whole page through all eight themes.
+4 Lit stage: one last sweep turns the page black; the screen becomes the only light, the eight records orbit it, and the
+  room takes the colour of whichever theme is in front. The install button is lit by the same light.
+-->
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="bar">
+  <a class="mark" href="#top" aria-label="diskOS, back to the top">disk<span>OS</span></a>
+  <nav class="bar-nav" aria-label="Page">
+    <a href="#tracklist">Tracklist</a>
+    <a href="#themes">Themes</a>
+    <a href="#install">Install</a>
+    <a href="https://github.com/b0hemia/diskos">Source</a>
+  </nav>
+  <button type="button" class="motion" aria-pressed="false" hidden>
+    <svg class="motion-ring" viewBox="0 0 40 40" aria-hidden="true" focusable="false">
+      <circle class="track" cx="20" cy="20" r="17"/>
+      <circle class="prog" cx="20" cy="20" r="17"/>
+      <g class="glyph-pause"><rect x="15" y="13.5" width="3" height="13" rx="1"/><rect x="22" y="13.5" width="3" height="13" rx="1"/></g>
+      <path class="glyph-play" d="M16.5 13.2 L27 20 L16.5 26.8 Z"/>
+    </svg>
+    <span class="motion-label">Pause motion</span>
+  </button>
+  <a class="btn btn-small" href="https://github.com/b0hemia/diskos#install">Get diskOS</a>
+</header>
+
+<div class="show">
+  <!-- The theatre: every heavy visual lives here, behind the text. Decorative; the same content is in the text below. -->
+  <div class="theatre" aria-hidden="true">
+    <div class="layer worlds">
+      <div class="world tex-none" data-i="0" style="--bg:#050506;--fg:#f5f5f7;--ac:#ff375f;--a1:255,55,95;--a2:120,20,60;--face:'Hanken Grotesk';--wt:650;--tr:-.04em;--case:none">
+        <div class="amb"></div><div class="tex"></div>
+        <p class="word">halo</p>
+        <img class="disc" src="img/np-default-dark.webp" alt="" width="720" height="720">
+        <div class="info"><p class="name">halo</p><p class="desc">Rounded controls, a cover-centred Now Playing view, a large Home clock and border progress around the now-playing island.</p><p class="track"><span>Between Tides</span> Iona Relay, from Still Current</p></div>
+      </div>
+      <div class="world tex-dots" data-i="1" style="--bg:#000000;--fg:#f2f2f2;--ac:#ff4a3a;--a1:255,74,58;--a2:90,90,90;--face:'Doto';--wt:700;--tr:-.02em;--case:none">
+        <div class="amb"></div><div class="tex"></div>
+        <p class="word">something</p>
+        <img class="disc" src="img/np-something-dark.webp" alt="" width="720" height="720" loading="lazy">
+        <div class="info"><p class="name">something</p><p class="desc">Dot-matrix clock and titles, a blinking colon, dot arrows and a dotted progress ring.</p><p class="track"><span>Open Circuit</span> Decimal Choir, from Soft Errors</p></div>
+      </div>
+      <div class="world tex-bezel" data-i="2" style="--bg:#15120e;--fg:#efe4d2;--ac:#ffa630;--a1:255,166,48;--a2:120,60,10;--face:'Share Tech Mono';--wt:400;--tr:0;--case:none">
+        <div class="amb"></div><div class="tex"></div>
+        <p class="word">hi-fi</p>
+        <img class="disc" src="img/np-hi-fi-dark.webp" alt="" width="720" height="720" loading="lazy">
+        <div class="info"><p class="name">hi-fi</p><p class="desc">Faceplate rows with amber press lights, a segmented clock and bezel-tick progress.</p><p class="track"><span>Amber Window</span> Caldera Lines, from After Hours Test</p></div>
+      </div>
+      <div class="world tex-scan" data-i="3" style="--bg:#08140b;--fg:#c9f7d6;--ac:#3dff7a;--a1:61,255,122;--a2:10,90,40;--face:'JetBrains Mono';--wt:700;--tr:-.03em;--case:none">
+        <div class="amb"></div><div class="tex"></div>
+        <p class="word">terminal</p>
+        <img class="disc" src="img/np-terminal-dark.webp" alt="" width="720" height="720" loading="lazy">
+        <div class="info"><p class="name">terminal</p><p class="desc">Monospace readouts, a blinking header cursor, aligned playlist durations and a straight seek bar.</p><p class="track"><span>Return Signal</span> Port Meridian, from Local Echo</p></div>
+      </div>
+      <div class="world tex-none" data-i="4" style="--bg:#111111;--fg:#eee8d9;--ac:#e0402c;--a1:224,64,44;--a2:40,90,200;--face:'Archivo Black';--wt:400;--tr:-.03em;--case:uppercase">
+        <div class="amb"></div><div class="tex"></div>
+        <p class="word">bauhaus</p>
+        <img class="disc" src="img/np-bauhaus-dark.webp" alt="" width="720" height="720" loading="lazy">
+        <div class="info"><p class="name">bauhaus</p><p class="desc">Bold capitals, geometric row bullets, artwork in the left half of Now Playing and a separate queue-position line.</p><p class="track"><span>Red Interval</span> Ada Assembly, from Forms in Motion</p></div>
+      </div>
+      <div class="world tex-grid" data-i="5" style="--bg:#0b1a2e;--fg:#dce8f6;--ac:#8cc4ff;--a1:70,140,230;--a2:20,60,120;--face:'Barlow Condensed';--wt:300;--tr:.02em;--case:uppercase">
+        <div class="amb"></div><div class="tex"></div>
+        <p class="word">blueprint</p>
+        <img class="disc" src="img/np-blueprint-dark.webp" alt="" width="720" height="720" loading="lazy">
+        <div class="info"><p class="name">blueprint</p><p class="desc">Figure numbers, row crosshairs, dimension marks and cover crop marks.</p><p class="track"><span>Section Three</span> Datum Season, from Measured Air</p></div>
+      </div>
+      <div class="world tex-none" data-i="6" style="--bg:#1c1f22;--fg:#e6dfcd;--ac:#7fe0b0;--a1:127,224,176;--a2:120,110,90;--face:'Nunito';--wt:800;--tr:-.03em;--case:none">
+        <div class="amb"></div><div class="tex"></div>
+        <p class="word">stone</p>
+        <img class="disc" src="img/np-stone-dark.webp" alt="" width="720" height="720" loading="lazy">
+        <div class="info"><p class="name">stone</p><p class="desc">Uneven pebble controls, a split clock and a fading progress arc.</p><p class="track"><span>Slow Strata</span> Cairn Loom, from Weather Held</p></div>
+      </div>
+      <div class="world tex-paper" data-i="7" style="--bg:#0e0e0e;--fg:#e8e1d2;--ac:#ff3da5;--a1:255,61,165;--a2:200,180,150;--face:'Special Elite';--wt:400;--tr:0;--case:none">
+        <div class="amb"></div><div class="tex"></div>
+        <p class="word">zine</p>
+        <img class="disc" src="img/np-zine-dark.webp" alt="" width="720" height="720" loading="lazy">
+        <div class="info"><p class="name">zine</p><p class="desc">Taped headers, pressed-row underlines, typewriter text and cut-out clock digits.</p><p class="track"><span>Leave A Mark</span> Cut Paper Union, from Margin Songs</p></div>
+      </div>
+    </div>
+
+    <div class="layer press">
+      <div class="press-scrim"></div>
+      <div class="disc-css"></div>
+      <canvas class="gl"></canvas>
+      <div class="etch"><svg viewBox="0 0 1000 1000"><defs><path id="ring" d="M500,500 m-247,0 a247,247 0 1,1 494,0 a247,247 0 1,1 -494,0"/></defs><text><textPath href="#ring" textLength="1548" lengthAdjust="spacing">diskOS * FREE AND OPEN SOURCE * INTERFACE GPL-3.0-OR-LATER * INSTALLER MIT * MADE BY b0hemia * FOR THE ROUND SCREEN *</textPath></text></svg></div>
+      <div class="hub"><img class="hub-a" src="img/np-default-dark.webp" alt="" width="720" height="720" fetchpriority="high"><img class="hub-b" src="img/np-default-dark.webp" alt="" width="720" height="720"></div>
+      <span class="laser"></span>
+    </div>
+
+    <div class="layer stage">
+      <div class="st-room"></div>
+      <div class="st-glow"><img class="g-a" src="img/np-zine-dark.webp" alt="" width="720" height="720" loading="lazy"><img class="g-b" src="img/np-zine-dark.webp" alt="" width="720" height="720" loading="lazy"></div>
+      <div class="st-mirror">
+        <div class="st-screen"><img class="g-a" src="img/np-zine-dark.webp" alt="" width="720" height="720" loading="lazy"><img class="g-b" src="img/np-zine-dark.webp" alt="" width="720" height="720" loading="lazy"></div>
+        <div class="st-records"></div>
+      </div>
+      <div class="st-floor"></div>
+      <div class="st-pool"><img class="g-a" src="img/np-zine-dark.webp" alt="" width="720" height="720" loading="lazy"><img class="g-b" src="img/np-zine-dark.webp" alt="" width="720" height="720" loading="lazy"></div>
+      <div class="st-live">
+        <div class="st-screen live"><img class="g-a" src="img/np-zine-dark.webp" alt="" width="720" height="720" loading="lazy"><img class="g-b" src="img/np-zine-dark.webp" alt="" width="720" height="720" loading="lazy"><span class="bloom"><img class="g-a" src="img/np-zine-dark.webp" alt="" width="720" height="720" loading="lazy"><img class="g-b" src="img/np-zine-dark.webp" alt="" width="720" height="720" loading="lazy"></span></div>
+        <div class="st-records"></div>
+      </div>
+      <p class="st-now"><span class="k">Now showing</span><span class="t">zine</span><span class="s">Leave A Mark</span><span class="a">Cut Paper Union</span></p>
+    </div>
+
+    <div class="hand"><i></i></div>
+    <div class="grain"></div>
+  </div>
+
+  <main id="main" class="story">
+    <!-- ACT 1: the pressing -->
+    <section class="act act-hero" id="top" aria-labelledby="hero-title">
+      <div class="copy hero-copy">
+        <p class="kicker"><span class="brand">diskOS</span> for the FiiO Snowsky Disc</p>
+        <h1 id="hero-title"><span class="ln">Made round,</span> <span class="ln">from the centre out.</span></h1>
+        <p class="lede">A new face for the FiiO Snowsky Disc, made for its round screen. Your music sits in the middle of the circle.</p>
+        <div class="actions"><a class="btn" href="https://github.com/b0hemia/diskos#install">Get diskOS</a><a class="link" href="#tracklist">Read the tracklist</a></div>
+        <p class="fine">Free and open source. Install from Linux x86-64, macOS on Apple Silicon or Windows 10/11 x64. Flashing takes about 20 minutes. Choose the stock interface for the next boot in Settings &gt; System &gt; Default UI.</p>
+      </div>
+      <figure class="still-art hero-art">
+        <div class="still-disc"><canvas class="still-gl"></canvas></div>
+        <img class="still-hub" src="img/np-default-dark.webp" alt="diskOS Now Playing in the halo theme: Between Tides by Iona Relay inside the round seek ring" width="720" height="720">
+      </figure>
+    </section>
+
+    <!-- ACT 2: the tracklist -->
+    <section class="act act-tracks" id="tracklist" aria-labelledby="tl-title">
+      <div class="copy tl-head">
+        <p class="kicker"><span>Side A</span> The tracklist</p>
+        <h2 id="tl-title">Eight things you can do.</h2>
+        <p class="tl-lede">Each one made for the circle. Scroll, and the disc plays them in order.</p>
+      </div>
+      <ol class="tracks">
+        <li data-img="home-default-dark"><div class="tr">
+          <span class="no">01</span>
+          <img class="thumb" src="img/home-default-dark.webp" alt="Home in halo: the time, date and weather above the current song, with progress around the now-playing island" width="720" height="720" loading="lazy">
+          <div class="tx"><h3>Home</h3><p>The time, the date and your song, at a glance. In halo, the border around your song fills as it plays.</p></div>
+        </div></li>
+        <li data-img="tour-library"><div class="tr">
+          <span class="no">02</span>
+          <img class="thumb" src="img/tour-library.webp" alt="Library: Songs, Albums, Artists, Genres and Playlists" width="720" height="720" loading="lazy">
+          <div class="tx"><h3>Library</h3><p>A big library, one thumb. Run your finger around the rim to fly through a long list, or tap A-Z and land on the letter you want.</p></div>
+        </div></li>
+        <li data-img="tour-cover-flow"><div class="tr">
+          <span class="no">03</span>
+          <img class="thumb" src="img/tour-cover-flow.webp" alt="Cover Flow with After Hours Test by Caldera Lines in the centre" width="720" height="720" loading="lazy">
+          <div class="tx"><h3>Cover Flow</h3><p>Some albums you know by their cover before you know their name. Flip through the artwork, tap the one in the middle to open it, or hold it to play.</p></div>
+        </div></li>
+        <li data-img="tour-search"><div class="tr">
+          <span class="no">04</span>
+          <img class="thumb" src="img/tour-search.webp" alt="Search: the word Between finds Between Tides by Iona Relay" width="720" height="720" loading="lazy">
+          <div class="tx"><h3>Search</h3><p>Remember one word of the title? Search by song, artist or album from Home or Quick Settings, and play what you find.</p></div>
+        </div></li>
+        <li data-img="np-default-dark"><div class="tr">
+          <span class="no">05</span>
+          <img class="thumb" src="img/np-default-dark.webp" alt="Now Playing in halo: Between Tides by Iona Relay inside the round seek ring" width="720" height="720" loading="lazy">
+          <div class="tx"><h3>Now Playing</h3><p>Playback controls and your place in the song, together on the round screen. Play, pause, skip and seek without leaving the screen.</p></div>
+        </div></li>
+        <li data-img="tour-lyrics-timed"><div class="tr">
+          <span class="no">06</span>
+          <img class="thumb" src="img/tour-lyrics-timed.webp" alt="Timed lyrics with the current line lit" width="720" height="720" loading="lazy">
+          <div class="tx"><h3>Timed lyrics</h3><p>Sing along. Timed lyrics follow the song, and the line you are on lights up. Lyrics beside the song or inside it work offline; missing words can be looked up over Wi-Fi.</p></div>
+        </div></li>
+        <li data-img="feat-book-playing-dark"><div class="tr">
+          <span class="no">07</span>
+          <img class="thumb" src="img/feat-book-playing-dark.webp" alt="An audiobook playing, with buttons to skip back 15 seconds and forward 30" width="720" height="720" loading="lazy">
+          <div class="tx"><h3>Audiobooks</h3><p>.m4b audiobooks get their own home in Library &gt; Books. Jump between chapters and pick up at your saved position.</p></div>
+        </div></li>
+        <li data-img="tour-quick-settings"><div class="tr">
+          <span class="no">08</span>
+          <img class="thumb" src="img/tour-quick-settings.webp" alt="Quick Settings with Wi-Fi, Bluetooth, EQ, Search, Rescan and Source tiles" width="720" height="720" loading="lazy">
+          <div class="tx"><h3>Quick Settings</h3><p>Pull down from the top edge: brightness, Wi-Fi, Bluetooth and EQ, together in one place. Change what you need and get straight back to listening.</p></div>
+        </div></li>
+      </ol>
+      <p class="copy also">Also on the record: Last.fm scrobbling, playlists with M3U import and export, Up Next, Song Info, a sleep timer and signed app updates over Wi-Fi. diskOS changes what you see and touch; the sound still comes from the Disc's own stock audio engine.</p>
+      <div class="tl-tail"></div>
+    </section>
+
+    <!-- ACT 3: eight worlds -->
+    <section class="act act-themes" id="themes" aria-labelledby="th-title">
+      <div class="th-bridge">
+        <div class="copy th-intro">
+          <p class="kicker"><span>Side B</span> Eight themes</p>
+          <h2 id="th-title">One circle.<br>Eight worlds.</h2>
+          <p class="lede">Eight themes bring different fonts, colours and layouts across the interface, each in dark or light. Your music and settings work the same in all of them. On the Disc: Settings &gt; Display &gt; Theme.</p>
+          <p class="cue">Keep scrolling to change theme</p>
+        </div>
+      </div>
+      <div class="th-run">
+        <nav class="index" aria-label="Jump to a theme">
+          <ol>
+            <li><button type="button" data-i="0" style="--ac:#ff375f"><span>halo</span></button></li>
+            <li><button type="button" data-i="1" style="--ac:#ff4a3a"><span>something</span></button></li>
+            <li><button type="button" data-i="2" style="--ac:#ffa630"><span>hi-fi</span></button></li>
+            <li><button type="button" data-i="3" style="--ac:#3dff7a"><span>terminal</span></button></li>
+            <li><button type="button" data-i="4" style="--ac:#e0402c"><span>bauhaus</span></button></li>
+            <li><button type="button" data-i="5" style="--ac:#8cc4ff"><span>blueprint</span></button></li>
+            <li><button type="button" data-i="6" style="--ac:#7fe0b0"><span>stone</span></button></li>
+            <li><button type="button" data-i="7" style="--ac:#ff3da5"><span>zine</span></button></li>
+          </ol>
+        </nav>
+        <ol class="worlds-list">
+          <li id="halo" class="wl tex-none" style="--bg:#050506;--fg:#f5f5f7;--ac:#ff375f;--a1:255,55,95;--face:'Hanken Grotesk';--wt:650;--tr:-.04em;--case:none"><div class="tex"></div>
+            <img src="img/np-default-dark.webp" alt="halo Now Playing: Between Tides by Iona Relay, the cover inside a round seek ring" width="720" height="720" loading="lazy">
+            <div class="wl-tx"><h3>halo</h3><p>Rounded controls, a cover-centred Now Playing view, a large Home clock and border progress around the now-playing island.</p><p class="track"><span>Between Tides</span> Iona Relay, from Still Current</p></div></li>
+          <li id="something" class="wl tex-dots" style="--bg:#000000;--fg:#f2f2f2;--ac:#ff4a3a;--a1:255,74,58;--face:'Doto';--wt:700;--tr:-.02em;--case:none"><div class="tex"></div>
+            <img src="img/np-something-dark.webp" alt="something Now Playing: Open Circuit by Decimal Choir, dot-matrix title and a dotted progress ring" width="720" height="720" loading="lazy">
+            <div class="wl-tx"><h3>something</h3><p>Dot-matrix clock and titles, a blinking colon, dot arrows and a dotted progress ring.</p><p class="track"><span>Open Circuit</span> Decimal Choir, from Soft Errors</p></div></li>
+          <li id="hi-fi" class="wl tex-bezel" style="--bg:#15120e;--fg:#efe4d2;--ac:#ffa630;--a1:255,166,48;--face:'Share Tech Mono';--wt:400;--tr:0;--case:none"><div class="tex"></div>
+            <img src="img/np-hi-fi-dark.webp" alt="hi-fi Now Playing: Amber Window by Caldera Lines, with amber segment time and bezel ticks" width="720" height="720" loading="lazy">
+            <div class="wl-tx"><h3>hi-fi</h3><p>Faceplate rows with amber press lights, a segmented clock and bezel-tick progress.</p><p class="track"><span>Amber Window</span> Caldera Lines, from After Hours Test</p></div></li>
+          <li id="terminal" class="wl tex-scan" style="--bg:#08140b;--fg:#c9f7d6;--ac:#3dff7a;--a1:61,255,122;--face:'JetBrains Mono';--wt:700;--tr:-.03em;--case:none"><div class="tex"></div>
+            <img src="img/np-terminal-dark.webp" alt="terminal Now Playing: Return Signal by Port Meridian as a green text readout with a straight seek bar" width="720" height="720" loading="lazy">
+            <div class="wl-tx"><h3>terminal</h3><p>Monospace readouts, a blinking header cursor, aligned playlist durations and a straight seek bar.</p><p class="track"><span>Return Signal</span> Port Meridian, from Local Echo</p></div></li>
+          <li id="bauhaus" class="wl tex-none" style="--bg:#111111;--fg:#eee8d9;--ac:#e0402c;--a1:224,64,44;--face:'Archivo Black';--wt:400;--tr:-.03em;--case:uppercase"><div class="tex"></div>
+            <img src="img/np-bauhaus-dark.webp" alt="bauhaus Now Playing: Red Interval by Ada Assembly, artwork in the left half beside bold controls" width="720" height="720" loading="lazy">
+            <div class="wl-tx"><h3>bauhaus</h3><p>Bold capitals, geometric row bullets, artwork in the left half of Now Playing and a separate queue-position line.</p><p class="track"><span>Red Interval</span> Ada Assembly, from Forms in Motion</p></div></li>
+          <li id="blueprint" class="wl tex-grid" style="--bg:#0b1a2e;--fg:#dce8f6;--ac:#8cc4ff;--a1:70,140,230;--face:'Barlow Condensed';--wt:300;--tr:.02em;--case:uppercase"><div class="tex"></div>
+            <img src="img/np-blueprint-dark.webp" alt="blueprint Now Playing: Section Three by Datum Season, cover with crop marks on a drafting grid" width="720" height="720" loading="lazy">
+            <div class="wl-tx"><h3>blueprint</h3><p>Figure numbers, row crosshairs, dimension marks and cover crop marks.</p><p class="track"><span>Section Three</span> Datum Season, from Measured Air</p></div></li>
+          <li id="stone" class="wl tex-none" style="--bg:#1c1f22;--fg:#e6dfcd;--ac:#7fe0b0;--a1:127,224,176;--face:'Nunito';--wt:800;--tr:-.03em;--case:none"><div class="tex"></div>
+            <img src="img/np-stone-dark.webp" alt="stone Now Playing: Slow Strata by Cairn Loom, a thick progress ring and a pill-shaped play key" width="720" height="720" loading="lazy">
+            <div class="wl-tx"><h3>stone</h3><p>Uneven pebble controls, a split clock and a fading progress arc.</p><p class="track"><span>Slow Strata</span> Cairn Loom, from Weather Held</p></div></li>
+          <li id="zine" class="wl tex-paper" style="--bg:#0e0e0e;--fg:#e8e1d2;--ac:#ff3da5;--a1:255,61,165;--face:'Special Elite';--wt:400;--tr:0;--case:none"><div class="tex"></div>
+            <img src="img/np-zine-dark.webp" alt="zine Now Playing: Leave A Mark by Cut Paper Union, art taped above a highlighter-style bar" width="720" height="720" loading="lazy">
+            <div class="wl-tx"><h3>zine</h3><p>Taped headers, pressed-row underlines, typewriter text and cut-out clock digits.</p><p class="track"><span>Leave A Mark</span> Cut Paper Union, from Margin Songs</p></div></li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ACT 4: the lit stage -->
+    <section class="act act-close" aria-labelledby="close-title">
+      <div class="cl-bridge"></div>
+      <figure class="still-art stage-art">
+        <div class="sa-glow" aria-hidden="true"><img src="img/np-default-dark.webp" alt="" width="720" height="720" loading="lazy"></div>
+        <ul class="sa-ring" aria-hidden="true">
+          <li style="--x:50%;--y:96%"><img src="img/vinyl-default-dark.webp" alt="" width="480" height="480" loading="lazy"></li>
+          <li style="--x:15.4%;--y:82.5%"><img src="img/vinyl-something-dark.webp" alt="" width="480" height="480" loading="lazy"></li>
+          <li style="--x:4%;--y:50%"><img src="img/vinyl-hi-fi-dark.webp" alt="" width="480" height="480" loading="lazy"></li>
+          <li style="--x:15.4%;--y:17.5%"><img src="img/vinyl-terminal-dark.webp" alt="" width="480" height="480" loading="lazy"></li>
+          <li style="--x:50%;--y:4%"><img src="img/vinyl-bauhaus-dark.webp" alt="" width="480" height="480" loading="lazy"></li>
+          <li style="--x:84.6%;--y:17.5%"><img src="img/vinyl-blueprint-dark.webp" alt="" width="480" height="480" loading="lazy"></li>
+          <li style="--x:96%;--y:50%"><img src="img/vinyl-stone-dark.webp" alt="" width="480" height="480" loading="lazy"></li>
+          <li style="--x:84.6%;--y:82.5%"><img src="img/vinyl-zine-dark.webp" alt="" width="480" height="480" loading="lazy"></li>
+        </ul>
+        <img class="sa-screen" src="img/np-default-dark.webp" alt="diskOS Now Playing in halo, with the eight themes' Vinyl screens around it" width="720" height="720" loading="lazy">
+      </figure>
+      <div class="copy close-copy">
+        <div id="install"><h2 id="close-title">Put diskOS<br>on your Disc.</h2></div>
+        <div class="close-side">
+          <p>Install from Linux x86-64, macOS on Apple Silicon or Windows 10/11 x64. Flashing takes about 20 minutes. Before flashing, the installer saves a stock restore image built from your official firmware ZIP. Choose Settings &gt; System &gt; Default UI &gt; Stock to use the stock interface on the next boot. Works with stock firmware V2.09, V2.28, V2.40 and V2.57. Playlist and book playback may fail on V2.09.</p>
+          <div class="actions"><a class="btn btn-big" href="https://github.com/b0hemia/diskos#install">Get diskOS</a><a class="link" href="https://github.com/b0hemia/diskos">Read the source</a></div>
+          <p class="fine">The eight records around the screen show the Vinyl screensaver in each theme. On the Disc, cover art turns about once every 27 seconds while playing, with the screensaver visible and the screen on.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Free and open source. Interface GPL-3.0-or-later, installer MIT. Made by b0hemia.</p>
+  <p>diskOS is not affiliated with FiiO or Snowsky.</p>
+  <nav class="foot-links" aria-label="Project links">
+    <a class="link" href="https://github.com/b0hemia/diskos">Source</a>
+    <a class="link" href="https://github.com/b0hemia/diskos/releases/latest">Latest release</a>
+    <a class="link" href="https://github.com/b0hemia/diskos/issues">Report a problem</a>
+  </nav>
+</footer>
+</body>
+</html>

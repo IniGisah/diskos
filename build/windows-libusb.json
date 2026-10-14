@@ -1,0 +1,11 @@
+{
+  "version": "1.0.27",
+  "asset_url": "https://github.com/libusb/libusb/releases/download/v1.0.27/libusb-1.0.27.7z",
+  "asset_sha256": "19835e290f46fab6bd8ce4be6ab7dc5209f1c04bad177065df485e51dc4118c8",
+  "member": "VS2022/MS64/dll/libusb-1.0.dll",
+  "dll_sha256": "d4e5db4fad8bef7201dc5a4a71ca997e6dccc9da25e8a988d4be63b13a02208d",
+  "dll_size": 157184,
+  "source_path": "corresponding-source/libusb-1.0_1.0.27.orig.tar.bz2",
+  "source_sha256": "ffaa41d741a8a3bee244ac8e54a72ea05bf2879663c098c82fc5757853441575",
+  "source_size": 643680
+}

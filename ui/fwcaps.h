@@ -38,6 +38,10 @@ int fw_has_radio_boot_arbitration(void);
  * queues MY_LOVE in title order (V2.57, device-verified 2026-09-27; index 0 or an unknown ID is refused).
  * False elsewhere: the V2.40 type-6 contract is static RE only, so those builds keep the older path. */
 int fw_fav_play_by_love_id(void);
+/* 1 = the player's power-button screen toggle is known well enough for diskOS to drive it (V2.57 static RE):
+ * it announces sleep/wake as aa23 frames, does not grab event0, and toggles on an
+ * EV_KEY 265/259 value 1. Other firmware: diskOS only follows the player's brightness writes. */
+int fw_power_key_driveable(void);
 /* 1 = this player takes 0648 (Artist / Album Artist grouping); 0 = unknown firmware, never send it */
 int fw_artist_class_settable(void);
 int fw_folder_jump_settable(void);    /* 0687 = folder jump (V2.28/V2.40/V2.57) */

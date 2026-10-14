@@ -8,6 +8,7 @@ We enumerate USB via pyusb (bundled) so we don't depend on `lsusb` being present
 """
 
 import platform
+import struct
 import sys
 
 MASKROM_VID = 0x0a108 & 0xFFFF  # printed as a108 by lsusb; VID field is 0xa108
@@ -24,13 +25,25 @@ def host():
     elif sysname == "linux":
         os_key = "linux"
     else:
-        os_key = sysname  # 'windows' etc. - unsupported for now
+        os_key = sysname
     machine = platform.machine().lower()
     arch = {
         "x86_64": "x86_64", "amd64": "x86_64",
         "arm64": "arm64", "aarch64": "arm64",
     }.get(machine, machine)
     return os_key, arch
+
+
+def windows_native_runtime():
+    """Native x64 Windows CPython; shell choice does not qualify Python."""
+    return (sys.platform == "win32" and platform.system() == "Windows"
+            and host() == ("windows", "x86_64") and struct.calcsize("P") == 8
+            and platform.python_implementation() == "CPython")
+
+
+def windows_dev_runtime():
+    """Development opt-ins apply only to the native source runtime."""
+    return windows_native_runtime() and not getattr(sys, "frozen", False)
 
 
 def host_tag():
@@ -41,6 +54,15 @@ def host_tag():
 def is_supported():
     o, _ = host()
     return o in ("linux", "macos")
+
+
+def host_status():
+    from .flasher import flash_eligible
+    if flash_eligible():
+        return "flashing enabled" if host()[0] == "windows" else "supported"
+    if host()[0] == "windows":
+        return "host services ready, flashing not yet supported"
+    return "supported" if is_supported() else "UNSUPPORTED"
 
 
 def distro_info():
@@ -164,6 +186,16 @@ def maskrom_access(sys_root="/sys/bus/usb/devices", dev_root="/dev/bus/usb"):
     """Can this user OPEN the mask-ROM device, the way usbboot will? Seeing it (maskrom_count) is not enough: on
     Linux the node is root-only until the udev rule grants access (GitHub #10: counted, then usbboot failed E301).
     Returns ("ok"|"denied"|"unknown", detail). "unknown" = not Linux, no device, or an unexpected error."""
+    if host()[0] == "windows":
+        from .windows_usb import inventory, require_target
+        from .errors import PreflightError
+        try:
+            row = require_target(inventory())
+        except PreflightError as e:
+            return "denied", str(e)
+        except OSError as e:
+            return "unknown", str(e)
+        return "unknown", "WinUSB bound; run native diagnostic to prove access: " + row["instance_id"]
     import errno
     import os
     nodes = maskrom_nodes(sys_root, dev_root)
@@ -185,6 +217,12 @@ def maskrom_access(sys_root="/sys/bus/usb/devices", dev_root="/dev/bus/usb"):
 def maskrom_count():
     """How many devices are currently in mask-ROM mode. Prefers pyusb, falls back
     to lsusb, returns -1 if neither is available (caller should warn)."""
+    if host()[0] == "windows":
+        from .windows_usb import inventory
+        try:
+            return inventory()["count"]
+        except OSError:
+            return -1
     n = _maskrom_count_pyusb()
     if n is not None:
         return n

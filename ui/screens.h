@@ -50,6 +50,13 @@ void datetime_refresh(void);           /* rebuilt from the current time on each 
 void ui_rtc_save_now(void);            /* save the system clock to the RTC now (hwclock -w, off the UI thread) */
 void ui_note_transport_sent(void);      /* a play/pause/next/prev went to the player: this ipc generation needs no local-init one-shot */
 void ui_art_redo(void);                /* re-request the cover without same-album reuse (Online Album Art switched) */
+/* Shared cover API: UI thread only; callers borrow, never free the descriptor. */
+void sharp_cover_set_source(const char *path);
+void sharp_cover_request(void);
+const lv_image_dsc_t *sharp_cover_get(void);
+void sharp_cover_invalidate(void);
+void ui_np_cover_changed(void);        /* rebind before shared pixels are freed */
+void ui_np_enter(void);                /* refresh on forward and back entry */
 void ui_art_retry(void);               /* re-request the current song's cover (after the SD gate opens) */
 int  ui_take_art_force(void);          /* 1 once when a cover redo is pending (main loop runs ui_update) */
 void chapters_open(void);            /* load the current book's chapters + show SCR_CHAPTERS (books.c) */
@@ -131,7 +138,7 @@ void settings_refresh_list(void);
 void setlist_create(lv_obj_t *root);       /* SCR_SETLIST: one category's rows (built per entry) */
 void setlist_open(const char *group);      /* open one category ("Playback", "Audio", ...) */
 void setlist_refresh(void);
-void settings_apply_startup(void);
+void settings_apply_startup(int restore_brightness); /* other startup settings always apply */
 
 /* accent plumbing: the live accent + per-screen repaint so no surface shows a stale colour */
 lv_color_t ui_current_accent(void);
@@ -168,6 +175,10 @@ void ui_set_brightness(int v);   /* persist + apply */
 int  ui_get_brightness(void);
 int  ui_effective_brightness(void);   /* what the backlight runs at (Outdoor mode = full) */
 void ui_backlight(int v);        /* transient backlight write, no persist */
+int  ui_backlight_written(void);  /* the brightness ui_backlight last wrote (-1 = none): anything else came from the player */
+unsigned ui_backlight_write_seq(void); /* counts diskOS's brightness writes */
+int  ui_backlight_take_foreign(int *dark, unsigned *seq); /* a player value a diskOS write overwrote before the poll saw
+                                           * it (-1 = none); *dark = the panel was off then, *seq = diskOS's write count then */
 void ui_set_sleep_timer(int minutes);   /* 0 = off; pauses playback when it elapses */
 void ui_set_sleep_eoc(long target_ms, const char *path, int at_book_end);  /* pause when THAT book's position reaches target_ms (end of chapter); at_book_end=1 if the target is the file end (last/chapterless chapter) so a rollover can fulfil it */
 void ui_disarm_book_eoc(void);  /* disarm any end-of-chapter sleep; call on explicit track navigation */
@@ -282,6 +293,7 @@ void library_create(lv_obj_t *root);
 typedef int (*library_song_click_cb_t)(int index);   /* index = song id; returns 1 if a play was sent */
 void library_set_song_click_cb(library_song_click_cb_t cb);
 void library_refresh(void);   /* rebuild the current Library view (after external DB changes) */
+void library_enter(void);     /* retain catalog rows; refresh mutable DB views */
 void library_artist_mode_changed(void);   /* Settings changed the Artists grouping: leave an artist drill + rebuild */
 void library_ensure_capacity(void);  /* grow row buffers to fit the library (after a rescan adds tracks) */
 /* primary scrollable list per long-list screen (for rim-scroll); NULL if none */
