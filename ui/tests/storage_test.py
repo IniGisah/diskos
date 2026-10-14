@@ -71,6 +71,11 @@ static int scanner_start(void){ return 0; }
 static int mdb_total_song_count(void){ return 1; }
 static int mdb_load_failed(void){ return 0; }
 static void albumwall_prewarm_seed(void){ test_seed++; }
+static int test_player_ready=1, test_settling=0;
+static unsigned test_rx_frames=1;
+static int ipc_player_ready(void){ return test_player_ready; }
+static unsigned ipc_rx_frames(void){ return test_rx_frames; }
+static int ui_player_settling(void){ return test_settling; }
 static int ipc_send_cmd(const char *s){
     test_sends++;
     if(test_fail) return -1;
@@ -97,6 +102,7 @@ static void reset(void){
     unlink(SD_EXPORT_MARKER);
     test_clock=0; test_mounted=1; test_exported=0; test_host=0;
     test_guarded=1; test_scan=0; test_sends=0; test_fail=0; test_export_sends=0; test_seed=0;
+    test_player_ready=1; test_settling=0; test_rx_frames=1;
     g_sd_hold=0; g_sd_phase=SD_LOCAL; g_source_mode=0; g_sd_reissue=0;
     atomic_store(&g_sd_writable,1); atomic_store(&g_sd_writers,0);
     storage_init(); assert(sd_io_allowed() && ui_local_playback_allowed());
@@ -145,7 +151,13 @@ int main(void){
     assert(ui_set_source_mode(3)<0 && test_sends==0 && sd_io_allowed());
     test_guarded=1; test_scan=1;
     assert(ui_set_source_mode(3)<0 && test_sends==0 && sd_io_allowed());
-    puts("PASS unprotected player and active scan reject before pausing media");
+    reset(); test_player_ready=0;
+    assert(ui_set_source_mode(3)<0 && test_sends==0 && sd_io_allowed());
+    reset(); test_rx_frames=0;
+    assert(ui_set_source_mode(3)<0 && test_sends==0 && sd_io_allowed());
+    reset(); test_settling=1;
+    assert(ui_set_source_mode(3)<0 && test_sends==0 && sd_io_allowed());
+    puts("PASS unprotected player, active scan, unready player, or active settle reject before pausing media");
 
     reset(); assert(ui_set_source_mode(3)==0); test_fail=1; storage_tick(NULL);
     assert(g_sd_phase==SD_UNKNOWN && !sd_io_allowed());

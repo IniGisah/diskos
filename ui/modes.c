@@ -270,8 +270,8 @@ static void row_cb(lv_event_t *e){
      * state-machine is asynchronous). NB we do NOT early-return on "same mode" - re-issuing must
      * always be allowed so Local works as a recover even if our cached mode is stale. */
     if(g_last_switch && lv_tick_elaps(g_last_switch) < 3000){ ui_toast("Switching..."); return; }
-    g_last_switch = lv_tick_get();
     if(ui_set_source_mode(m) == 0){
+        g_last_switch = lv_tick_get();
         g_pending_mode = m;
         mark_pending(m);      /* async switch in flight: show "switching", not a confirmed selection */
         if(g_settle) lv_timer_del(g_settle);

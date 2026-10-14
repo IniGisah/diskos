@@ -578,6 +578,10 @@ static int g_playing = 0; /* published each tick by the main loop's play/pause
  * uniformly. */
 static int g_settle_armed = 0;
 static uint32_t g_settle_until = 0;
+void ui_arm_player_settle(uint32_t ms) {
+  g_settle_armed = 1;
+  g_settle_until = lv_tick_get() + ms;
+}
 int ui_player_settling(void) {
   if (!g_settle_armed)
     return 0;
@@ -776,6 +780,9 @@ int ui_local_playback_allowed(void) {
   return atomic_load(&g_launch_verdict) == 1 && g_sd_phase == SD_LOCAL &&
          !g_sd_hold && sd_io_healthy();
 }
+int ui_sd_is_held(void) {
+  return g_sd_phase == SD_UNKNOWN || g_sd_hold || !sd_io_healthy();
+}
 
 /* SD quiesce for a device Restart: closes BOTH admission paths (sd_io leases
  * and sd_write_begin writers) and keeps storage_tick from reopening them while
@@ -957,6 +964,14 @@ int ui_set_source_mode(int mode) {
    * - a PENDING or negative verdict refuses it too. */
   if (atomic_load(&g_launch_verdict) != 1) {
     ui_toast("SD access is not ready yet");
+    return -1;
+  }
+  if (!ipc_player_ready() || ipc_rx_frames() == 0) {
+    ui_toast("Player is starting up - try again");
+    return -1;
+  }
+  if (ui_player_settling()) {
+    ui_toast("Player is settling - try again");
     return -1;
   }
   if (mode == 3) {
@@ -1368,6 +1383,7 @@ static void localplayer_workmode_cb(lv_timer_t *t) {
   if (wait_gen != gen) {
     wait_gen = gen;
     wait_start = now;
+    ui_arm_player_settle(9000);
     return;
   } /* first response this gen -> start settle */
   if (now - wait_start < 9000)
@@ -4426,6 +4442,7 @@ int main(int argc, char **argv) {
                       * the already-initialised cache (no first-init data race
                       * between the threads). */
   storage_init();
+  ui_arm_player_settle(10000); /* arm cold boot player settle window */
   /* coldplug_start() now runs from sd_features_gate_cb, after the launcher
    * publishes its verdict */
   {
@@ -4739,8 +4756,7 @@ int main(int argc, char **argv) {
       /* Arm the post-restart settle window so BT routing (and the v2.40
        * local-init) wait out the player's ~7s late-init before sending an
        * output route that it could otherwise overwrite. */
-      g_settle_armed = 1;
-      g_settle_until = lv_tick_get() + 9000;
+      ui_arm_player_settle(9000);
       /* A player restart stopped the book (the fresh player is idle) while our
        * session is still set - and a stale book-path in the reconnected state
        * could keep book_tick treating it as playing, which suppresses the local

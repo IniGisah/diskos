@@ -226,6 +226,8 @@ void bt_notify_player_restart(
     void); /* player restarted: forget stale auto-route so the poll re-routes */
 int ui_player_settling(void); /* 1 while the player is still in its post-restart
                                  late-init settle window */
+void ui_arm_player_settle(uint32_t ms); /* arm the player settle window for ms */
+int ui_sd_is_held(void);      /* 1 if SD access is held (SD_UNKNOWN or g_sd_hold) */
 void library_open_album(const char *name);
 void library_open_artist(const char *name);
 void albumwall_create(

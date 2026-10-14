@@ -573,6 +573,9 @@ static void exit_modal_confirm_cb(lv_event_t *e){
     if(ui_set_source_mode(0) == 0){
         modelock_close();
         screen_show(SCR_HOME);
+    } else if(ui_sd_is_held()){
+        modelock_close();
+        screen_show(SCR_HOME);
     }
 }
 
