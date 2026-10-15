@@ -38,11 +38,24 @@
 ## At a glance
 
 - **Device:** FiiO Snowsky Disc.
-- **Release described here:** diskOS and installer 1.2.2-custom (based on upstream 1.2.1); beta.
+- **Release described here:** diskOS and installer 1.3-custom (based on upstream 1.2.1); beta.
 - **Stock firmware supported:** V2.09, V2.28, V2.40, and V2.57.
 - **Hosts:** Linux x86-64 (Debian, Ubuntu, Arch, CachyOS, Fedora); macOS Apple Silicon release package. Intel Macs can build the native tools. Windows 10/11 x64 release ZIP.
 - **Flash time:** about 20 minutes, including the firmware check and verification.
 - **Going back:** restore the saved stock image, boot the stock UI once, or set stock as the default UI.
+
+## Custom Fork Enhancements (v1.3-custom vs. Upstream 1.2.1)
+
+This fork is rebased onto upstream **v1.2.1** and includes significant stability, power, audio, and performance enhancements:
+
+- **Hardware Sleep & Wake Stability**: Resolves the screen-off false wake loop and touch freeze on timed auto-sleep; synchronizes `mq_player` power state via Linux evdev (`KEY_POWER`) injection for reliable single-press physical power button wake; implements stock CST816T deep sleep sequencing (0mA) with optional "Touch to Wake" toggle under Settings > Display.
+- **Battery & Power Management**: Real-time battery ADC fuel gauge tracking (`voltage_now`); automated critical low-battery shutdown; interactive 24-hour circular usage dial (`SCR_USAGE`) in Apps; Quick Settings live clock and direct battery shortcut.
+- **External USB DAC Host Mode (Mode 4)**: USB Audio output to external USB DACs over USB-C OTG (V2.40/V2.57) with hotplug netlink uevent handling and disconnect queue-burn protection.
+- **Mode Lockdown Screens (`SCR_MODELOCK`)**: Full-screen dedicated status interfaces for USB DAC, Bluetooth Receiver (with AVRCP transport controls and synchronized volume), and USB Storage, with safe edge-swipe navigation.
+- **Audio & Bluetooth Refinements**: Hierarchical Bluetooth codec fallback (`LDAC` -> `AAC` -> `SBC`); live active codec badge on Song Info; BlueALSA subprocess hardening.
+- **UI Performance & Ergonomics**: 14-slot row virtualization in library lists eliminating scrolling stutter on large libraries; folder-scoped playback and shuffle; fast-scroll A-Z index popup; expanded Japanese Kanji/Kana CJK font support (3,724 glyphs).
+
+Read the **[v1.3-custom release notes](docs/RELEASE_NOTES_1.3_CUSTOM.md)** for detailed technical descriptions and diffs.
 
 ## See diskOS
 

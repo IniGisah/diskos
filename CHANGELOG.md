@@ -4,6 +4,40 @@ All notable changes to diskOS are documented here.
 
 Entries follow the Keep a Changelog format, with Added, Changed, and Fixed categories where applicable.
 
+## [1.3-custom] - 2026-10-15
+
+Integrated custom release rebased on upstream v1.2.1 (`4cd4a60`). Combines all upstream 1.2.1 enhancements (Ogg Opus decoding, Windows installation toolchain, setup checklists, halo theme enhancements) with hardware sleep stabilization, battery fuel gauge tracking, external USB DAC output, and UI performance optimizations.
+
+### Added
+
+- **Hardware Sleep & Wake Synchronization**:
+  - Linux evdev physical power key injection (`KEY_POWER` / code 265) synchronizing `mq_player`'s internal screen-on state with diskOS, ensuring single-press power button wake.
+  - Stock CST816T deep sleep sequencing (0mA current draw), 120ms ST77916 timing delay, and panel suspend/resume routines.
+  - Settings > Display > "Touch to Wake" toggle (`touch_wake`, default: Off).
+  - 200ms standby polling interval to reduce CPU load and battery consumption while asleep.
+- **Battery & Power Management**:
+  - Real-time battery ADC fuel gauge tracking (`voltage_now` and `capacity`).
+  - 24-hour circular Battery & Usage History dial (`SCR_USAGE`) accessible via Apps and Quick Settings.
+  - Automated safe shutdown on critical low battery.
+  - Instant clock population in Quick Settings drawer (eliminating `--:--` placeholder delay).
+- **External USB DAC Host Mode (Mode 4)**:
+  - Digital audio routing to external USB DACs via USB-C OTG (V2.40/V2.57).
+  - Netlink uevent hotplug tracking (`a60a` 0x0212/0x0213) and procfs monitoring.
+  - Transport guard blocking blind playback and preventing queue looping when unplugged.
+- **Mode Lockdown Screens (`SCR_MODELOCK`)**:
+  - Full-screen status views for USB DAC, Bluetooth Receiving (with AVRCP transport controls and volume sync), and USB Storage with safe edge-swipe navigation.
+- **UI Performance & Typography**:
+  - 14-slot row virtualization in library lists eliminating scrolling stutter on large music cards.
+  - Folder-scoped playback and shuffle play in Browse Files.
+  - Fast-scroll alphabetical jump popup.
+  - Supplementary Japanese Kanji and Kana CJK font tables (3,724 glyphs).
+
+### Fixed
+
+- Fixed screen-off false wake loop and touch freeze on timed auto-sleep.
+- Resolved float precision compiler warnings in albumwall and pruned unused header includes.
+- Hardened BlueALSA and bluetoothd subprocess management to eliminate IPC lockups.
+
 ## [1.2.1] - 2026-10-14
 
 Adds Ogg Opus support and Windows installation, updates the installer experience and
