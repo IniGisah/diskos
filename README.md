@@ -70,6 +70,15 @@ Read the **[v1.3-custom release notes](docs/RELEASE_NOTES_1.3_CUSTOM.md)** for d
 <td align="center"><img src="docs/tour/cover-flow.png" width="220" alt="Cover Flow"><br><sub>Album cover flow</sub></td>
 <td align="center"><img src="docs/tour/keyboard.png" width="220" alt="Search keyboard"><br><sub>Search and keyboard</sub></td>
 </tr>
+<tr>
+<td align="center"><img src="docs/tour/working-mode.png" width="220" alt="Working Mode"><br><sub>Working Mode</sub></td>
+<td align="center"><img src="docs/tour/screensaver.png" width="220" alt="Screensaver"><br><sub>Screensaver</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/tour/mode-lockdown-usbstorage.png" width="220" alt="Mode Lockdown USB Storage"><br><sub>Mode Lockdown USB Storage</sub></td>
+<td align="center"><img src="docs/tour/mode-lockdown-bt.png" width="220" alt="Mode Lockdown Bluetooth Receiver"><br><sub>Mode Lockdown Bluetooth Receiver</sub></td>
+<td align="center"><img src="docs/tour/mode-lockdown-usb.png" width="220" alt="Mode Lockdown USB DAC"><br><sub>Mode Lockdown USB DAC</sub></td>
+</tr>
 </table>
 
 **[See every screen in the diskOS tour](docs/TOUR.md).**
@@ -86,6 +95,7 @@ Read the **[v1.3-custom release notes](docs/RELEASE_NOTES_1.3_CUSTOM.md)** for d
 - [Lyrics and Song Info](docs/TOUR.md#song-info-and-lyrics) show words and available file details.
 - [Library and cover flow](docs/TOUR.md#library) offer several ways to browse indexed music.
 - [Playlists, favourites, and books](docs/TOUR.md#playlists) keep different listening collections close.
+- [Mode Lockdown](docs/TOUR.md#settings-audio-and-working-mode) provides dedicated full-screen status and transport hubs for Bluetooth Receiving (with phone AVRCP controls), USB DAC slave mode (with sample-rate badges), and USB Storage with safe edge-swipe navigation.
 - [Themes and display choices](docs/TOUR.md#eight-themes) change the look of the interface.
 
 ### For tinkering

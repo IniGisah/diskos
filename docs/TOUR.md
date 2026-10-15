@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-# A tour of diskOS 1.2.2
-=======
-# A tour of diskOS 1.2.1
->>>>>>> upstream/main
+# A tour of diskOS 1.3-custom
 
 diskOS is a touch interface for the FiiO Snowsky Disc's 360x360 screen. It uses the player supplied by the installed stock firmware. The available player controls differ on V2.09, V2.28, V2.40, and V2.57; unavailable firmware-specific controls say "Not on this firmware".
 
@@ -63,13 +59,9 @@ Press a volume key to change the level when that key action is set to Adjust Vol
 
 ### Screensaver and screen off
 
-<<<<<<< HEAD
 After the Screensaver delay, the screen dims to a clock view; a later Screen Off delay can turn the panel fully off. Choose Cover, Analog, Minimal, Digital, or Vinyl under Saver Style, and set either delay to Off if you do not want that stage. Touch wakes the dimmed saver, and when Touch to Wake is enabled in Display settings, tapping a dark screen wakes the device (a single press of the power button always wakes it). The saver shows the current song and optional weather where the selected style has room for them.
-=======
-After the Screensaver delay, the screen enters idle dimming; Cover and Vinyl savers open automatically only during playback. Vinyl with a cover keeps your chosen brightness. The Screen Off delay then turns the panel fully off unless set to Off. Choose Cover, Analog, Minimal, Digital, or Vinyl under Saver Style. Set Screensaver to Off to disable both automatic idle stages. Touch wakes diskOS idle dimming and Screen Off; use the power button if the stock player put the panel to sleep.
 
 Song text appears while playing and hides when paused; optional weather appears where the style has room. The smaller, raised Analog dial leaves room for song text. Vinyl hides song labels while showing a spinning cover, but keeps text when no cover is available. Titles and artists refresh between tracks from a CUE sheet or SACD ISO, even when their file path is shared.
->>>>>>> upstream/main
 
 <table>
 <tr>
@@ -275,6 +267,11 @@ Selecting **Bluetooth Receiving**, **USB DAC**, or **USB Storage** enters a dedi
 <tr>
 <td align="center" valign="top" width="33%"><img src="tour/settings-audio.png" width="220" alt="Audio settings"><br><sub>Output and DAC rows</sub></td>
 <td align="center" valign="top" width="33%"><img src="tour/working-mode.png" width="220" alt="Working Mode"><br><sub>Audio source choices</sub></td>
+</tr>
+<tr>
+<td align="center" valign="top" width="33%"><img src="tour/mode-lockdown-usbstorage.png" width="220" alt="Mode Lockdown USB Storage"><br><sub>USB Storage lockdown</sub></td>
+<td align="center" valign="top" width="33%"><img src="tour/mode-lockdown-bt.png" width="220" alt="Mode Lockdown Bluetooth Receiver"><br><sub>Bluetooth Receiver lockdown</sub></td>
+<td align="center" valign="top" width="33%"><img src="tour/mode-lockdown-usb.png" width="220" alt="Mode Lockdown USB DAC"><br><sub>USB DAC slave lockdown</sub></td>
 </tr>
 </table>
 

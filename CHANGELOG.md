@@ -25,7 +25,11 @@ Integrated custom release rebased on upstream v1.2.1 (`4cd4a60`). Combines all u
   - Netlink uevent hotplug tracking (`a60a` 0x0212/0x0213) and procfs monitoring.
   - Transport guard blocking blind playback and preventing queue looping when unplugged.
 - **Mode Lockdown Screens (`SCR_MODELOCK`)**:
-  - Full-screen status views for USB DAC, Bluetooth Receiving (with AVRCP transport controls and volume sync), and USB Storage with safe edge-swipe navigation.
+  - Full-screen interactive dashboards for secondary operating modes:
+    - **Bluetooth Receiving**: Displays connection status, active audio codec badge (`LDAC`, `AAC`, `SBC`), phone AVRCP transport controls (play/pause, track skip), and synchronized volume.
+    - **USB DAC**: Functions as an external USB DAC slave device for computers/phones with stream format badge (PCM/DSD, sample rate, bit depth).
+    - **USB Storage**: Manages SD card mass storage export with unmount safety guidance.
+  - Safe edge-swipe navigation: top-edge swipe opens Quick Settings; left-edge swipe opens an exit confirmation prompt returning to Local Playback.
 - **UI Performance & Typography**:
   - 14-slot row virtualization in library lists eliminating scrolling stutter on large music cards.
   - Folder-scoped playback and shuffle play in Browse Files.

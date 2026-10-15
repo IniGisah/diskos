@@ -52,14 +52,23 @@ diskOS **v1.3-custom** is an integrated release incorporating all upstream 1.2.1
 ---
 
 ### 4. Mode Lockdown Architecture (`SCR_MODELOCK`)
-* **Dedicated Mode Interfaces (`ui/modelock.c`):**
-  - Full-screen status views for non-local playback modes:
-    - **Bluetooth Receiving**: Displays connection status, active audio codec badge (`LDAC`, `AAC`, `SBC`), AVRCP transport controls (play/pause, skip), and synchronized volume.
-    - **USB DAC**: Functions as a slave USB DAC for computers/smartphones with format indicator (PCM, sample rate, bit depth).
-    - **USB Storage**: Manages SD card mass storage export to host PC with unmount safeguards.
-* **Safe Edge-Swipe Navigation:**
-  - Pull down from top edge opens Quick Settings.
-  - Swipe right from left edge triggers an exit confirmation dialog to safely return to Local Playback.
+When switching out of Local Playback into secondary modes (Bluetooth Receiving, USB DAC slave, or USB Storage), diskOS replaces stock firmware's static blank screens with interactive, full-screen **Mode Lockdown** dashboards (`ui/modelock.c`):
+
+* **Bluetooth Receiving Hub**:
+  - Turns the Snowsky Disc into a high-fidelity wireless receiver for smartphones, tablets, and computers.
+  - Features interactive **AVRCP media controls** (Play/Pause, Next Track, Previous Track) that send standard playback commands directly back to the connected phone or host.
+  - Displays a live **audio codec badge** (`LDAC`, `AAC`, `SBC`) confirming the active high-res stream quality.
+  - Synchronizes hardware volume bidirectionally with the host device.
+* **USB DAC Slave Hub**:
+  - Turns the Disc into an external asynchronous USB DAC / soundcard for PC, Mac, Linux, Android, or iOS.
+  - Displays a live connection badge and real-time audio format indicator showing stream type (PCM / DSD), sample rate (up to 384 kHz / DSD256), and bit depth.
+* **USB Storage Export Hub**:
+  - Safely manages microSD card mass-storage export over USB to a computer.
+  - Displays visual status warnings instructing users to safely unmount or eject the volume on their PC before disconnecting or exiting.
+* **Edge-Swipe Gestures & Navigation Guards**:
+  - Standard navigation is locked to prevent invalid music library actions while another device controls audio or storage.
+  - **Top Edge Swipe-Down**: Smoothly reveals the standard Quick Settings drawer, allowing users to adjust brightness, screen timeout, or check system metrics without interrupting the active audio stream or data transfer.
+  - **Left Edge Swipe-Right**: Prompts an explicit modal confirmation dialog (*"Exit to Local Playback?"*) with Confirm and Cancel buttons, guarding against accidental swipes tearing down an active USB DAC connection or corrupting in-flight SD card transfers.
 
 ---
 
