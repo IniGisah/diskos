@@ -1065,7 +1065,10 @@ void library_artist_mode_changed(void){
     if(g_view == VIEW_GROUP && g_drill_kind == 2){ g_view = VIEW_ARTISTS; g_drill_kind = 0; }
     if(g_list) library_reload();
 }
-lv_obj_t *library_scroller(void){ return g_list; }
+lv_obj_t *library_scroller(void){
+    if(g_grid && !lv_obj_has_flag(g_grid, LV_OBJ_FLAG_HIDDEN)) return NULL;
+    return g_list;
+}
 
 /* If the user is inside an album/artist/genre drill-in, report the player
  * list_type (3=album,2=artist,10=genre) + name so a song tap plays the exact

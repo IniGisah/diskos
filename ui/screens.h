@@ -497,7 +497,7 @@ void library_refresh(void);   /* rebuild the current Library view (after externa
 void library_enter(void);     /* retain catalog rows; refresh mutable DB views */
 void library_artist_mode_changed(void);   /* Settings changed the Artists grouping: leave an artist drill + rebuild */
 void library_ensure_capacity(void);  /* grow row buffers to fit the library (after a rescan adds tracks) */
-/* primary scrollable list per long-list screen (for rim-scroll); NULL if none */
+/* primary scrollable list per long-list screen (for rim-scroll and fast-scroll); NULL if none */
 lv_obj_t *library_scroller(void);
 void library_scroll_letter_tick(
     void); /* flash the current A-Z position while rim-scrolling */
@@ -505,6 +505,19 @@ lv_obj_t *playlistview_scroller(void);
 lv_obj_t *search_scroller(void);
 lv_obj_t *apps_scroller(void);
 lv_obj_t *folderbrowser_scroller(void);
+lv_obj_t *upnext_scroller(void);
+lv_obj_t *books_scroller(void);
+lv_obj_t *chapters_scroller(void);
+lv_obj_t *setlist_scroller(void);
+lv_obj_t *settings_scroller(void);
+lv_obj_t *setting_detail_scroller(void);
+lv_obj_t *plpick_scroller(void);
+lv_obj_t *nphub_scroller(void);
+lv_obj_t *wifi_scroller(void);
+lv_obj_t *bt_scroller(void);
+lv_obj_t *qsconfig_scroller(void);
+lv_obj_t *songinfo_scroller(void);
+lv_obj_t *lyrics_scroller(void);
 void folderbrowser_scroll_letter_tick(
     void); /* flash the current A-Z position while scrolling */
 int folderbrowser_back(void); /* ascend directory or close Jump to grid */

@@ -116,7 +116,7 @@ void apps_create(lv_obj_t *root){
     lv_obj_set_flex_flow(g_list, LV_FLEX_FLOW_ROW_WRAP);   /* 2-wide tile grid (128px tiles + 10 gap) */
     lv_obj_set_flex_align(g_list, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_scroll_dir(g_list, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(g_list, LV_SCROLLBAR_MODE_OFF);
+    ui_setup_scrollbar(g_list);
 
     apps_reload();
 }

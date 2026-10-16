@@ -31,6 +31,7 @@ static lv_obj_t *g_val[F_COUNT];
 static lv_obj_t *g_key[F_COUNT];
 static lv_obj_t *g_cell[F_COUNT];   /* whole rows, so a not-applicable one (e.g. Narrated by for music) can be hidden */
 static lv_obj_t *g_header;
+static lv_obj_t *g_info_list;
 
 /* ---- value formatting (pure; ASCII only) ---------------------------------------------------------------------- */
 typedef struct {
@@ -251,8 +252,9 @@ void songinfo_create(lv_obj_t *root)
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);   /* cells on the centre line */
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
+    ui_setup_scrollbar(list);
     lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    g_info_list = list;
 
     for(int i=0;i<F_COUNT;i++){
         lv_obj_t *cell = lv_obj_create(list);
@@ -387,3 +389,5 @@ void songinfo_set(const track_state_t *st)
         si_show(g_cell[F_NARRATOR], 0);
     }
 }
+
+lv_obj_t *songinfo_scroller(void){ return g_info_list; }

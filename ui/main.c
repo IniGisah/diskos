@@ -2449,14 +2449,32 @@ static float     rim_accum = 0;          /* fractional scroll carry, so slow dra
 static uint32_t  rim_last_ms = 0;
 static lv_obj_t *rim_scroller = NULL;
 static int       rim_cover = 0;          /* rim gesture is driving the cover flow (no list scroller) */
+static int       s_fast_scroll_active = 0;
+static int       s_fast_scroll_cand = 0;
+static lv_obj_t *s_fast_scroller = NULL;
+static int       s_aw_bar_drag = 0;
 
 static lv_obj_t *ui_active_scroller(void){
     switch(screen_current()){
-        case SCR_LIBRARY: return library_scroller();
-        case SCR_PLVIEW:  return playlistview_scroller();
-        case SCR_SEARCH:  return search_scroller();
-        case SCR_APPS:    return apps_scroller();
-        default:          return NULL;
+        case SCR_LIBRARY:        return library_scroller();
+        case SCR_FOLDER:         return folderbrowser_scroller();
+        case SCR_PLVIEW:         return playlistview_scroller();
+        case SCR_SEARCH:         return search_scroller();
+        case SCR_APPS:           return apps_scroller();
+        case SCR_UPNEXT:         return upnext_scroller();
+        case SCR_BOOKS:          return books_scroller();
+        case SCR_CHAPTERS:       return chapters_scroller();
+        case SCR_SETLIST:        return setlist_scroller();
+        case SCR_SETTINGS:       return settings_scroller();
+        case SCR_SETTING_DETAIL: return setting_detail_scroller();
+        case SCR_PLPICK:         return plpick_scroller();
+        case SCR_NPHUB:          return nphub_scroller();
+        case SCR_WIFI:           return wifi_scroller();
+        case SCR_BT:             return bt_scroller();
+        case SCR_QSCONFIG:       return qsconfig_scroller();
+        case SCR_SONGINFO:       return songinfo_scroller();
+        case SCR_LYRICS:         return lyrics_scroller();
+        default:                 return NULL;
     }
 }
 static float rim_ang(int x, int y){ return atan2f((float)(y-180), (float)(x-180)); }
@@ -2534,6 +2552,7 @@ static int rim_move(int x, int y){
         }
     }
     if(rim_scroller == library_scroller()) library_scroll_letter_tick();  /* show A-Z position */
+    else if(rim_scroller == folderbrowser_scroller()) folderbrowser_scroll_letter_tick();
     return 1;
 }
 /* Animate an overscrolled list back to its bound (the "bounce") - the rim path bypasses
@@ -3474,6 +3493,7 @@ int main(int argc, char **argv){
     track_state_t st; unsigned last=~0u;
     lv_indev_state_t prev_ts = LV_INDEV_STATE_RELEASED;
     int sx=0, sy=0, lastx=0, lasty=0; uint32_t sms=0; int s_press_scr=SCR_HOME;   /* swipe tracking + the screen the press began on */
+    int s_qs_pull_cand=0, s_qs_close_cand=0;   /* quick settings pull-down / close tracking */
     int cover_tap=0;   /* press landed on the NP cover -> LVGL's cover click opens full-screen art (not a seek) */
     int fsart_touch=0; /* press began while full-screen art was up -> LVGL's overlay click closes it; we only swallow */
     int sleep_touch=0; /* press began while the sleep popover was up -> swallow the whole gesture (no ring seek) */
@@ -3760,6 +3780,9 @@ int main(int argc, char **argv){
                     sx=p.x; sy=p.y; lastx=p.x; lasty=p.y; sms=lv_tick_get();
                     g_press_sx = g_press_lx = p.x; g_press_sy = g_press_ly = p.y;
                     s_press_scr=screen_current();   /* a gesture belongs to the screen it STARTED on */
+                    s_qs_pull_cand = (s_press_scr != SCR_QUICK && s_press_scr != SCR_SAVER &&
+                                     (sy <= 55 || (s_press_scr == SCR_MODELOCK && sy <= 100)));
+                    s_qs_close_cand = (s_press_scr == SCR_QUICK);
                     cover_tap = 0;
                     fsart_touch = ui_np_fsart_active();   /* latch: overlay owns this whole gesture */
                     sleep_touch = ui_np_overlay_active(); /* latch: the sleep popover owns this whole gesture */
@@ -3774,8 +3797,16 @@ int main(int argc, char **argv){
                         else ui_np_seek_press(sx, sy);
                     }
                     else {
+                        s_fast_scroll_active = 0;
+                        s_fast_scroll_cand = 0;
+                        s_fast_scroller = ui_active_scroller();
+                        if (s_fast_scroller && sx >= 280 && sy >= 60 && sy <= 320) {
+                            s_fast_scroll_cand = 1;
+                        }
+                        s_aw_bar_drag = 0;
                         rim_press(sx, sy);    /* arm rim-scroll candidate (long lists AND the cover flow) */
-                        if(rim_state==RIM_IDLE && screen_current()==SCR_ALBUMWALL && sx >= BACK_START_MAX_X)
+                        if(rim_state==RIM_IDLE && screen_current()==SCR_ALBUMWALL &&
+                           sx >= BACK_START_MAX_X && !albumwall_is_grid_open())
                             albumwall_drag_begin(sx);   /* CENTRE press -> linear drag. Rim-band press is rim-only, and */
                     }                                   /* the left edge is reserved for the back-swipe (not armed as a drag) */
                     fprintf(stderr,"TAP x=%d y=%d\n",sx,sy); fflush(stderr);
@@ -3787,9 +3818,86 @@ int main(int argc, char **argv){
             } else if(ts==LV_INDEV_STATE_PRESSED){
                 last_activity = lv_tick_get();
                 lastx=p.x; lasty=p.y; g_press_lx=p.x; g_press_ly=p.y;
-                if(screen_current()==SCR_NOWPLAYING && !ui_np_fsart_active() && !sleep_touch) ui_np_seek_move(p.x, p.y);
+                int cur_scr = screen_current();
+                int qs_drag = screenmgr_qs_is_dragging();
+                if(s_qs_pull_cand){
+                    int dy = p.y - sy, dx = p.x - sx;
+                    int adx = dx < 0 ? -dx : dx;
+                    if(dy >= 10 && dy > (adx * 4 / 3)){
+                        if(!qs_drag){
+                            if(cur_scr == SCR_NOWPLAYING) ui_np_seek_cancel();
+                            if(cur_scr == SCR_ALBUMWALL) albumwall_drag_cancel();
+                            rim_state = RIM_IDLE;
+                            screenmgr_qs_pull_begin(s_press_scr);
+                            qs_drag = 1;
+                        }
+                        screenmgr_qs_pull_move(dy);
+                    }
+                } else if(s_qs_close_cand){
+                    int dy = p.y - sy, dx = p.x - sx;
+                    int adx = dx < 0 ? -dx : dx;
+                    if(dy <= -10 && (-dy) > (adx * 4 / 3)){
+                        if(!qs_drag){
+                            screenmgr_qs_close_begin();
+                            qs_drag = 2;
+                        }
+                        screenmgr_qs_close_move(dy);
+                    }
+                }
+                if(s_fast_scroll_cand){
+                    int dy = p.y - sy, dx = p.x - sx;
+                    int ady = dy < 0 ? -dy : dy;
+                    int adx = dx < 0 ? -dx : dx;
+                    if(!s_fast_scroll_active && ady >= 8 && ady > adx){
+                        if(s_fast_scroller && lv_obj_is_valid(s_fast_scroller)){
+                            int top = lv_obj_get_scroll_top(s_fast_scroller);
+                            int bot = lv_obj_get_scroll_bottom(s_fast_scroller);
+                            if((top + bot) > 0){
+                                s_fast_scroll_active = 1;
+                                rim_state = RIM_IDLE;
+                                lv_indev_wait_release(g_touch);
+                            } else {
+                                s_fast_scroll_cand = 0;
+                            }
+                        } else {
+                            s_fast_scroll_cand = 0;
+                        }
+                    }
+                }
+                if(cur_scr == SCR_ALBUMWALL && !albumwall_is_grid_open() &&
+                   sx >= 90 && sx <= 270 && sy >= 295 && sy <= 345){
+                    int dx = p.x - sx, dy = p.y - sy;
+                    int adx = dx < 0 ? -dx : dx;
+                    int ady = dy < 0 ? -dy : dy;
+                    if(!s_aw_bar_drag && adx >= 6 && adx > ady){
+                        s_aw_bar_drag = 1;
+                        albumwall_drag_cancel();
+                        rim_state = RIM_IDLE;
+                        lv_indev_wait_release(g_touch);
+                    }
+                }
+                if(qs_drag){
+                    /* Quick Settings pull owns the touch */
+                } else if(s_fast_scroll_active && s_fast_scroller && lv_obj_is_valid(s_fast_scroller)){
+                    float t_top = 75.0f, t_bot = 285.0f;
+                    float norm = ((float)p.y - t_top) / (t_bot - t_top);
+                    if(norm < 0.0f) norm = 0.0f;
+                    if(norm > 1.0f) norm = 1.0f;
+                    int top = lv_obj_get_scroll_top(s_fast_scroller);
+                    int bot = lv_obj_get_scroll_bottom(s_fast_scroller);
+                    int total = top + bot;
+                    if(total > 0){
+                        int target_y = (int)(norm * (float)total);
+                        lv_obj_scroll_to_y(s_fast_scroller, target_y, LV_ANIM_OFF);
+                        if(cur_scr == SCR_FOLDER) folderbrowser_scroll_letter_tick();
+                        else if(cur_scr == SCR_LIBRARY) library_scroll_letter_tick();
+                    }
+                } else if(s_aw_bar_drag){
+                    float norm = ((float)p.x - 110.0f) / 140.0f;
+                    albumwall_scrub_to(norm);
+                } else if(cur_scr==SCR_NOWPLAYING && !ui_np_fsart_active() && !sleep_touch) ui_np_seek_move(p.x, p.y);
                 else if(rim_move(p.x, p.y)){ /* rim drag owns the gesture (list or cover flow) */ }
-                else if(screen_current()==SCR_ALBUMWALL && rim_state==RIM_IDLE) albumwall_drag(p.x);  /* linear drag only when no rim gesture is armed */
+                else if(cur_scr==SCR_ALBUMWALL && rim_state==RIM_IDLE) albumwall_drag(p.x);  /* linear drag only when no rim gesture is armed */
             } else if(ts==LV_INDEV_STATE_RELEASED && prev_ts==LV_INDEV_STATE_PRESSED){
                 /* The evdev driver can fuse the final movement into the release frame, so the last PRESSED
                  * sample (lastx/lasty) may lag the true lift point. Fold the release coordinates in (bounds-
@@ -3798,9 +3906,37 @@ int main(int argc, char **argv){
                 if(p.x >= 0 && p.x < 360 && p.y >= 0 && p.y < 360){ lastx = p.x; lasty = p.y; g_press_lx = p.x; g_press_ly = p.y; }
                 if(woke){
                     woke = 0;   /* swallow the release that woke the saver */
+                } else if(s_fast_scroll_active || s_aw_bar_drag){
+                    if(s_aw_bar_drag) albumwall_settle();
+                    s_fast_scroll_active = 0;
+                    s_fast_scroll_cand = 0;
+                    s_fast_scroller = NULL;
+                    s_aw_bar_drag = 0;
+                    s_qs_pull_cand = 0;
+                    s_qs_close_cand = 0;
+                } else if(screenmgr_qs_is_dragging()){
+                    int dy = lasty - sy;
+                    uint32_t dt = lv_tick_elaps(sms);
+                    if(screenmgr_qs_is_dragging() == 1)
+                        screenmgr_qs_pull_end(dy, dt);
+                    else
+                        screenmgr_qs_close_end(dy, dt);
+                    s_fast_scroll_cand = 0;
+                    s_fast_scroller = NULL;
+                    s_qs_pull_cand = 0;
+                    s_qs_close_cand = 0;
                 } else if(rim_release()){
+                    s_fast_scroll_cand = 0;
+                    s_fast_scroller = NULL;
+                    s_qs_pull_cand = 0;
+                    s_qs_close_cand = 0;
                     /* rim-scroll owned this gesture -> no nav/tap classification */
                 } else {
+                    s_fast_scroll_cand = 0;
+                    s_fast_scroller = NULL;
+                    s_qs_pull_cand = 0;
+                    s_qs_close_cand = 0;
+
                     /* release edge: classify the swipe */
                     int dx=lastx-sx, dy=lasty-sy;
                     int adx=dx<0?-dx:dx, ady=dy<0?-dy:dy;
@@ -3826,10 +3962,20 @@ int main(int argc, char **argv){
                     int vert = ady > adx*2, horiz = adx > ady*2;
                     if(lvgl_owned || ui_np_fsart_active()){
                         /* swallow - LVGL handled (or will handle) the open/close */
+                    } else if(cur == SCR_MODELOCK || s_press_scr == SCR_MODELOCK){
+                        /* On lockdown mode, allow top pull-down to open Quick Settings (status bar) */
+                        if((sy < 140 && dy > 20 && ady > (adx / 2)) || (sy < 80 && dy > 15)){
+                            screen_show(SCR_QUICK);
+                            quicksettings_refresh(playing);
+                        } else if(sx < 120 && dx > 25 && adx > ady){
+                            /* swipe back gesture prompts exit confirmation */
+                            modelock_prompt_exit();
+                        }
+                        /* swallow all other nav gestures in lockdown mode */
                     } else if(!seek_consumed){
                     if(cur==SCR_QUICK && vert && dy<0 && ady>=g_swipe_thresh && dt<700){
                         screen_back();                       /* swipe up closes quick settings */
-                    } else if(cur!=SCR_QUICK && cur!=SCR_SAVER && sy<40 &&
+                    } else if(cur!=SCR_QUICK && cur!=SCR_SAVER && sy<=55 &&
                               vert && dy>0 && dy>=g_swipe_thresh && dt<700){
                         screen_show(SCR_QUICK);              /* pull down from top edge */
                         quicksettings_refresh(playing);
@@ -3844,13 +3990,6 @@ int main(int argc, char **argv){
                     } else if(cur==SCR_HOME && horiz && dx<0 && adx>=g_swipe_thresh && dt<700){
                         apps_reload();
                         screen_show(SCR_APPS);    /* slide in the Apps panel */
-                    } else if(cur == SCR_MODELOCK){
-                        if((sx > 40 && sx < 320 && sy < 55 && dy > 15) || (sy < 80 && dy > 15)){
-                            screen_show(SCR_QUICK);
-                            quicksettings_refresh(playing);
-                        } else if(sx < 120 && dx > 25 && adx > ady){
-                            modelock_prompt_exit();
-                        }
                     } else if(cur==SCR_ALBUMWALL && s_press_scr==SCR_ALBUMWALL){
                         /* gated on s_press_scr so the very tap that OPENED the cover flow (a click on the
                          * Library "Albums" row) is never re-read here as a cover tap that plays. */

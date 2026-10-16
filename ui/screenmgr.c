@@ -301,16 +301,18 @@ void screen_show(int which)
              * If so, unwind the stack back to that screen instead of pushing a duplicate,
              * preventing navigation cycles (e.g. Now Playing -> Options -> Queue -> Now Playing). */
             int found = -1;
-            for (int i = 0; i < s_sp; i++) {
-                if (s_stack[i] == which) {
-                    found = i;
-                    break;
+            if (which != SCR_QUICK && which != SCR_SAVER) {
+                for (int i = 0; i < s_sp; i++) {
+                    if (s_stack[i] == which) {
+                        found = i;
+                        break;
+                    }
                 }
             }
             if (found >= 0) {
                 s_sp = found;
                 dir = -1;
-            } else if (s_current != SCR_MODELOCK || which == SCR_QUICK || which == SCR_SAVER) {
+            } else if (s_current != SCR_QUICK && (s_current != SCR_MODELOCK || which == SCR_QUICK || which == SCR_SAVER)) {
                 int cap = (int)(sizeof(s_stack)/sizeof(s_stack[0]));
                 if (s_sp >= cap) {            /* full: keep the root (s_stack[0]) so Back still
                                                * reaches Home; drop the 2nd-oldest instead */
@@ -332,6 +334,7 @@ void screen_back(void)
     while (s_sp > 0) {
         int prev = s_stack[--s_sp];
         if (prev == SCR_MODELOCK && !modelock_is_active()) continue;
+        if (prev == SCR_QUICK || prev == SCR_SAVER) continue;
         if (prev >= 0 && prev < SCR_COUNT && prev != s_current) {
             int from = s_current;
             s_current = prev;
@@ -366,7 +369,7 @@ static void qs_pull_commit_done(lv_anim_t *a)
 {
     (void)a;
     s_qs_dragging = 0;
-    if (s_qs_drag_from >= 0 && s_qs_drag_from < SCR_COUNT && s_qs_drag_from != SCR_QUICK) {
+    if (s_qs_drag_from >= 0 && s_qs_drag_from < SCR_COUNT && s_qs_drag_from != SCR_QUICK && s_qs_drag_from != SCR_SAVER) {
         int cap = (int)(sizeof(s_stack)/sizeof(s_stack[0]));
         if (s_sp >= cap) {
             for (int i = 2; i < cap; i++) s_stack[i-1] = s_stack[i];
@@ -483,7 +486,7 @@ static void qs_close_commit_done(lv_anim_t *a)
     while (s_sp > 0) {
         int prev = s_stack[--s_sp];
         if (prev == SCR_MODELOCK && !modelock_is_active()) continue;
-        if (prev >= 0 && prev < SCR_COUNT && prev != SCR_QUICK) {
+        if (prev >= 0 && prev < SCR_COUNT && prev != SCR_QUICK && prev != SCR_SAVER) {
             target = prev;
             break;
         }
@@ -499,6 +502,7 @@ static void qs_close_commit_done(lv_anim_t *a)
         lv_obj_clear_flag(s_roots[target], LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_roots[target]);
     }
+    ui_np_title_scroll(ui_screen_backlight_on());
 }
 
 static void qs_close_cancel_done(lv_anim_t *a)
@@ -516,7 +520,16 @@ void screenmgr_qs_close_begin(void)
 {
     if (!s_roots[SCR_QUICK]) return;
     s_qs_dragging = 2;
-    int under = (s_sp > 0) ? s_stack[s_sp - 1] : (modelock_is_active() ? SCR_MODELOCK : SCR_HOME);
+    int under = -1;
+    for (int i = s_sp - 1; i >= 0; i--) {
+        if (s_stack[i] >= 0 && s_stack[i] < SCR_COUNT && s_stack[i] != SCR_QUICK && s_stack[i] != SCR_SAVER) {
+            under = s_stack[i];
+            break;
+        }
+    }
+    if (under < 0) {
+        under = modelock_is_active() ? SCR_MODELOCK : SCR_HOME;
+    }
     s_qs_drag_from = under;
 
     lv_anim_delete(s_roots[SCR_QUICK], NULL);

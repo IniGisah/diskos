@@ -1259,7 +1259,7 @@ void bt_create(lv_obj_t *root){
     lv_obj_set_flex_flow(g_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(g_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scroll_dir(g_list, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(g_list, LV_SCROLLBAR_MODE_OFF);
+    ui_setup_scrollbar(g_list);
     lv_obj_add_flag(g_list, LV_OBJ_FLAG_SCROLL_MOMENTUM);
 }
 
@@ -1312,3 +1312,5 @@ void bt_open(void){
         list_msg("Bluetooth is off");
     }
 }
+
+lv_obj_t *bt_scroller(void){ return g_list; }

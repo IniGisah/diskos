@@ -83,7 +83,7 @@ static lv_obj_t *panel_list(lv_obj_t *root){
     lv_obj_set_style_pad_row(list, 10, 0);
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
+    ui_setup_scrollbar(list);
     return list;
 }
 
@@ -463,3 +463,6 @@ void tune_create(lv_obj_t *root){
     lv_obj_set_style_text_font(cl, TF(UI_16), 0);
     lv_obj_set_style_text_color(cl, TC(TEXT_PRIMARY), 0); lv_obj_center(cl);
 }
+
+lv_obj_t *plpick_scroller(void){ return g_pick_list; }
+lv_obj_t *nphub_scroller(void){ return g_hub_list; }

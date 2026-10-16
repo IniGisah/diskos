@@ -521,7 +521,7 @@ void lyrics_create(lv_obj_t *root)
     lv_obj_set_style_pad_bottom(g_scroll, 44, 0);   /* last lyric lines scroll clear of the round bezel */
     lv_obj_set_style_bg_opa(g_scroll, LV_OPA_TRANSP, 0);
     lv_obj_set_scroll_dir(g_scroll, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(g_scroll, LV_SCROLLBAR_MODE_OFF);
+    ui_setup_scrollbar(g_scroll);
 
     g_text = lv_label_create(g_scroll);
     lv_obj_set_width(g_text, 280);
@@ -545,3 +545,6 @@ void lyrics_create(lv_obj_t *root)
     lv_obj_add_event_cb(g_scroll, scroll_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(g_scroll, scroll_cb, LV_EVENT_SCROLL_BEGIN, NULL);
 }
+
+lv_obj_t *lyrics_scroller(void){ return g_scroll; }
+

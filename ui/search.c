@@ -215,11 +215,15 @@ void search_create(lv_obj_t *root){
     lv_obj_set_style_pad_row(g_results, 6, 0);
     lv_obj_set_style_pad_bottom(g_results, 44, 0);   /* last rows scroll clear of the round bottom bezel */
     lv_obj_set_scroll_dir(g_results, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(g_results, LV_SCROLLBAR_MODE_OFF);
+    ui_setup_scrollbar(g_results);
     lv_obj_add_flag(g_results, LV_OBJ_FLAG_SCROLL_MOMENTUM);
 
     search_layout(g_query[0] != 0);   /* centred empty state on first entry */
     rebuild(g_query);
 }
 
-lv_obj_t *search_scroller(void){ return g_results; }
+lv_obj_t *search_scroller(void){
+    if(!g_results || lv_obj_has_flag(g_results, LV_OBJ_FLAG_HIDDEN)) return NULL;
+    return g_results;
+}
+

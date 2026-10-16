@@ -608,6 +608,8 @@ static void qscfg_row(lv_obj_t *list, const char *label, int id, int on){
     ui_on(sw, qscfg_sw_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)id, "quicksettings.qscfg_sw.value", UI_CORE);
 }
 
+static lv_obj_t *g_qscfg_list = NULL;
+
 void qsconfig_create(lv_obj_t *root){ g_qscfg_root = root; }
 
 void qsconfig_refresh(void){
@@ -626,8 +628,9 @@ void qsconfig_refresh(void){
     lv_obj_set_style_pad_bottom(list, 44, 0);
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
+    ui_setup_scrollbar(list);
     lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    g_qscfg_list = list;
 
     qscfg_row(list, "Playback controls", -1, cfg_get_int("qs_transport", 0));
     for(int i=0;i<QT_COUNT;i++)
@@ -642,3 +645,6 @@ void qsconfig_refresh(void){
     lv_obj_set_style_pad_top(hint, 6, 0);
     lv_obj_set_style_pad_left(hint, 6, 0);
 }
+
+lv_obj_t *qsconfig_scroller(void){ return g_qscfg_list; }
+

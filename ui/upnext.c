@@ -240,3 +240,4 @@ void upnext_refresh(void){
 
 void upnext_open(void){ screen_show(SCR_UPNEXT); }
 
+lv_obj_t *upnext_scroller(void){ return g_un_list; }
