@@ -129,3 +129,8 @@ build/release/
 *.tmp
 .DS_Store
 .agents/
+.vscode/
+ui/lvgl/build/
+dist/
+web/server/diskos-webd
+web/server/diskos-webd.gz

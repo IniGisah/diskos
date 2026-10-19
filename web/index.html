@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0a0b0e">
+  <title>diskOS - Snowsky Disc</title>
+  <link rel="stylesheet" href="style.css?v=3">
+</head>
+<body>
+  <!-- PIN / Password Login Modal (Accessible & Screen-Reader Friendly) -->
+  <div id="auth-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
+    <div class="modal-card">
+      <div class="modal-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="36" height="36" fill="currentColor">
+          <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+        </svg>
+      </div>
+      <h2 id="auth-modal-title">diskOS Access</h2>
+      <p class="modal-sub">Enter the PIN or password configured on your Snowsky Disc.</p>
+      <form id="auth-form" class="auth-form">
+        <div class="input-wrap">
+          <input type="password" id="auth-input" placeholder="Enter PIN or Password" autocomplete="current-password" required aria-label="Device PIN or Password">
+        </div>
+        <button type="submit" id="auth-submit" class="btn-primary-block">Unlock Device</button>
+      </form>
+      <div id="auth-error" class="auth-error hidden" role="alert">Incorrect PIN or password. Please try again.</div>
+    </div>
+  </div>
+
+  <!-- General Confirmation Modal for Destructive Actions -->
+  <div id="confirm-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="modal-card">
+      <div class="modal-icon warning" id="confirm-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="36" height="36" fill="currentColor">
+          <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/>
+        </svg>
+      </div>
+      <h2 id="confirm-title">Confirm Action</h2>
+      <p id="confirm-desc" class="modal-sub">Are you sure you want to proceed?</p>
+      <div class="modal-actions">
+        <button id="confirm-cancel" class="btn-subtle" type="button">Cancel</button>
+        <button id="confirm-ok" class="btn-danger" type="button">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- New Folder Modal -->
+  <div id="new-folder-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="new-folder-title">
+    <div class="modal-card">
+      <div class="modal-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="36" height="36" fill="currentColor">
+          <path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-1 8h-3v3h-2v-3h-3v-2h3v-3h2v3h3v2z"/>
+        </svg>
+      </div>
+      <h2 id="new-folder-title">New Folder</h2>
+      <p class="modal-sub">Create folder in <span id="new-folder-dest" style="color:var(--text-primary); font-weight:600;">SD Card</span></p>
+      <form id="new-folder-form" class="auth-form">
+        <div class="input-wrap" id="new-folder-input-wrap">
+          <input type="text" id="new-folder-input" placeholder="Folder Name" required autocomplete="off" aria-label="Folder Name" maxlength="64">
+        </div>
+        <div class="modal-actions">
+          <button id="new-folder-cancel" class="btn-subtle" type="button">Cancel</button>
+          <button type="submit" id="new-folder-submit" class="btn-primary-sm">Create Folder</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+            <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>
+            <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/>
+            <circle cx="12" cy="12" r="1.5"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <span class="brand-disc">disk<span class="brand-os">OS</span></span>
+          <span class="device-tag">Snowsky Disc</span>
+        </div>
+      </div>
+      <div class="header-status">
+        <span id="conn-status" class="status-indicator online" title="Connection status" aria-label="Connected to device">
+          <span class="indicator-dot"></span>
+          <span class="indicator-text">Online</span>
+        </span>
+        <span id="header-battery" class="status-pill" title="Battery Level" aria-label="Battery Status">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+            <path d="M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4z"/>
+          </svg>
+          <span id="bat-text">--%</span>
+        </span>
+        <button id="btn-logout" class="icon-btn-subtle" title="Lock / Logout" aria-label="Lock / Logout">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+            <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs with Sliding Pill -->
+    <nav class="nav-tabs" role="tablist" aria-label="Main Navigation">
+      <div class="tabs-slider" id="tabs-slider" aria-hidden="true"></div>
+      <button class="nav-tab active" data-tab="tab-player" role="tab" aria-selected="true" id="tab-btn-player">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+        <span>Player</span>
+      </button>
+      <button class="nav-tab" data-tab="tab-queue" role="tab" aria-selected="false" id="tab-btn-queue">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/></svg>
+        <span>Queue</span>
+      </button>
+      <button class="nav-tab" data-tab="tab-files" role="tab" aria-selected="false" id="tab-btn-files">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+        <span>Files</span>
+      </button>
+      <button class="nav-tab" data-tab="tab-settings" role="tab" aria-selected="false" id="tab-btn-settings">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+        <span>Settings</span>
+      </button>
+      <button class="nav-tab" data-tab="tab-system" role="tab" aria-selected="false" id="tab-btn-system">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+        <span>System</span>
+      </button>
+    </nav>
+
+    <!-- ======================================================== -->
+    <!-- TAB 1: PLAYER                                            -->
+    <!-- ======================================================== -->
+    <main id="tab-player" class="tab-pane active" role="tabpanel" aria-labelledby="tab-btn-player">
+      <div class="player-container">
+        <!-- Vinyl Record / Art Disc with 3D Tilt Wrapper -->
+        <div class="disc-wrapper t-tilt" id="vinyl-tilt-wrapper">
+          <div class="vinyl-tilt-card">
+            <div id="art-disc" class="vinyl-disc">
+              <div class="vinyl-grooves" aria-hidden="true"></div>
+              <div class="vinyl-label">
+                <img id="track-art" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 24 24' fill='%23333'><circle cx='12' cy='12' r='10'/></svg>" alt="Current Track Album Art">
+              </div>
+              <div class="spindle-hole" aria-hidden="true"></div>
+            </div>
+            <div class="disc-glare" aria-hidden="true"></div>
+          </div>
+        </div>
+
+        <!-- Track Metadata -->
+        <div class="track-meta">
+          <h1 id="track-title" class="track-title">Ready for Playback</h1>
+          <div id="track-artist" class="track-artist">Select a track to start</div>
+          <div id="track-album" class="track-album">--</div>
+          <div class="format-chips">
+            <span id="badge-format" class="format-chip">PCM</span>
+            <span id="badge-rate" class="format-chip">-- kHz</span>
+            <span id="badge-bits" class="format-chip">-- bit</span>
+          </div>
+        </div>
+
+        <!-- Progress Timeline Scrubber -->
+        <div class="progress-bar-container">
+          <input type="range" id="seek-bar" min="0" max="1000" value="0" aria-label="Playback Position Scrubber">
+          <div class="time-row">
+            <span id="time-pos">0:00</span>
+            <span id="time-dur">0:00</span>
+          </div>
+        </div>
+
+        <!-- Playback Controls -->
+        <div class="controls-row">
+          <button id="btn-shuffle" class="control-btn-secondary" title="Shuffle Mode" aria-label="Shuffle Mode">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
+          </button>
+          <button id="btn-prev" class="control-btn" title="Previous Track" aria-label="Previous Track">
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+          </button>
+          <button id="btn-play" class="control-btn play-btn" title="Play or Pause" aria-label="Play or Pause">
+            <svg id="icon-play" viewBox="0 0 24 24" width="34" height="34" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+            <svg id="icon-pause" class="hidden" viewBox="0 0 24 24" width="34" height="34" fill="currentColor" aria-hidden="true"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+          </button>
+          <button id="btn-next" class="control-btn" title="Next Track" aria-label="Next Track">
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+          </button>
+          <button id="btn-repeat" class="control-btn-secondary" title="Loop Mode" aria-label="Change Loop Mode">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
+          </button>
+        </div>
+
+        <!-- Volume Controller -->
+        <div class="volume-container">
+          <button id="btn-mute" class="vol-btn" title="Toggle Mute" aria-label="Mute Volume">
+            <svg id="icon-vol" viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+            <svg id="icon-vol-mute" class="hidden" viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
+          </button>
+          <input type="range" id="vol-bar" min="0" max="120" value="40" aria-label="Master Volume">
+          <span id="vol-val" class="vol-label">40</span>
+        </div>
+      </div>
+    </main>
+
+    <!-- ======================================================== -->
+    <!-- TAB 2: QUEUE                                             -->
+    <!-- ======================================================== -->
+    <section id="tab-queue" class="tab-pane" role="tabpanel" aria-labelledby="tab-btn-queue">
+      <div class="section-header">
+        <div class="section-title-wrap">
+          <h2>Playback Queue</h2>
+          <span id="queue-count" class="badge">0 tracks</span>
+        </div>
+        <div class="section-actions">
+          <button id="btn-refresh-queue" class="btn-subtle" title="Refresh Queue" aria-label="Refresh Queue">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+          </button>
+          <button id="btn-clear-queue" class="btn-danger-outline" title="Clear Queue" aria-label="Clear Queue">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M16 9v10H8V9h8m-1.5-6h-5l-1 1H5v2h14V4h-3.5l-1-1zM18 7H6v12c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7z"/></svg>
+            Clear
+          </button>
+        </div>
+      </div>
+
+      <div class="search-bar-wrap">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" class="search-icon" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+        <input type="text" id="queue-search" class="search-input" placeholder="Search queued songs..." aria-label="Search queued songs">
+        <button id="queue-search-clear" class="btn-clear-search hidden" aria-label="Clear queue search">&times;</button>
+      </div>
+
+      <div id="queue-list" class="queue-list" role="list">
+        <div class="loading-spinner">Loading queue...</div>
+      </div>
+    </section>
+
+    <!-- ======================================================== -->
+    <!-- TAB 3: FILES                                             -->
+    <!-- ======================================================== -->
+    <section id="tab-files" class="tab-pane" role="tabpanel" aria-labelledby="tab-btn-files">
+      <div class="files-header">
+        <div class="breadcrumb" id="files-breadcrumb" aria-label="Folder Navigation">
+          <span class="crumb-root" data-path="">SD Card</span>
+        </div>
+        <div class="files-header-actions">
+          <button id="btn-new-folder" class="btn-subtle" title="Create New Folder" aria-label="Create New Folder">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-1 8h-3v3h-2v-3h-3v-2h3v-3h2v3h3v2z"/></svg>
+            <span>New Folder</span>
+          </button>
+          <button id="btn-refresh-files" class="btn-subtle" title="Refresh Directory" aria-label="Refresh Directory">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="search-bar-wrap">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" class="search-icon" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+        <input type="text" id="file-search" class="search-input" placeholder="Filter files in this folder..." aria-label="Filter files">
+        <button id="file-search-clear" class="btn-clear-search hidden" aria-label="Clear file filter">&times;</button>
+      </div>
+
+      <!-- Drag & Drop Upload Zone -->
+      <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="Upload Audio Files">
+        <input type="file" id="file-input" multiple class="hidden">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="currentColor" aria-hidden="true"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
+        <p>Drop audio files here or <span class="browse-link" id="browse-trigger">Browse Local</span></p>
+        <div class="sub-hint">Lossless: .flac, .wav, .dsf, .dff, .ape, .alac | Compressed: .mp3, .m4a, .opus, .ogg</div>
+      </div>
+
+      <!-- Upload Progress Indicator -->
+      <div id="upload-status" class="upload-status hidden" aria-live="polite">
+        <div class="upload-info">
+          <span id="upload-filename">Uploading...</span>
+          <span id="upload-pct">0%</span>
+        </div>
+        <div class="progress-track">
+          <div id="upload-fill" class="progress-fill" style="width: 0%;"></div>
+        </div>
+      </div>
+
+      <!-- Directory Contents List -->
+      <div id="file-list" class="file-list" role="list">
+        <div class="loading-spinner">Loading directory...</div>
+      </div>
+    </section>
+
+    <!-- ======================================================== -->
+    <!-- TAB 4: SETTINGS                                          -->
+    <!-- ======================================================== -->
+    <section id="tab-settings" class="tab-pane" role="tabpanel" aria-labelledby="tab-btn-settings">
+      <!-- Audio & Playback Settings -->
+      <div class="card">
+        <div class="card-header">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+          <h3>Audio & Playback</h3>
+        </div>
+        <div class="setting-item">
+          <div class="setting-meta">
+            <span class="setting-title">Playback Mode</span>
+            <span class="setting-desc">Sets default loop / shuffle behavior on device</span>
+          </div>
+          <div class="mode-pill-group" role="radiogroup" aria-label="Playback Mode">
+            <button class="mode-pill active" data-mode="0" title="Loop All Tracks" aria-label="Mode: Loop All">Loop All</button>
+            <button class="mode-pill" data-mode="1" title="Loop Single Track" aria-label="Mode: Loop Single">Repeat 1</button>
+            <button class="mode-pill" data-mode="2" title="Shuffle Playback" aria-label="Mode: Shuffle">Shuffle</button>
+            <button class="mode-pill" data-mode="3" title="Sequential Playback" aria-label="Mode: Sequential">Sequential</button>
+          </div>
+        </div>
+        <div class="setting-item">
+          <div class="setting-meta">
+            <label for="setting-sleep" class="setting-title">Sleep Timer</label>
+            <span class="setting-desc">Automatically pause playback after timeout</span>
+          </div>
+          <select id="setting-sleep" class="setting-select" aria-label="Sleep Timer Duration">
+            <option value="0">Off (Continuous)</option>
+            <option value="1">15 minutes</option>
+            <option value="2">30 minutes</option>
+            <option value="3">45 minutes</option>
+            <option value="4">60 minutes</option>
+            <option value="5">90 minutes</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Display & Visual Experience -->
+      <div class="card">
+        <div class="card-header">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1z"/></svg>
+          <h3>Display & Customization</h3>
+        </div>
+        <div class="setting-item">
+          <div class="setting-meta">
+            <label for="setting-brightness" class="setting-title">Screen Brightness</label>
+            <span class="setting-desc">Snowsky Disc hardware backlight level</span>
+          </div>
+          <div class="slider-row">
+            <input type="range" id="setting-brightness" min="1" max="40" value="15" aria-label="Screen Brightness">
+            <span id="brightness-val" class="slider-val">15</span>
+          </div>
+        </div>
+        <div class="setting-item">
+          <div class="setting-meta">
+            <span class="setting-title">Theme Accent</span>
+            <span class="setting-desc">Personalize accent highlights across the Web UI</span>
+          </div>
+          <div class="theme-color-group" role="radiogroup" aria-label="Accent Color Palette">
+            <button class="color-dot active" data-color="#ff5500" style="background:#ff5500" title="diskOS Orange" aria-label="Theme: diskOS Orange"></button>
+            <button class="color-dot" data-color="#00e5ff" style="background:#00e5ff" title="Cyber Cyan" aria-label="Theme: Cyber Cyan"></button>
+            <button class="color-dot" data-color="#a855f7" style="background:#a855f7" title="Vapor Purple" aria-label="Theme: Vapor Purple"></button>
+            <button class="color-dot" data-color="#10b981" style="background:#10b981" title="Terminal Green" aria-label="Theme: Terminal Green"></button>
+            <button class="color-dot" data-color="#f59e0b" style="background:#f59e0b" title="Hi-Fi Gold" aria-label="Theme: Hi-Fi Gold"></button>
+            <button class="color-dot" data-color="#e2e8f0" style="background:#e2e8f0" title="Monochrome" aria-label="Theme: Monochrome"></button>
+          </div>
+        </div>
+        <div class="setting-item">
+          <div class="setting-meta">
+            <label for="setting-vinyl-spin" class="setting-title">Vinyl Record Rotation</label>
+            <span class="setting-desc">Smooth turntable spin during playback</span>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="setting-vinyl-spin" checked aria-label="Toggle Vinyl Spin Animation">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Access & Security -->
+      <div class="card">
+        <div class="card-header">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+          <h3>Access & Security</h3>
+        </div>
+        <div class="setting-item">
+          <div class="setting-meta">
+            <span class="setting-title">Update PIN / Password</span>
+            <span class="setting-desc">Persisted in /usr/data/diskos.conf</span>
+          </div>
+          <form id="form-change-pin" class="pin-form">
+            <input type="password" id="setting-new-pin" placeholder="Enter New PIN" required aria-label="New PIN or Password">
+            <button type="submit" class="btn-primary-sm">Save PIN</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Maintenance & Power Actions -->
+      <div class="card">
+        <div class="card-header">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+          <h3>Device Maintenance</h3>
+        </div>
+        <div class="action-grid">
+          <button id="btn-restart-ui" class="btn-warning-outline" type="button" aria-label="Restart diskOS UI">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
+            Restart diskOS UI
+          </button>
+          <button id="btn-reboot-dev" class="btn-danger-outline" type="button" aria-label="Reboot Snowsky Disc">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42C17.99 7.86 19 9.81 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.58-5.42L6.17 5.17C4.23 6.82 3 9.26 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.74-1.23-5.18-3.17-6.83z"/></svg>
+            Reboot Device
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================================================== -->
+    <!-- TAB 5: SYSTEM                                            -->
+    <!-- ======================================================== -->
+    <section id="tab-system" class="tab-pane" role="tabpanel" aria-labelledby="tab-btn-system">
+      <div class="card">
+        <div class="card-header">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4z"/></svg>
+          <h3>Power & Battery</h3>
+        </div>
+        <div class="sys-row">
+          <span class="sys-label">Battery Level</span>
+          <span id="sys-bat-pct" class="sys-val">--%</span>
+        </div>
+        <div class="sys-row">
+          <span class="sys-label">Cell Voltage</span>
+          <span id="sys-bat-volt" class="sys-val">-- mV</span>
+        </div>
+        <div class="sys-row">
+          <span class="sys-label">Power State</span>
+          <span id="sys-charging" class="sys-val">--</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-5 3c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2zm4 8H5v-1c0-1.33 2.67-2 4-2 .41 0 .89.07 1.41.19.86-.71 1.95-1.19 3.17-1.19 1.12 0 2.14.41 2.95 1.05.95.14 1.47.66 1.47 1.95v1z"/></svg>
+          <h3>Storage (MicroSD)</h3>
+        </div>
+        <div class="sys-row">
+          <span class="sys-label">Mount Path</span>
+          <span class="sys-val">/tmp/sdcard</span>
+        </div>
+        <div class="sys-row">
+          <span class="sys-label">Free Storage</span>
+          <span id="sys-sd-free" class="sys-val">-- GB</span>
+        </div>
+        <div class="sys-row">
+          <span class="sys-label">Total Storage</span>
+          <span id="sys-sd-total" class="sys-val">-- GB</span>
+        </div>
+        <div class="progress-track" style="margin-top: 14px;">
+          <div id="sys-storage-fill" class="progress-fill" style="width: 0%;"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
+          <h3>Music Library</h3>
+        </div>
+        <p class="sys-desc">Rescan the MicroSD card to index newly uploaded songs into the device database.</p>
+        <button id="btn-rescan-lib" class="btn-primary" type="button">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
+          Trigger Library Rescan
+        </button>
+      </div>
+    </section>
+  </div>
+
+  <!-- Floating Toast Notifications (transitions-dev toast open/close) -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <script src="app.js?v=3"></script>
+</body>
+</html>
