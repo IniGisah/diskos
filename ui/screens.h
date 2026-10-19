@@ -42,8 +42,12 @@ enum {
   SCR_DATETIME,
   SCR_MODELOCK,
   SCR_USAGE,
+  SCR_WEBUI,
   SCR_COUNT
 };
+void webui_create(lv_obj_t *root);
+void webui_open(void);
+void webui_refresh(void);
 void usage_create(lv_obj_t *root);
 void usage_refresh(void);
 void usage_tick(int screen_on, int playing);

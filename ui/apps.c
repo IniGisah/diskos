@@ -4,6 +4,7 @@
 #include "theme.h"
 #include "theme_kit.h"
 #include "anim.h"
+#include "webui.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -57,6 +58,7 @@ static void app_row_cb(lv_event_t *e){
     if(i>=0 && i<g_napps) app_launch(g_apps[i].exec);
 }
 static void lastfm_row_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) lastfm_open(); }
+static void webui_row_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) webui_open(); }
 static void battery_row_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) screen_show(SCR_USAGE); }
 static void settings_row_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) screen_show(SCR_SETTINGS); }
 
@@ -91,6 +93,8 @@ void apps_reload(void){
     /* Weather is not a tile here anymore - it opens by tapping the home weather glance (glance->detail). */
     /* built-in: Last.fm scrobbling (the FA lastfm brand glyph) */
     make_tile(LFM_ICON, TF(ICON_28), "Last.fm", lastfm_row_cb, NULL);
+    /* built-in: Web UI Server */
+    make_tile(LV_SYMBOL_WIFI, TF(ICON_28), "Web Server", webui_row_cb, NULL);
     /* built-in: Battery usage history */
     make_tile(LV_SYMBOL_BATTERY_FULL, TF(UI_28), "Battery", battery_row_cb, NULL);
     /* homebrew apps from /usr/data/apps */

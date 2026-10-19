@@ -653,6 +653,7 @@ void screens_init(void)
     s_roots[SCR_DATETIME] = screen_make_root(parent);
     s_roots[SCR_MODELOCK] = screen_make_root(parent);
     s_roots[SCR_USAGE] = screen_make_root(parent);
+    s_roots[SCR_WEBUI] = screen_make_root(parent);
 
     /* depth scrim: a full-screen translucent-black overlay, created LAST so it sits above the
      * roots in sibling order; re-parented in z during a transition to dim the screen beneath the
@@ -704,6 +705,7 @@ void screens_init(void)
     lastfm_create(s_roots[SCR_LASTFM]);
     modelock_create(s_roots[SCR_MODELOCK]);
     usage_create(s_roots[SCR_USAGE]);
+    webui_create(s_roots[SCR_WEBUI]);
 
     screen_show(SCR_HOME);
 }
