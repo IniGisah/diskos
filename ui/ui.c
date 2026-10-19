@@ -500,6 +500,9 @@ int ui_transport_command(const char *cmd)
     if(!ui_local_playback_allowed()){
         ui_toast("Return to local playback first"); return -1;
     }
+    if(!ipc_player_ready()){
+        ui_toast("Player is starting up - try again"); return -1;
+    }
     if(ui_get_source_mode() == 4 && !ui_usb_dac_connected()){
         ui_toast("USB DAC not connected"); return -1;
     }

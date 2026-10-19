@@ -23,6 +23,8 @@
 #include <dirent.h>      /* mkdir() for the SD mount point */
 #include <linux/input.h>   /* EVIOCGKEY / KEY_MAX for the boot-time Vol-Up override */
 #include <net/if.h>
+#include <sys/prctl.h>
+#include "sqlite3.h"
 #include "lvgl/lvgl.h"
 #include "lvgl/src/core/lv_refr_private.h"
 #include "theme.h"
@@ -984,6 +986,8 @@ int ui_play_mode_now(void){
     return -1;
 }
 void ui_reapply_audio(void){
+    /* Silent reapply: background reconnect sync must never raise user-facing "Player didn't respond" toasts */
+    ipc_set_quiet(1);
     /* NOTE: the v2.40 local-init (0666 route + 0657 LOCALPLAYER work-mode, which fixes the "g_fiio_local
      * is null" / NO_WORK_MODE start_local failure) is DELIBERATELY NOT sent here. This runs at boot-ready
      * and on reconnect, when a freshly-booted player is still idle-fresh - sending 0666 then either wedges
@@ -1015,6 +1019,7 @@ void ui_reapply_audio(void){
         int mv = cfg_get_int("max_vol", -1);     if(mv >= 10)            ui_set_maxvol(mv);    /* <10 or unset = skip */
         int bl = cfg_get_int("balance", -100);   if(bl >= -10 && bl<=10) ui_set_balance(bl);   /* -1 is a VALID balance */
     }
+    ipc_set_quiet(0);
 }
 /* When a play triggers a full list rebuild (seconds), we show "Starting..." and
  * confirm via the next a2 track update (the verified oracle); g_play_pending holds
@@ -1438,8 +1443,11 @@ static void localplayer_workmode_cb(lv_timer_t *t){
      * auto-bound from a persisted WORK_MODE=4 (recovers hand-deploys + belt-and-suspenders for
      * the flashed boot gate). Sent past the settle window so the async mode-control thread can't
      * clobber it. If the send fails, DON'T mark this generation done - retry next tick rather than
-     * leave the card exported. */
-    if(modes_local_init(1) < 0) return;   /* 0642 gadget (0 = none, 5 = USB host), 0666 local route (6 internal, 4 SPDIF, 3 USB audio: (re)inits the local device, creates g_fiio_local), 0657 8 LOCALPLAYER work-mode (fixes NO_WORK_MODE) */
+     * leave the card exported. Silent send: background boot initialization must not toast. */
+    ipc_set_quiet(1);
+    int rc = modes_local_init(1);   /* 0642 gadget (0 = none, 5 = USB host), 0666 local route (6 internal, 4 SPDIF, 3 USB audio: (re)inits the local device, creates g_fiio_local), 0657 8 LOCALPLAYER work-mode (fixes NO_WORK_MODE) */
+    ipc_set_quiet(0);
+    if(rc < 0) return;
     done_gen = gen;   /* only mark this generation initialised once ALL three commands were actually sent */
     fprintf(stderr,"v2.40 workmode: local-init sent once (gen %u)\n", gen); fflush(stderr);
 }
@@ -1570,6 +1578,7 @@ static uint32_t g_book_noadopt_until = 0;  /* after an explicit play, don't let 
 static int ui_play_list_ex(int list_type, const char *name, int pos1, int build_idx){
     if(modes_output_busy()){ ui_toast("Switching output - try again"); return 0; }   /* an output switch (0666 re-init) is in flight or recovering */
     if(!ui_local_playback_allowed()){ ui_toast("Return to local playback first"); return 0; }
+    if(!ipc_player_ready()){ ui_toast("Player is starting up - try again"); return 0; }
     if(ui_get_source_mode() == 4 && !ui_usb_dac_connected()){ ui_toast("USB DAC not connected"); return 0; }
     /* A music list play (not a custom playlist, type 5) makes the stock player build its queue from the
      * UNFILTERED SONG table. If a .m4b hasn't migrated out yet, it would leak into that queue - so ensure
@@ -1660,6 +1669,7 @@ int ui_play_playlist(long pid, int pos){
 int ui_queue_jump(int ord1){
     if(modes_output_busy()){ ui_toast("Switching output - try again"); return -1; }
     if(!ui_local_playback_allowed()){ ui_toast("Return to local playback first"); return -1; }
+    if(!ipc_player_ready()){ ui_toast("Player is starting up - try again"); return -1; }
     if(g_play_pending){ ui_toast("Queue is updating - try again"); return -1; }
     if(ord1 < 1 || ord1 > 0xFFFF) return -1;
     ui_cancel_book_resume();
@@ -3228,6 +3238,30 @@ int ui_theme_reload(const char *screen){
     ui_toast("Couldn't apply the theme now - it applies next start");
     return -1;
 }
+/* In-process sysconfig WORK_MODE reset and read-back for boot optimization.
+ * Replaces forked sh/sqlite3 CLI subprocesses (run_bounded) with direct in-process SQLite queries.
+ * Returns 1 if WORK_MODE is confirmed 0 (Local), 0 otherwise. */
+static int sysconfig_work_mode_reset(void){
+    if(access("/usr/data/fiio/db/sysconfig.db", F_OK) != 0) return 0;
+    sqlite3 *db = NULL;
+    if(sqlite3_open_v2("/usr/data/fiio/db/sysconfig.db", &db, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK){
+        if(db) sqlite3_close(db);
+        return 0;
+    }
+    sqlite3_busy_timeout(db, 2000);
+    sqlite3_exec(db, "UPDATE SYSCONFIG SET WORK_MODE=0 WHERE ID=1 AND WORK_MODE IS NOT 0;", NULL, NULL, NULL);
+    sqlite3_stmt *st = NULL;
+    int ok = 0;
+    if(sqlite3_prepare_v2(db, "SELECT WORK_MODE FROM SYSCONFIG WHERE ID=1;", -1, &st, NULL) == SQLITE_OK){
+        if(sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 0){
+            ok = 1;
+        }
+        sqlite3_finalize(st);
+    }
+    sqlite3_close(db);
+    return ok;
+}
+
 int main(int argc, char **argv){
     /* Arm the boot watchdog BEFORE anything else - in particular before the argv dispatch and the
      * stock-UI selection below. Those read /usr/data and /dev/mem, so they can block; until now they
@@ -3258,6 +3292,7 @@ int main(int argc, char **argv){
         const char *slash = strrchr(a0,'/');
         const char *base = slash ? slash+1 : a0;
         if(strcmp(base,"mq_player")==0){
+            prctl(PR_SET_NAME, "mq_player");
             if(strcmp(a0,"mq_player") != 0){
                 /* argv strings are writable. Normalize before any safe hold,
                  * without re-opening a NAND pathname that could disappear. */
@@ -3329,16 +3364,13 @@ int main(int argc, char **argv){
      * "LOCALPLAYER", which silently exported the card whenever a cable was attached at boot.
      * Runtime local AUDIO is asserted separately via 0666+0657 (localplayer_workmode_cb), so 0 here does
      * not affect playback. The player launcher independently resets this before stock exec; this
-     * is the belt-and-suspenders for hand-deploys. USB-DAC/Storage stay opt-in per session. */
-    { char *a[] = { "sh", "-c",
-                    "[ -f /usr/data/fiio/db/sysconfig.db ] && sqlite3 -cmd '.timeout 3000' /usr/data/fiio/db/sysconfig.db 'UPDATE SYSCONFIG SET WORK_MODE=0 WHERE ID=1 AND WORK_MODE IS NOT 0'", NULL };
-      run_bounded(a, 8000);   /* bounded: a locked/corrupt sysconfig.db can't wedge boot */ }
-    /* Confirm the row rather than trusting an UPDATE that may have matched no row.
-     * Unconfirmed -> hold this UI's SD activity for the boot. The player launcher
-     * performs its own fresh reset/read-back instead of trusting a shared marker. */
-    { char *v[] = { "sh", "-c",
-                    "[ -f /usr/data/fiio/db/sysconfig.db ] && [ \"$(sqlite3 -cmd '.timeout 3000' /usr/data/fiio/db/sysconfig.db 'SELECT WORK_MODE FROM SYSCONFIG WHERE ID=1')\" = \"0\" ]", NULL };
-      if(run_bounded(v, 5000) != 0){ g_sd_hold = 1; fprintf(stderr,"WORK_MODE reset UNCONFIRMED -> diskOS SD activity held this boot\n"); fflush(stderr); } }
+     * is the belt-and-suspenders for hand-deploys. USB-DAC/Storage stay opt-in per session.
+     * Fast in-process SQLite reset and verification replaces slow forked sh/sqlite3 subprocesses. */
+    if(!sysconfig_work_mode_reset()){
+        g_sd_hold = 1;
+        fprintf(stderr, "WORK_MODE reset UNCONFIRMED -> diskOS SD activity held this boot\n");
+        fflush(stderr);
+    }
     /* SD guard: establish it NOW (before the player is launched 2s after us) so the launcher finds it. If no
      * guard can exist on this system, hold our SD activity: nothing of ours may keep the card busy. */
     if(!rmguard_ensure()){ g_sd_hold = 1; fprintf(stderr,"SD guard could NOT be established -> diskOS SD activity held this boot\n"); fflush(stderr); }
@@ -3548,6 +3580,7 @@ int main(int argc, char **argv){
       alarm(0);
       signal(SIGALRM, SIG_IGN);
       sigprocmask(SIG_UNBLOCK, &as, NULL); }
+    static int g_reapply_pending = 0;
     for(;;){
         if(ipc_take_reconnected()){       /* player restarted + /ui reattached: resync UI-owned state */
             /* Arm the post-restart settle window so BT routing (and the v2.40 local-init) wait out the
@@ -3573,6 +3606,10 @@ int main(int argc, char **argv){
             g_route_mac[0] = 0;
             route_state_remove();
             bt_notify_player_restart();
+            g_reapply_pending = 1;        /* defer until /player is open and ready */
+        }
+        if(g_reapply_pending && ipc_player_ready()){
+            g_reapply_pending = 0;
             ui_reapply_audio();           /* re-send managed audio config (DRE/filter/etc.); the v2.40 local-init
                                            * is NOT here - it's sent from the play path when the player is ready. */
         }
@@ -3768,6 +3805,8 @@ int main(int argc, char **argv){
             lv_point_t p; lv_indev_get_point(g_touch, &p);
             if(kbinput_active()){
                 /* the modal keyboard owns all touch - don't run nav gestures */
+            } else if(splash_active()){
+                /* boot animation is playing on top layer: swallow gestures until player is ready */
             } else if(ts==LV_INDEV_STATE_PRESSED && prev_ts==LV_INDEV_STATE_RELEASED){
                 /* press edge: start of a potential swipe */
                 last_activity = lv_tick_get();
@@ -3904,7 +3943,9 @@ int main(int argc, char **argv){
                  * guarded against a garbage frame) BEFORE classifying, so a fast flick can't read as a small
                  * tap and open/play an album (cover flow) or misfire a seek/swipe. */
                 if(p.x >= 0 && p.x < 360 && p.y >= 0 && p.y < 360){ lastx = p.x; lasty = p.y; g_press_lx = p.x; g_press_ly = p.y; }
-                if(woke){
+                if(splash_active()){
+                    /* swallow release while boot animation is active */
+                } else if(woke){
                     woke = 0;   /* swallow the release that woke the saver */
                 } else if(s_fast_scroll_active || s_aw_bar_drag){
                     if(s_aw_bar_drag) albumwall_settle();

@@ -66,6 +66,7 @@ void screen_set_anim(int on);
 int screen_current(void);
 void ui_toast(const char *msg);
 void splash_start(void);
+int  splash_active(void);
 /* the "something" block-matrix clock (home.c): handle 0 = Home, 1 = screensaver
  */
 int mclock_new(int h, lv_obj_t *parent, int y);

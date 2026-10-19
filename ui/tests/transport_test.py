@@ -38,6 +38,8 @@ static void bt_rx_next(void){}
 static void bt_rx_prev(void){}
 static void ui_toast(const char *s){snprintf(toast,sizeof toast,"%s",s);}
 static void ui_defer_sleep(void){}
+static int player_ready = 1;
+static int ipc_player_ready(void){ return player_ready; }
 static void ipc_get_state(track_state_t *s){*s=state;}
 static int mdb_is_book_path(const char *s){(void)s;return book;}
 static int ipc_send_cmd(const char *s){(void)s;commands++;return send_fail?-1:0;}
@@ -83,6 +85,12 @@ int main(void){
     assert(ui_transport_command("0201000C0000")==0 && commands==sent+1);
     source_mode=0; sent=commands;
     puts("PASS commands blocked when USB DAC unplugged in DAC output mode");
+
+    player_ready = 0; toast[0] = 0; sent = commands;
+    assert(ui_transport_command("0201000C0000") < 0);
+    assert(!strcmp(toast, "Player is starting up - try again") && commands == sent);
+    player_ready = 1;
+    puts("PASS commands blocked when player is starting up");
 
     local=1; send_fail=0; book=1; state.position_ms=10000;state.duration_ms=20000;
     assert(ui_transport_command("0201000C0002")==0 && requested_seek==0);

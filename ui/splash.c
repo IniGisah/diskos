@@ -17,6 +17,7 @@
 #include "screens.h"
 #include "theme.h"
 #include "theme_kit.h"
+#include "ipc.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -40,8 +41,11 @@ LV_FONT_DECLARE(diskos_brand_os_32)
 static struct {
     lv_obj_t *root, *face, *rim, *rim_hl, *lobe[2], *slice[2][SP_SLICE], *streak, *shade[2], *gap[2][(SP_GAPS + 1) / 2],
              *glow[SP_GLOW], *hub, *hub_edge, *word;
-    int th, warm, opened, frames;
-    uint32_t t0;
+    int th, warm, opened, frames, rim_closed;
+    uint32_t t0, t_outro;
+    int state;
+    int exit_th;
+    lv_timer_t *timer;
 } g_sp;
 
 /* 0..1024 fixed point */
@@ -132,20 +136,18 @@ static void inv_sector(int r0, int r1, int a0, int a1){
     lv_obj_invalidate_area(g_sp.root, &box);
 }
 
-/* one frame of the timeline, t in ms */
-static void splash_frame(int t){
-    /* the hub opens 1800..2350: the disc is pushed outwards until the hub's edge passes the screen's edge */
-    int ok = ease_io(win_k(t, 1800, 2350));
+/* Render one visual state of the splash:
+ * th: angle in degrees
+ * sp: spectrum spread 0..1024
+ * warm: hub warmth 0..1024
+ * wm: wordmark opacity 0..1024
+ * ok: hub opening progress 0..1024 */
+static void splash_draw(int th, int sp, int warm, int wm, int ok){
     int S = 1024 + scl((SP_CX + 10) * 1024 / (SP_R * K_HUB / 1000) - 1024, ok);   /* scale, 1024 = 1 */
     int R = scl(SP_R, S);
 #define RK(k) (R * (k) / 1000)
 
-    /* the light: it comes on 150..650 as a white line that splits into two spectra, sweeps 110 deg of the clock
-     * (from the sides, as the website opens, to the top), and leaves 1500..1800 the way it came. Everything it does
-     * is a change of arc angles, so only the sector it moves through is repainted. */
-    int th = 175 + scl(110, ease_io(win_k(t, 150, 1650)));
-    int sp = scl(ease_out(win_k(t, 150, 650)), 1024 - ease_io(win_k(t, 1500, 1800)));   /* the spread, 0..1024 */
-    if(t >= 1800 && !g_sp.opened){
+    if(ok > 0 && !g_sp.opened){
         /* the light has gone: its objects leave the draw list, and from here the hub must be a hole onto Home: the
          * root stops painting black and the disc face (the same black) is drawn as a ring instead. Nothing on
          * screen changes in this frame. */
@@ -160,16 +162,29 @@ static void splash_frame(int t){
 
     /* the rim: drawn out from the light's first touch until it closes, then it stays */
     place_band(g_sp.rim, RK(K_DATA) + 1, R, 1);
-    int rim_half = scl(180, ease_out(win_k(t, 150, 1000)));
-    if(rim_half >= 180) lv_arc_set_bg_angles(g_sp.rim, 0, 360);
-    else span(g_sp.rim, 175, rim_half);
+    if(g_sp.rim_closed || sp >= 1024){
+        g_sp.rim_closed = 1;
+        lv_arc_set_bg_angles(g_sp.rim, 0, 360);
+    } else {
+        int rim_half = scl(180, sp);
+        if(rim_half >= 180){ g_sp.rim_closed = 1; lv_arc_set_bg_angles(g_sp.rim, 0, 360); }
+        else span(g_sp.rim, 175, rim_half);
+    }
 
     if(!g_sp.opened){
-        int lo = LV_MIN(th, g_sp.th) - 24, hi = LV_MAX(th, g_sp.th) + 24;
-        if(g_sp.th < 0) lo = th - 24, hi = th + 24;
         int r0 = RK(K_LIT0) - 8;
-        inv_sector(r0, R, lo, hi);                       /* where the light was and is, both sides */
-        inv_sector(r0, R, lo + 180, hi + 180);
+        if(g_sp.th < 0 || abs(th - g_sp.th) > 60){
+            inv_sector(r0, R, th - 24, th + 24);
+            inv_sector(r0, R, th + 180 - 24, th + 180 + 24);
+            if(g_sp.th >= 0){
+                inv_sector(r0, R, g_sp.th - 24, g_sp.th + 24);
+                inv_sector(r0, R, g_sp.th + 180 - 24, g_sp.th + 180 + 24);
+            }
+        } else {
+            int lo = LV_MIN(th, g_sp.th) - 24, hi = LV_MAX(th, g_sp.th) + 24;
+            inv_sector(r0, R, lo, hi);
+            inv_sector(r0, R, lo + 180, hi + 180);
+        }
         g_sp.th = th;
         place_band(g_sp.rim_hl, RK(K_DATA) + 1, R, 1);
         span(g_sp.rim_hl, th, scl(22, sp));                  /* inside the spectrum's box */
@@ -204,8 +219,7 @@ static void splash_frame(int t){
         }
     }
 
-    /* the hub warms in the accent 650..1300; as it opens its glow rides the hub's edge outwards and lets go */
-    int warm = scl(ease_out(win_k(t, 650, 1300)), 1024 - win_k(t, 1850, 2150));
+    /* the hub warms in the accent */
     int hr = RK(K_HUB);
     static const int GW[SP_GLOW] = { 4, 10, 18, 28 };  /* outer radius of each glow step past the hub's edge */
     static const int GO[SP_GLOW] = { 54, 30, 15, 6 };
@@ -220,26 +234,83 @@ static void splash_frame(int t){
         sty(g_sp.glow[i], LV_STYLE_BORDER_OPA, opa_k(GO[i], warm), 0);
     }
     place_disc(g_sp.hub, hr);
-    sty(g_sp.hub, LV_STYLE_BG_OPA, 255 - scl(255, ease_io(win_k(t, 1850, 2300))), 0);
+    sty(g_sp.hub, LV_STYLE_BG_OPA, 255 - scl(255, ok), 0);
     place_band(g_sp.hub_edge, hr - 1, hr, 0);
-    sty(g_sp.hub_edge, LV_STYLE_BORDER_OPA, opa_k(36, scl(warm, 1024 - win_k(t, 1850, 2100))), 0);
+    sty(g_sp.hub_edge, LV_STYLE_BORDER_OPA, opa_k(36, scl(warm, 1024 - ok)), 0);
 
-    /* the name, in the hub, once: it rises a little as it arrives and dissolves as the hub starts to open */
-    int wm = scl(ease_out(win_k(t, 950, 1400)), 1024 - win_k(t, 1740, 1900));
+    /* the name, in the hub: rises into place, then dissolves on outro */
     sty(g_sp.word, LV_STYLE_OPA, opa_k(255, wm), 0);
-    lv_obj_set_y(g_sp.word, SP_CX - lv_obj_get_height(g_sp.word) / 2 + 2 + scl(6, 1024 - ease_out(win_k(t, 950, 1400))));
+    lv_obj_set_y(g_sp.word, SP_CX - lv_obj_get_height(g_sp.word) / 2 + 2);
 #undef RK
 }
 
-static void splash_anim_cb(void *var, int32_t v){ (void)var; if(g_sp.root){ splash_frame((int)v); } }
 static void splash_drawn_cb(lv_event_t *e){ (void)e; g_sp.frames++; }   /* a frame actually drawn to the screen */
-static void splash_done(lv_anim_t *a){
-    (void)a;
-    /* one line in the boot log: how smoothly this Disc drew it */
+
+static void splash_done(void){
+    if(g_sp.timer){
+        lv_timer_delete(g_sp.timer);
+        g_sp.timer = NULL;
+    }
     lv_display_remove_event_cb_with_user_data(lv_display_get_default(), splash_drawn_cb, NULL);
     fprintf(stderr, "splash: %d frames drawn in %u ms\n", g_sp.frames, (unsigned)lv_tick_elaps(g_sp.t0));
     if(g_sp.root) lv_obj_delete(g_sp.root);
     memset(&g_sp, 0, sizeof g_sp);
+}
+
+int splash_active(void){
+    return g_sp.root != NULL;
+}
+
+static void splash_timer_cb(lv_timer_t *t){
+    (void)t;
+    if(!g_sp.root) return;
+    uint32_t now = lv_tick_get();
+    uint32_t elapsed = lv_tick_elaps(g_sp.t0);
+
+    /* Phase 0: Intro (0..1500 ms) - sweep light in, warm hub, fade in wordmark */
+    if(g_sp.state == 0){
+        if(elapsed < 1500){
+            int cur_t = (int)elapsed;
+            int th = 175 + scl(110, ease_io(win_k(cur_t, 150, 1500)));
+            int sp = ease_out(win_k(cur_t, 150, 650));
+            int warm = ease_out(win_k(cur_t, 650, 1300));
+            int wm = ease_out(win_k(cur_t, 950, 1400));
+            splash_draw(th, sp, warm, wm, 0);
+            return;
+        }
+        g_sp.state = 1;
+    }
+
+    /* Phase 1: Wait / Loop - loop light orbit until player is ready (with 12s backstop) */
+    if(g_sp.state == 1){
+        int ready = (ipc_player_ready() && ipc_rx_frames() > 0) || elapsed >= 12000;
+        if(!ready){
+            int loop_ms = (int)(elapsed - 1500);
+            int th = 285 + (loop_ms * 360 / 2400);
+            splash_draw(th, 1024, 1024, 1024, 0);
+            return;
+        }
+        g_sp.state = 2;
+        g_sp.t_outro = now;
+        int loop_ms = (int)(elapsed - 1500);
+        g_sp.exit_th = 285 + (loop_ms * 360 / 2400);
+    }
+
+    /* Phase 2: Outro (0..600 ms) - light dissolves, wordmark fades, hub expands to reveal Home */
+    if(g_sp.state == 2){
+        uint32_t dt = lv_tick_elaps(g_sp.t_outro);
+        if(dt < 600){
+            int light_leave = ease_io(win_k((int)dt, 0, 250));
+            int sp = scl(1024, 1024 - light_leave);
+            int th = g_sp.exit_th + (int)(dt * 360 / 2400);
+            int wm = scl(1024, 1024 - ease_out(win_k((int)dt, 0, 200)));
+            int warm = scl(1024, 1024 - win_k((int)dt, 100, 400));
+            int ok = ease_io(win_k((int)dt, 150, 550));
+            splash_draw(th, sp, warm, wm, ok);
+            return;
+        }
+        splash_done();
+    }
 }
 
 void splash_start(void){
@@ -310,14 +381,9 @@ void splash_start(void){
 
     g_sp.th = -1;
     g_sp.t0 = lv_tick_get();
+    g_sp.state = 0;
+    g_sp.rim_closed = 0;
     lv_display_add_event_cb(lv_display_get_default(), splash_drawn_cb, LV_EVENT_RENDER_READY, NULL);
-    splash_frame(0);
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, g_sp.root);
-    lv_anim_set_values(&a, 0, SP_MS);
-    lv_anim_set_duration(&a, SP_MS);
-    lv_anim_set_exec_cb(&a, splash_anim_cb);
-    lv_anim_set_completed_cb(&a, splash_done);
-    lv_anim_start(&a);
+    splash_draw(175, 0, 0, 0, 0);
+    g_sp.timer = lv_timer_create(splash_timer_cb, 16, NULL);
 }
