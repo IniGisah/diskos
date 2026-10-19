@@ -1274,6 +1274,15 @@ def edit_image(fs, ui_binary, variant, ota_cfg, rep=None):
         # debug access from the UI without needing the dev build.
         for name in ("dropbearmulti", "diskos-debug.sh"):
             _edit_install(fs, bundle.data(name), b"usr/project/" + name.encode("ascii"), 0o755)
+        # Web Server tooling (daemon, script, and web assets)
+        for name, dest, mode in (
+            ("diskos-webd", b"opt/diskos/bin/diskos-webd", 0o755),
+            ("diskos-web.sh", b"opt/diskos/bin/diskos-web.sh", 0o755),
+            ("diskos-web-assets.tar.gz", b"opt/diskos/web.tar.gz", 0o644),
+        ):
+            p = bundle.data(name, required=False)
+            if p:
+                _edit_install(fs, p, dest, mode)
         if variant == "dev":
             # Dev only: an ALWAYS-ON USB serial recovery shell (builds the gadget + attaches the one
             # diskos-debug shell at boot), so a dev build is reachable over USB even before the UI runs.

@@ -499,6 +499,21 @@ if [ "$copied" = 1 ]; then
        && publish_symlink \
        && verify_ui /usr/data/mq_ui; then
         installed=1; log "installed verified mq_ui from ${src:-?} (size $MSIZE, build $BUILD)"
+        # Install embedded diskOS Web Server if present in rootfs and missing from /usr/data
+        if [ -f /opt/diskos/bin/diskos-webd ] && [ ! -f /usr/data/bin/diskos-webd ]; then
+            mkdir -p /usr/data/bin 2>/dev/null
+            cp -f /opt/diskos/bin/diskos-webd /usr/data/bin/diskos-webd 2>/dev/null
+            chmod 755 /usr/data/bin/diskos-webd 2>/dev/null
+        fi
+        if [ -f /opt/diskos/bin/diskos-web.sh ] && [ ! -f /usr/data/bin/diskos-web.sh ]; then
+            mkdir -p /usr/data/bin 2>/dev/null
+            cp -f /opt/diskos/bin/diskos-web.sh /usr/data/bin/diskos-web.sh 2>/dev/null
+            chmod 755 /usr/data/bin/diskos-web.sh 2>/dev/null
+        fi
+        if [ -f /opt/diskos/web.tar.gz ] && [ ! -f /usr/data/web/index.html ]; then
+            mkdir -p /usr/data/web 2>/dev/null
+            gunzip -c /opt/diskos/web.tar.gz | tar -x -C /usr/data/web/ 2>/dev/null
+        fi
         rm -f /usr/data/mq_ui.rejected 2>/dev/null   # the quarantine copy: the live binary is verified, space is tight
         TO sync 2>/dev/null || log "post-install sync slow/timed-out (ubifs is sync-mounted; already durable)"
     else
