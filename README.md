@@ -54,6 +54,7 @@ This fork is rebased onto upstream **v1.2.1** and includes significant stability
 - **Mode Lockdown Screens (`SCR_MODELOCK`)**: Full-screen dedicated status interfaces for USB DAC, Bluetooth Receiver (with AVRCP transport controls and synchronized volume), and USB Storage, with safe edge-swipe navigation.
 - **Audio & Bluetooth Refinements**: Hierarchical Bluetooth codec fallback (`LDAC` -> `AAC` -> `SBC`); live active codec badge on Song Info; BlueALSA subprocess hardening.
 - **UI Performance & Ergonomics**: 14-slot row virtualization in library lists eliminating scrolling stutter on large libraries; folder-scoped playback and shuffle; fast-scroll A-Z index popup; expanded Japanese Kanji/Kana CJK font support (3,724 glyphs).
+- **Web UI & Remote Control**: Embedded HTTP/WebSocket server (`diskos-webd`) on port 8080 providing browser-based remote playback control, real-time volume/seek, queue jump, MicroSD file browsing, track selection, folder creation, and direct music uploads over Wi-Fi, with seamless on-device management under Apps > Web Server and zero-reflash MicroSD installation. See **[Web UI documentation](docs/WEBUI.md)**.
 
 Read the **[v1.3-custom release notes](docs/RELEASE_NOTES_1.3_CUSTOM.md)** for detailed technical descriptions and diffs.
 
@@ -97,6 +98,7 @@ Read the **[v1.3-custom release notes](docs/RELEASE_NOTES_1.3_CUSTOM.md)** for d
 - [Playlists, favourites, and books](docs/TOUR.md#playlists) keep different listening collections close.
 - [Mode Lockdown](docs/TOUR.md#settings-audio-and-working-mode) provides dedicated full-screen status and transport hubs for Bluetooth Receiving (with phone AVRCP controls), USB DAC slave mode (with sample-rate badges), and USB Storage with safe edge-swipe navigation.
 - [Themes and display choices](docs/TOUR.md#eight-themes) change the look of the interface.
+- [Apps and Web Server](docs/TOUR.md#apps-lastfm-and-weather) include Web Server for browser remote control and Wi-Fi file uploads, 24-hour battery tracking, and Last.fm scrobbling.
 
 ### For tinkering
 

@@ -13,6 +13,7 @@
 ## Explore
 
 - [A tour of diskOS](TOUR.md) - screens, controls, settings, and limitations.
+- [Web UI & Remote Control](WEBUI.md) - browser control server, REST/WebSocket APIs, and MicroSD card deployment.
 - [Design system](DESIGN_SYSTEM.md) - round-screen layout and visual choices.
 
 ## Develop
