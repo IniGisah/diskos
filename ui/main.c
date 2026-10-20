@@ -309,6 +309,45 @@ static int dim_level(void){
     return dim;
 }
 
+static int g_pwr_evdev_fd = -1;
+static uint32_t g_pwr_press_t0 = 0;
+
+static int pwrkey_get_fd(void){
+    if(g_pwr_evdev_fd >= 0) return g_pwr_evdev_fd;
+    char path[64], name[32];
+    for(int i = 0; i < 8; i++){
+        snprintf(path, sizeof path, "/sys/class/input/event%d/device/name", i);
+        FILE *f = fopen(path, "r"); if(!f) continue;
+        int got = fgets(name, sizeof name, f) != NULL; fclose(f);
+        if(!got || strncmp(name, "x2000_key", 9) || (name[9] && name[9] != '\n')) continue;
+        snprintf(path, sizeof path, "/dev/input/event%d", i);
+        g_pwr_evdev_fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        return g_pwr_evdev_fd;
+    }
+    return -1;
+}
+
+static void pwrkey_poll(void){
+    int fd = pwrkey_get_fd();
+    if(fd >= 0){
+        struct input_event ev;
+        while(read(fd, &ev, sizeof ev) == (ssize_t)sizeof ev){
+            if(ev.type == EV_KEY && (ev.code == 259 || ev.code == 265 || ev.code == 116)){
+                power_note_input();
+                if(ev.value == 1){
+                    g_pwr_press_t0 = lv_tick_get();
+                } else if(ev.value == 0){
+                    g_pwr_press_t0 = 0;
+                }
+            }
+        }
+    }
+    if(g_pwr_press_t0 > 0 && lv_tick_elaps(g_pwr_press_t0) >= 3000){
+        g_pwr_press_t0 = 0;
+        power_shutdown_request();
+    }
+}
+
 static void clock_tick(lv_timer_t *t){
     (void)t;
     time_t now = time(NULL);
@@ -4110,7 +4149,11 @@ int main(int argc, char **argv){
                 screen_gen_seen = gen; scr_seq_seen = aa03_seq_seen = 0;
                 poweroff_inhibit = inject_pending = 0; pk.player_off = 0;
             }
-            if(pq != aa03_seq_seen){ aa03_seq_seen = pq; poweroff_inhibit = 1; }
+            if(pq != aa03_seq_seen){
+                aa03_seq_seen = pq;
+                poweroff_inhibit = 1;
+                power_shutdown_request_from_player();
+            }
             if(on >= 0 && sq != scr_seq_seen){
                 scr_seq_seen = sq;
                 inject_pending = 0;                       /* a newer frame cancels a press not yet sent */
@@ -4222,6 +4265,7 @@ int main(int argc, char **argv){
             }
         }
         if(kbinput_active()) last_activity = lv_tick_get();
+        pwrkey_poll();
         power_tick(last_activity, playing);
         usage_tick(bl_state != 2, playing);   /* AFTER all input is consumed (a pending touch must win the race): SD-safe shutdown, diskOS idle power-off, temperature notice */
         int in_saver = (screen_current()==SCR_SAVER);

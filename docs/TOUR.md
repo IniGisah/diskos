@@ -1,4 +1,4 @@
-# A tour of diskOS 1.3-custom
+# A tour of diskOS 1.4-custom
 
 diskOS is a touch interface for the FiiO Snowsky Disc's 360x360 screen. It uses the player supplied by the installed stock firmware. The available player controls differ on V2.09, V2.28, V2.40, and V2.57; unavailable firmware-specific controls say "Not on this firmware".
 
@@ -389,6 +389,7 @@ System covers language, power, library maintenance, time, updates, recovery, and
 | Automatic Time | On by default; network time takes effect after the next restart and Wi-Fi connection. |
 | Set Date & Time; Time Zone | Set the clock by hand or choose a zone; the zone defaults to Automatic. |
 | Restart | Confirm a restart; a busy card or failed flush can leave the device running with an error. |
+| Shut down | Confirm a safe power-off; drains SD writers, flushes filesystem buffers, displays the shutdown animation, and powers off the device. |
 | Device Info | Show model, firmware, diskOS build, addresses, storage, and battery details. |
 | Update from SD Card | Find a stock-style update filename and explain the stock route; diskOS does not run it. |
 | Allow diskOS Updates | On by default when the installed image includes an update key; Off blocks download and staging, but a release check remains possible. |
@@ -423,9 +424,16 @@ Discard or Cancel. An install without a key reports that updates are unsupported
 At startup, a light splits into two spectra across the disc, the diskOS wordmark appears
 in the hub, and the hub opens to reveal the interface. The animation lasts about 2.4 seconds
 and its glow follows the current theme's accent. The wordmark uses Archivo, matching the
-website and installer.
+website and installer. On power-off (triggered from Settings > System > Shut down, sleep timer shutdown,
+low battery, or a physical power button long-press), a reverse shutdown animation gracefully contracts
+the vinyl disc over the screen, illuminates the hub and orbiting spectra during the storage flush,
+and dissolves to black before cutting the display power rail.
 
-The stock player handles the physical power button: one press blanks the display and another restores it. Touch wakes diskOS idle dimming or Screen Off, but a panel put to sleep by the stock player needs the power button. On V2.57, one power-button press also wakes diskOS Screen Off. Button wake restores your diskOS brightness.
+The stock player handles the physical power button: one press blanks the display and another restores it.
+Touch wakes diskOS idle dimming or Screen Off, but a panel put to sleep by the stock player needs the power button.
+On V2.57, one power-button press also wakes diskOS Screen Off. Button wake restores your diskOS brightness.
+Holding the physical power button for 3 to 5 seconds triggers the safe shutdown listener: diskOS quiesces active
+storage writers, flushes filesystem caches, runs the shutdown animation, and safely powers down the player.
 
 The physical play/pause button controls playback through the stock player. The Volume Up and Volume Down keys adjust volume by default, or switch tracks according to the V2.57 Vol Keys settings. The separate Screensaver, Screen Off, Sleep Timer, and Idle Power-off choices control later idle behavior. For USB Storage, eject the card safely on the computer before changing modes; diskOS can refuse the switch when card ownership is uncertain.
 

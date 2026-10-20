@@ -177,12 +177,18 @@ static struct {
   pw_phase_t phase;
   uint32_t t0;
   int cancel_sent;
+  int synced;
 } g_pw;
+static int g_pw_from_player;
 
 static uint32_t pw_elapsed(void) {
   return g_pw.ops.now_ms(g_pw.ops.ctx) - g_pw.t0;
 }
 static void pw_fail(const char *msg) {
+#ifndef POWER_CORE_ONLY
+  g_pw_from_player = 0;
+  splash_shutdown_cancel();
+#endif
   if (g_pw.phase == PW_HANDOFF) {
     /* Take the player's timer back. 0806 does not persist and has no read-back,
      * and a queued frame proves nothing, so the cancel can never be confirmed:
@@ -212,13 +218,25 @@ int power_shutdown_begin(const power_ops_t *o) {
   g_pw.ops.quiesce_begin(g_pw.ops.ctx);
   g_pw.phase = PW_DRAIN;
   g_pw.t0 = g_pw.ops.now_ms(g_pw.ops.ctx);
+  g_pw.synced = 0;
+#ifndef POWER_CORE_ONLY
+  splash_shutdown_start();
+  if (!g_pw_from_player) {
+    g_pw.ops.toast(g_pw.ops.ctx, "Shutting down...");
+  }
+#else
   g_pw.ops.toast(g_pw.ops.ctx, "Shutting down...");
+#endif
   return 0;
 }
 pw_phase_t power_shutdown_phase(void) { return g_pw.phase; }
 void power_shutdown_new_generation(void) {
   if (g_pw.phase != PW_PROTECTED)
     return;
+#ifndef POWER_CORE_ONLY
+  g_pw_from_player = 0;
+  splash_shutdown_cancel();
+#endif
   g_pw.ops.quiesce_end(g_pw.ops.ctx);
   g_pw.phase = PW_OFF;
 }
@@ -238,26 +256,40 @@ pw_phase_t power_shutdown_tick(void) {
       pw_fail("Couldn't shut down - card busy, it reopens when free");
     break;
   case PW_SYNC: {
-    int r = g_pw.ops.sync_poll(g_pw.ops.ctx);
-    if (r < 0) {
-      pw_fail("Couldn't shut down - card flush failed");
-      break;
-    }
-    if (r == 1) {
-      /* 0806 is the stock sleep timer: 1 s should make the player run its own
-       * power-off routine within about 2 s. UNVERIFIED: the player resets that
-       * counter every second while a separate state word equals 1
-       * (mq_player_257.dis 0x4f4558-0x4f4560, 0x4f46a4); its meaning is not
-       * identified. The hand-off timeout below covers it. */
-      if (g_pw.ops.send(g_pw.ops.ctx, "0806000C0001") != 0) {
-        pw_fail("Couldn't shut down - try again");
+    if (!g_pw.synced) {
+      int r = g_pw.ops.sync_poll(g_pw.ops.ctx);
+      if (r < 0) {
+        pw_fail("Couldn't shut down - card flush failed");
         break;
+      }
+      if (r == 1) {
+        g_pw.synced = 1;
+#ifndef POWER_CORE_ONLY
+        splash_shutdown_sync_done();
+#endif
+      } else if (pw_elapsed() >= POWER_SYNC_MS) {
+        g_pw.ops.sync_kill(g_pw.ops.ctx);
+        pw_fail("Couldn't shut down - card busy, try again");
+        break;
+      }
+    }
+    if (g_pw.synced) {
+#ifndef POWER_CORE_ONLY
+      if (!splash_shutdown_finished()) {
+        break;
+      }
+#endif
+      /* 0806 is the stock sleep timer: 1 s should make the player run its own
+       * power-off routine within about 2 s. If the player itself requested shutdown
+       * (hardware button long-press), it is already running its power-off routine. */
+      if (!g_pw_from_player) {
+        if (g_pw.ops.send(g_pw.ops.ctx, "0806000C0001") != 0) {
+          pw_fail("Couldn't shut down - try again");
+          break;
+        }
       }
       g_pw.phase = PW_HANDOFF;
       g_pw.t0 = g_pw.ops.now_ms(g_pw.ops.ctx);
-    } else if (pw_elapsed() >= POWER_SYNC_MS) {
-      g_pw.ops.sync_kill(g_pw.ops.ctx);
-      pw_fail("Couldn't shut down - card busy, try again");
     }
     break;
   }
@@ -372,6 +404,9 @@ static int real_sync_start(void *c) {
     return -1;
   if (p == 0) {
     setsid();
+    for (int fd = 3; fd < 64; fd++) close(fd);
+    execl("/bin/sync", "sync", (char *)NULL);
+    execl("/bin/sh", "sh", "-c", "sync", (char *)NULL);
     execlp("sync", "sync", (char *)NULL);
     _exit(127);
   }
@@ -407,6 +442,11 @@ static uint32_t real_now(void *c) {
 static void real_toast(void *c, const char *m) {
   (void)c;
   ui_toast(m);
+}
+
+int power_shutdown_request_from_player(void) {
+  g_pw_from_player = 1;
+  return power_shutdown_request();
 }
 
 int power_shutdown_request(void) {

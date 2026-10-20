@@ -167,6 +167,13 @@ so an fb0 capture does not include other planes composited at scanout.
 **Power button & player synchronization:**
 `mq_player` reads key 259 from `/dev/input/event0` and tracks its internal `screen_on` toggle state (`1` = awake, `0` = asleep). When the physical power button is pressed, if `screen_on == 0`, `mq_player` executes the hardware wake sequence; if `1`, it executes sleep. To keep `mq_player`'s internal toggle in sync with diskOS auto-sleep and touch-wake without touching process memory, diskOS injects a synthetic KEY_POWER press (code 259) to `/dev/input/event0` via Linux evdev. This dispatches directly to `mq_player`'s input loop, ensuring single-press wake across all firmware versions. During screen-off standby (`bl_state == 2`), diskOS relaxes its main loop sleep and sysfs backlight polling to 200ms (5 wakeups/sec) to minimize CPU wakeups while keeping physical power button wake latency under 0.2s.
 
+**Hardware Power Button Long-Press Shutdown:**
+When the physical power button is held down for 3 to 5 seconds:
+1. `mq_player` detects the long-press threshold on key 259 and reports command `aa03` (`POWER_KEY_EVENT_REPORT`) to diskOS via IPC before scheduling its low-level poweroff sequence.
+2. diskOS simultaneously monitors `/dev/input/event0` (`x2000_key`) for key codes 259/265/116 holding $\ge 3000\text{ ms}$, as well as incoming `aa03` IPC frames.
+3. Upon detection, diskOS initiates safe shutdown (`power_shutdown_request_from_player`), quiescing active storage leases, draining pending SD card writes, flushing filesystem buffers with `/bin/sync`, and displaying the reverse-splash shutdown animation on `lv_layer_top()`.
+4. Once the sync finishes and the animation dissolves into solid black, diskOS cuts backlight power (`bl_power=4`), handing off to hardware power-off.
+
 We can synthesize input by writing the 32-bit-ABI `input_event` (16-byte) MT-B sequence to
 `/dev/input/event1`. The injector source is `tools/tinj.c`. diskOS can also read
 the hardware keys via event0.

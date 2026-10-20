@@ -4,6 +4,36 @@ All notable changes to diskOS are documented here.
 
 Entries follow the Keep a Changelog format, with Added, Changed, and Fixed categories where applicable.
 
+## [1.4-custom] - 2026-10-20
+
+Major feature release adding graceful shutdown animation, physical button long-press shutdown listener, embedded Wi-Fi Web UI remote control server with single-page browser app, navigation & fast-scroll touch ergonomics, and startup splash enhancements.
+
+### Added
+
+- **Graceful Shutdown Animation & Safe Power-Off**:
+  - Reverse boot splash animation on `lv_layer_top` (`ui/splash.c`): contracts the vinyl disc inward from the screen edge over Home (`ok`: 1024 -> 0), warms the hub in the active theme accent, illuminates the Archivo `diskOS` wordmark, sweeps rainbow spectra along the 8 vinyl tracks while flash storage writes drain and synchronize, and dissolves to solid black with display backlight rail cut (`bl_power=4`, `brightness=0`).
+  - Hardware power button long-press listener (~3-5 seconds) handling both `/dev/input/event0` (`x2000_key` codes 259/265/116) and stock `aa03` (`POWER_KEY_EVENT_REPORT`) IPC frames with SD-safe quiesce.
+  - On-device "Shut down" action under Settings > System > Updates & Maintenance with confirmation modal.
+- **Embedded Web UI Server & Remote Control SPA**:
+  - Embedded POSIX HTTP/WebSocket daemon (`diskos-webd`) running on port 8080 with token authentication, path jailing (`/tmp/sdcard`), and `/player` IPC communication.
+  - Responsive single-page web app (`web/`) with spinning vinyl art, queue management, volume slider, timeline scrubber, MicroSD file explorer, folder creation, and drag-and-drop audio uploads.
+  - On-device Web Server management screen (`SCR_WEBUI`) under Apps with live server state indicators (RUNNING, STOPPED, SD READY, NOT INSTALLED), Wi-Fi URL display, and on-device PIN setup.
+  - Periodic 500ms atomic background sync of authoritative player state and metadata to `/tmp/diskos_player.json`.
+  - Squashfs deployment into `/opt/diskos/` with first-boot extraction hook in `S97diskos_install`.
+- **Startup Splash & Player Readiness Enhancements**:
+  - Enhanced boot splash light orbit with looping wait phase until `mq_player` is ready (with 12s backstop).
+  - Enforced `ipc_player_ready()` checks before transport commands and queue jumps.
+  - In-process SQLite `WORK_MODE` reset replacing forked subprocesses.
+- **Navigation & Drawer Ergonomics**:
+  - Quick Settings drawer back-stack isolation returning cleanly to the caller screen instead of Home.
+  - Restored interactive vertical drag gesture for Quick Settings.
+  - Scroller getters and auto-scrollbars for all scrollable screens, with touch-theft guards for non-overflowing lists and Library A-Z grid.
+
+### Fixed
+
+- Fixed elapsed time calculation in power shutdown state machine preventing premature "Couldn't shut down - card busy" false alerts during flash sync.
+- Closed inherited file descriptors in sync child to prevent hanging on device locks.
+
 ## [1.3-custom] - 2026-10-15
 
 Integrated custom release rebased on upstream v1.2.1 (`4cd4a60`). Combines all upstream 1.2.1 enhancements (Ogg Opus decoding, Windows installation toolchain, setup checklists, halo theme enhancements) with hardware sleep stabilization, battery fuel gauge tracking, external USB DAC output, and UI performance optimizations.

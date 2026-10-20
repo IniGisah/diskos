@@ -541,6 +541,45 @@ static void apply_restart(int v){ (void)v;
     boot_modal_pill(card, -58, "Cancel",  THEME_CLR_TEXT_SECONDARY, boot_cancel_cb);
     boot_modal_pill(card,  58, "Restart", THEME_CLR_ACCENT_EMPHASIS, boot_confirm_cb);
 }
+static void shutdown_confirm_cb(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED){
+        boot_modal_close();
+        power_shutdown_request();
+    }
+}
+static void apply_shutdown(int v){ (void)v;
+    boot_modal_close();
+    g_boot_modal = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(g_boot_modal);
+    lv_obj_set_size(g_boot_modal, 360, 360); lv_obj_center(g_boot_modal);
+    lv_obj_set_style_bg_color(g_boot_modal, TC(SCRIM), 0);
+    lv_obj_set_style_bg_opa(g_boot_modal, LV_OPA_70, 0);
+    lv_obj_clear_flag(g_boot_modal, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_boot_modal, LV_OBJ_FLAG_CLICKABLE);                       /* absorb taps */
+    ui_on(g_boot_modal, boot_cancel_cb, LV_EVENT_CLICKED, NULL, "settings.boot_cancel", UI_CORE);  /* tap outside = cancel */
+    lv_obj_t *card = lv_obj_create(g_boot_modal);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_size(card, 280, 184); lv_obj_center(card);
+    lv_obj_set_style_radius(card, 18, 0);
+    lv_obj_set_style_bg_color(card, TC(SURFACE), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *t = lv_label_create(card);
+    lv_label_set_text(t, tr("Shut down now?"));
+    lv_obj_set_style_text_font(t, TF(UI_16), 0);
+    lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
+    lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 22);
+    lv_obj_t *s = lv_label_create(card);
+    lv_label_set_text(s, tr("Safely flushes storage and powers off the device."));
+    lv_label_set_long_mode(s, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s, 236);
+    lv_obj_set_style_text_align(s, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(s, TF(UI_14), 0);
+    lv_obj_set_style_text_color(s, TC(TEXT_MUTED), 0);
+    lv_obj_align(s, LV_ALIGN_TOP_MID, 0, 50);
+    boot_modal_pill(card, -58, "Cancel",    THEME_CLR_TEXT_SECONDARY, boot_cancel_cb);
+    boot_modal_pill(card,  58, "Shut down", THEME_CLR_ACCENT_EMPHASIS, shutdown_confirm_cb);
+}
 /* write the backlight sysfs only (no config change) - used for transient dimming.
  * v==0 fully powers the panel backlight DOWN: writing brightness 0 alone leaves the
  * LED driver enabled at its minimum (screen looks black but the backlight glows), so
@@ -867,6 +906,8 @@ static const setting_t TABLE[] = {
       "Put diskOS's look and behaviour settings back to defaults. Music, Wi-Fi, Bluetooth, Last.fm, EQ and audio settings are kept.", NULL, "Restore default preferences" },
     { "System", "UPDATES & MAINTENANCE", "Restart", ST_ACTION, NULL, 0,0,0, NULL,0, "Restart", apply_restart, 0,
       "Restart the device. Boots your default UI; hold Vol-Up for the other one.", NULL, "Reboot player into default UI" },
+    { "System", "UPDATES & MAINTENANCE", "Shut down", ST_ACTION, NULL, 0,0,0, NULL,0, "Shut down", apply_shutdown, 0,
+      "Power off the device. Safely closes the card and flushes storage first.", NULL, "Shut down and power off player" },
 
     /* Device Information */
     { "System", "DEVICE INFORMATION", "Language", ST_CHOICE, "language", 0,0,0, i18n_lang_names, LANG_COUNT, NULL, apply_language, LANG_EN,
@@ -949,6 +990,7 @@ static void fmt_slider(const setting_t *s, int v, char *buf, int n){
  * firmware in fwcaps.c, and an unmapped firmware gets no command). The row stays visible so it is not a mystery,
  * but says so and is not editable - otherwise the menu would show a choice that silently does nothing. */
 static int setting_unavailable(const setting_t *s){
+    if(s->label && !strcmp(s->label, "Shut down") && !power_supported()) return 1;
     return s->cfg_key && ((!strcmp(s->cfg_key, "audio_gain") && fw_gain_tag() == NULL)
                        || (!strcmp(s->cfg_key, "artist_class") && !fw_artist_class_settable())
                        || (!strcmp(s->cfg_key, "folder_jump") && !fw_folder_jump_settable())

@@ -67,6 +67,11 @@ int screen_current(void);
 void ui_toast(const char *msg);
 void splash_start(void);
 int  splash_active(void);
+void splash_shutdown_start(void);
+int  splash_shutdown_active(void);
+void splash_shutdown_sync_done(void);
+int  splash_shutdown_finished(void);
+void splash_shutdown_cancel(void);
 /* the "something" block-matrix clock (home.c): handle 0 = Home, 1 = screensaver
  */
 int mclock_new(int h, lv_obj_t *parent, int y);

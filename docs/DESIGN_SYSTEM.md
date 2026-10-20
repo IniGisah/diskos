@@ -89,6 +89,7 @@ Keep the edge available for bezel scrolling on list screens.
 | `ANIM_BASE` | 260 ms | Base helper duration |
 | `ANIM_SLOW` | 340 ms | Slow helper duration |
 | `SP_MS` | 2400 ms | Startup splash |
+| Shutdown | ~1450+ ms | Shutdown animation (contract, storage sync, and dissolve) |
 
 Page transitions use a cubic ease-out curve: 300 ms on entry and 240 ms on return.
 The Animations setting controls slide transitions. Keep decorative motion limited and
@@ -115,6 +116,25 @@ The splash is a timed reveal, not a boot-progress indicator.
 | Hub glow | Disc remains visible | Theme accent and wordmark | Hub warms as the name appears |
 | Reveal | Disc moves beyond screen | Home visible through hub | Glow and wordmark fade |
 | Finished | Splash removed | Home | Normal input resumes |
+
+## Shutdown animation
+
+The shutdown animation mirrors the boot splash in reverse, providing graceful visual feedback while flash storage is safely drained and synchronized.
+
+### Sequence
+
+1. **Contract, 0-550 ms:** the hub closes inward from the screen edge over Home (`ok`: 1024 -> 0), sealing the screen beneath the dark vinyl disc. The hub warms in the theme's accent and the Archivo `diskOS` wordmark emerges at the center.
+2. **Light sweep & Sync, 550-1000+ ms:** a white streak splits into spectra across the tracks and orbits while storage writers drain and the filesystem sync completes.
+3. **Fade & Power off, 450 ms:** once sync is verified, the light dissolves, the wordmark fades, the hub glow cools down to pure black, the backlight rail powers down, and the hardware powers off safely.
+
+### Shutdown states
+
+| State | Ring | Center | Behavior |
+|---|---|---|---|
+| Contract | Disc moves inward | Dark hub, warming glow, wordmark | Disc seals screen from edge to center |
+| Storage sync | Rim and rotating spectra | Theme accent glow and wordmark | Light orbits while card drains and syncs |
+| Dissolve | Spectra and rim fade | Glow and wordmark dissolve | Light leaves, display fades to solid black |
+| Off | Screen black | Display backlight power rail disabled | Hardware power-off handoff |
 
 ## Component rules
 

@@ -3,5 +3,5 @@
 #ifndef DISKOS_VERSION_H
 #define DISKOS_VERSION_H
 /* The diskOS release this UI belongs to (shown in Settings > About). Bump when a release is cut. */
-#define DISKOS_VERSION "1.3-custom"
+#define DISKOS_VERSION "1.4-custom"
 #endif

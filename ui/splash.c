@@ -38,6 +38,8 @@ LV_FONT_DECLARE(diskos_brand_os_32)
 #define K_LIT0  640            /* the light is faint on the innermost tracks: spectra start here */
 #define K_DATA  985
 
+enum { SP_MODE_BOOT = 0, SP_MODE_SHUTDOWN = 1 };
+
 static struct {
     lv_obj_t *root, *face, *rim, *rim_hl, *lobe[2], *slice[2][SP_SLICE], *streak, *shade[2], *gap[2][(SP_GAPS + 1) / 2],
              *glow[SP_GLOW], *hub, *hub_edge, *word;
@@ -45,6 +47,9 @@ static struct {
     uint32_t t0, t_outro;
     int state;
     int exit_th;
+    int mode;
+    int sync_done;
+    int finished;
     lv_timer_t *timer;
 } g_sp;
 
@@ -158,7 +163,18 @@ static void splash_draw(int th, int sp, int warm, int wm, int ok){
         lv_obj_set_style_bg_opa(g_sp.root, LV_OPA_TRANSP, 0);
         lv_obj_remove_flag(g_sp.face, LV_OBJ_FLAG_HIDDEN);
     }
-    if(g_sp.opened) place_band(g_sp.face, RK(K_HUB), R + 2, 0);
+    if(ok == 0 && g_sp.opened){
+        g_sp.opened = 0;
+        lv_obj_set_style_bg_opa(g_sp.root, LV_OPA_COVER, 0);
+        lv_obj_add_flag(g_sp.face, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(g_sp.rim_hl, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(g_sp.streak, LV_OBJ_FLAG_HIDDEN);
+        for(int s = 0; s < 2; s++) lv_obj_clear_flag(g_sp.lobe[s], LV_OBJ_FLAG_HIDDEN);
+    }
+    if(g_sp.opened){
+        place_band(g_sp.face, RK(K_HUB), LV_MAX(R + 80, 260), 0);
+        lv_obj_invalidate(g_sp.root);
+    }
 
     /* the rim: drawn out from the light's first touch until it closes, then it stays */
     place_band(g_sp.rim, RK(K_DATA) + 1, R, 1);
@@ -313,8 +329,7 @@ static void splash_timer_cb(lv_timer_t *t){
     }
 }
 
-void splash_start(void){
-    if(g_sp.root) return;                                           /* one splash at a time */
+static void splash_create_objects(void){
     static const theme_color_role_t BAND[SP_SLICE] = { THEME_CLR_FIXED_SPLASH_BAND_5, THEME_CLR_FIXED_SPLASH_BAND_4,
         THEME_CLR_FIXED_SPLASH_BAND_3, THEME_CLR_FIXED_SPLASH_BAND_2, THEME_CLR_FIXED_SPLASH_BAND_1 };   /* violet..red */
     static const lv_opa_t BAND_OPA[SP_SLICE] = { 76, 104, 96, 104, 84 };   /* softer at the spectrum's ends */
@@ -378,7 +393,12 @@ void splash_start(void){
     }
     lv_obj_update_layout(g_sp.word);
     lv_obj_set_x(g_sp.word, SP_CX - lv_obj_get_width(g_sp.word) / 2);
+}
 
+void splash_start(void){
+    if(g_sp.root) return;                                           /* one splash at a time */
+    splash_create_objects();
+    g_sp.mode = SP_MODE_BOOT;
     g_sp.th = -1;
     g_sp.t0 = lv_tick_get();
     g_sp.state = 0;
@@ -386,4 +406,130 @@ void splash_start(void){
     lv_display_add_event_cb(lv_display_get_default(), splash_drawn_cb, LV_EVENT_RENDER_READY, NULL);
     splash_draw(175, 0, 0, 0, 0);
     g_sp.timer = lv_timer_create(splash_timer_cb, 16, NULL);
+}
+
+/* Shutdown animation:
+ * Phase 0 (0..550 ms): The hub closes inward from the screen edge over Home (ok: 1024 -> 0),
+ *                       sealing the screen beneath the dark vinyl disc. Hub warms and wordmark appears.
+ * Phase 1 (550 ms..):   Light blooms into spectra across tracks and orbits while flash storage syncs.
+ * Phase 2 (outro 450ms): Once sync completes, light dissolves, wordmark fades, hub glow cools to pure black,
+ *                       and display backlight powers down. */
+static void splash_shutdown_timer_cb(lv_timer_t *t){
+    (void)t;
+    if(!g_sp.root) return;
+    uint32_t now = lv_tick_get();
+    uint32_t elapsed = lv_tick_elaps(g_sp.t0);
+
+    /* Phase 0: Contract disc from screen edges inward (0..550 ms) */
+    if(g_sp.state == 0){
+        if(elapsed < 550){
+            int cur_t = (int)elapsed;
+            int k = ease_io(win_k(cur_t, 0, 500));
+            int ok = 1024 - k;
+            int warm = ease_out(win_k(cur_t, 150, 500));
+            int wm = ease_out(win_k(cur_t, 200, 500));
+            splash_draw(g_sp.exit_th, 0, warm, wm, ok);
+            return;
+        }
+        g_sp.state = 1;
+        /* Ensure ok=0 transition happens: full disc cover */
+        splash_draw(g_sp.exit_th, 0, 1024, 1024, 0);
+    }
+
+    /* Phase 1: Bloom light and sweep tracks while storage drains/syncs (min 450 ms) */
+    if(g_sp.state == 1){
+        uint32_t p1_time = elapsed - 550;
+        int th = g_sp.exit_th + (int)(p1_time * 360 / 2200);
+        int sp = ease_out(win_k((int)p1_time, 0, 300));
+
+        int ready = (g_sp.sync_done && p1_time >= 450) || elapsed >= 12000;
+        if(!ready){
+            splash_draw(th, sp, 1024, 1024, 0);
+            return;
+        }
+        g_sp.state = 2;
+        g_sp.t_outro = now;
+        g_sp.exit_th = th;
+    }
+
+    /* Phase 2: Fade to pure black (0..450 ms) */
+    if(g_sp.state == 2){
+        uint32_t dt = lv_tick_elaps(g_sp.t_outro);
+        if(dt < 450){
+            int cur_d = (int)dt;
+            int th = g_sp.exit_th + (int)(dt * 360 / 2200);
+            int sp = scl(1024, 1024 - ease_io(win_k(cur_d, 0, 300)));
+            int wm = scl(1024, 1024 - ease_out(win_k(cur_d, 50, 350)));
+            int warm = scl(1024, 1024 - win_k(cur_d, 100, 400));
+            splash_draw(th, sp, warm, wm, 0);
+            return;
+        }
+        /* Final frame: pure black */
+        splash_draw(g_sp.exit_th, 0, 0, 0, 0);
+        g_sp.finished = 1;
+        if(g_sp.timer){
+            lv_timer_delete(g_sp.timer);
+            g_sp.timer = NULL;
+        }
+        /* Power down panel backlight */
+        FILE *pw = fopen("/sys/class/backlight/backlight/bl_power", "w");
+        if(pw){ fputs("4\n", pw); fclose(pw); }
+        FILE *bf = fopen("/sys/class/backlight/backlight/brightness", "w");
+        if(bf){ fputs("0\n", bf); fclose(bf); }
+    }
+}
+
+void splash_shutdown_start(void){
+    if(g_sp.root){
+        if(g_sp.mode == SP_MODE_SHUTDOWN) return;
+        splash_done();
+    }
+    splash_create_objects();
+    lv_obj_move_foreground(g_sp.root);
+
+    g_sp.mode = SP_MODE_SHUTDOWN;
+    g_sp.state = 0;
+    g_sp.opened = 1;
+    g_sp.rim_closed = 1;
+    g_sp.th = -1;
+    g_sp.exit_th = 285;
+    g_sp.sync_done = 0;
+    g_sp.finished = 0;
+    g_sp.t0 = lv_tick_get();
+
+    /* Hide light elements initially while disc is outside */
+    lv_obj_add_flag(g_sp.rim_hl, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(g_sp.streak, LV_OBJ_FLAG_HIDDEN);
+    for(int s = 0; s < 2; s++) lv_obj_add_flag(g_sp.lobe[s], LV_OBJ_FLAG_HIDDEN);
+
+    /* Root background transparent initially, face ring visible */
+    lv_obj_set_style_bg_opa(g_sp.root, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(g_sp.face, LV_OBJ_FLAG_HIDDEN);
+
+    lv_display_add_event_cb(lv_display_get_default(), splash_drawn_cb, LV_EVENT_RENDER_READY, NULL);
+    splash_draw(g_sp.exit_th, 0, 0, 0, 1024);
+    g_sp.timer = lv_timer_create(splash_shutdown_timer_cb, 16, NULL);
+}
+
+int splash_shutdown_active(void){
+    return g_sp.root != NULL && g_sp.mode == SP_MODE_SHUTDOWN;
+}
+
+void splash_shutdown_sync_done(void){
+    if(g_sp.root && g_sp.mode == SP_MODE_SHUTDOWN){
+        g_sp.sync_done = 1;
+    }
+}
+
+int splash_shutdown_finished(void){
+    if(!g_sp.root || g_sp.mode != SP_MODE_SHUTDOWN) return 1;
+    return g_sp.finished;
+}
+
+void splash_shutdown_cancel(void){
+    if(g_sp.root && g_sp.mode == SP_MODE_SHUTDOWN){
+        splash_done();
+        FILE *pw = fopen("/sys/class/backlight/backlight/bl_power", "w");
+        if(pw){ fputs("0\n", pw); fclose(pw); }
+    }
 }
