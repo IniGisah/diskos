@@ -361,8 +361,10 @@ With Weather on Home enabled, tap the glance to open Weather. "Weather unavailab
 
 <table>
 <tr>
-<td align="center" valign="top" width="33%"><img src="tour/apps.png" width="220" alt="Apps"><br><sub>Built-in and external app tiles</sub></td>
-<td align="center" valign="top" width="33%"><img src="tour/lastfm.png" width="220" alt="Last.fm"><br><sub>Scrobbling setup</sub></td>
+<td align="center" valign="top" width="25%"><img src="tour/apps.png" width="180" alt="Apps"><br><sub>Built-in and external app tiles</sub></td>
+<td align="center" valign="top" width="25%"><img src="tour/lastfm.png" width="180" alt="Last.fm"><br><sub>Scrobbling setup</sub></td>
+<td align="center" valign="top" width="25%"><img src="tour/webui-player.png" width="180" alt="Web UI Player"><br><sub>Web UI Player</sub></td>
+<td align="center" valign="top" width="25%"><img src="tour/webui-files.png" width="180" alt="Web UI Files"><br><sub>Web UI File Explorer</sub></td>
 </tr>
 </table>
 

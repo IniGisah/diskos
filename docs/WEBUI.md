@@ -51,6 +51,16 @@ The **diskOS Web UI** is an embedded web interface and HTTP/WebSocket server tha
    - Custom styled scrollbars matching active theme tokens (Disc Teal, Amber, Ruby, Violet, Emerald, Monochrome).
    - Full keyboard accessibility, touch gestures, and optimistic UI updates.
 
+<table>
+<tr>
+<td align="center" valign="top" width="20%"><img src="tour/webui-player.png" width="160" alt="Web UI Player"><br><sub>Player & Turntable</sub></td>
+<td align="center" valign="top" width="20%"><img src="tour/webui-queue.png" width="160" alt="Web UI Queue"><br><sub>Queue & Track Jump</sub></td>
+<td align="center" valign="top" width="20%"><img src="tour/webui-files.png" width="160" alt="Web UI Files"><br><sub>File Manager & Upload</sub></td>
+<td align="center" valign="top" width="20%"><img src="tour/webui-settings.png" width="160" alt="Web UI Settings"><br><sub>Audio & Device Settings</sub></td>
+<td align="center" valign="top" width="20%"><img src="tour/webui-system.png" width="160" alt="Web UI System"><br><sub>System & Storage Metrics</sub></td>
+</tr>
+</table>
+
 3. **On-Device Controller (`ui/webui.c`)**:
    - Integrated into diskOS Apps screen: **Apps > Web Server**.
    - Live server state monitoring (`RUNNING` / `STOPPED` / `SD READY` / `NOT INSTALLED`).

@@ -85,6 +85,20 @@ Read the **[v1.4-custom release notes](docs/RELEASE_NOTES_1.4_CUSTOM.md)** for d
 </tr>
 </table>
 
+### Web UI & Remote Control (Browser SPA)
+
+Control playback, browse tracks, and manage your MicroSD card wirelessly from any browser over local Wi-Fi:
+
+<table>
+<tr>
+<td align="center" valign="top" width="20%"><img src="docs/tour/webui-player.png" width="160" alt="Web UI Player"><br><sub>Player & Turntable</sub></td>
+<td align="center" valign="top" width="20%"><img src="docs/tour/webui-queue.png" width="160" alt="Web UI Queue"><br><sub>Queue & Track Jump</sub></td>
+<td align="center" valign="top" width="20%"><img src="docs/tour/webui-files.png" width="160" alt="Web UI Files"><br><sub>File Manager & Upload</sub></td>
+<td align="center" valign="top" width="20%"><img src="docs/tour/webui-settings.png" width="160" alt="Web UI Settings"><br><sub>Audio & Device Settings</sub></td>
+<td align="center" valign="top" width="20%"><img src="docs/tour/webui-system.png" width="160" alt="Web UI System"><br><sub>System & Storage Metrics</sub></td>
+</tr>
+</table>
+
 **[See every screen in the diskOS tour](docs/TOUR.md).**
 
 ## Built around the Disc
