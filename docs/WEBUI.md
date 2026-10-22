@@ -137,7 +137,7 @@ For developers actively modifying `web/` HTML/CSS/JS or C daemon code:
    ```
    Or pass parameters directly:
    ```sh
-   ./web/deploy.sh 10.10.10.145 fvju4zcn4u
+   ./web/deploy.sh <device-ip> <ssh-password>
    ```
 3. The script compiles the static MIPS binary, packs web assets, streams them over SSH, updates `/usr/data/`, and restarts `diskos-webd` without interrupting LVGL.
 
