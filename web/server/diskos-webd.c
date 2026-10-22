@@ -417,6 +417,39 @@ static int play_song_file(const char *rel_or_abs) {
     return 0;
 }
 
+/* Cached system telemetry and configuration */
+static int g_cached_work_mode = 0;
+static time_t g_last_conf_check = 0;
+static int g_cached_batt = -1;
+static time_t g_last_batt_read = 0;
+static time_t g_last_json_mtime = 0;
+static char g_cached_clean_json[3584] = "{}";
+static volatile int g_active_ws_clients = 0;
+
+static int get_cached_work_mode(void) {
+    time_t now = time(NULL);
+    if(now - g_last_conf_check >= 10 || g_last_conf_check == 0) {
+        char pm_s[16] = "0";
+        get_config_value("work_mode", pm_s, sizeof(pm_s), "0");
+        g_cached_work_mode = atoi(pm_s);
+        g_last_conf_check = now;
+    }
+    return g_cached_work_mode;
+}
+
+static int get_cached_battery(void) {
+    time_t now = time(NULL);
+    if(now - g_last_batt_read >= 5 || g_last_batt_read == 0) {
+        FILE *bf = fopen("/sys/class/power_supply/cw221X-bat/capacity", "r");
+        if(bf) {
+            if(fscanf(bf, "%d", &g_cached_batt) != 1) g_cached_batt = -1;
+            fclose(bf);
+        }
+        g_last_batt_read = now;
+    }
+    return g_cached_batt;
+}
+
 /* Execute player command (shared between HTTP API and WebSocket) */
 static int execute_player_action(const char *action, const char *path, long ms, int val) {
     if(strcasecmp(action, "play_file") == 0 || (strcasecmp(action, "play") == 0 && path && path[0])) {
@@ -437,6 +470,8 @@ static int execute_player_action(const char *action, const char *path, long ms, 
         snprintf(m, sizeof(m), "0102000C%04X", (unsigned int)(val & 0xFFFF));
         char pm_s[16]; snprintf(pm_s, sizeof(pm_s), "%d", val);
         update_config_value("work_mode", pm_s);
+        g_cached_work_mode = val;
+        g_last_conf_check = time(NULL);
         return send_player_cmd(m);
     }
     if(strcasecmp(action, "clear_queue") == 0) {
@@ -464,31 +499,30 @@ static int execute_player_action(const char *action, const char *path, long ms, 
 
 /* Read current player status and battery level into JSON string */
 static void get_current_player_status(char *out, size_t max) {
-    char clean_json[3584] = "{}";
-    FILE *f = fopen("/tmp/diskos_player.json", "r");
-    if(f) {
-        size_t r = fread(clean_json, 1, sizeof(clean_json) - 1, f);
-        clean_json[r] = 0;
-        fclose(f);
-        char *nl = strpbrk(clean_json, "\r\n");
-        if(nl) *nl = 0;
+    struct stat st;
+    if(stat("/tmp/diskos_player.json", &st) == 0) {
+        if(st.st_mtime != g_last_json_mtime || g_last_json_mtime == 0) {
+            FILE *f = fopen("/tmp/diskos_player.json", "r");
+            if(f) {
+                size_t r = fread(g_cached_clean_json, 1, sizeof(g_cached_clean_json) - 1, f);
+                g_cached_clean_json[r] = 0;
+                fclose(f);
+                char *nl = strpbrk(g_cached_clean_json, "\r\n");
+                if(nl) *nl = 0;
+                g_last_json_mtime = st.st_mtime;
+            }
+        }
     }
 
-    /* Read battery level */
-    int batt = -1;
-    FILE *bf = fopen("/sys/class/power_supply/cw221X-bat/capacity", "r");
-    if(bf) { if(fscanf(bf, "%d", &batt) != 1) batt = -1; fclose(bf); }
+    int batt = get_cached_battery();
+    int play_mode = get_cached_work_mode();
 
-    /* Read play_mode from diskos.conf */
-    int play_mode = 0;
-    char pm_s[16] = "0";
-    get_config_value("work_mode", pm_s, sizeof(pm_s), "0");
-    play_mode = atoi(pm_s);
-
-    size_t len = strlen(clean_json);
-    if(len > 1 && clean_json[0] == '{' && clean_json[len - 1] == '}') {
-        clean_json[len - 1] = 0; /* strip closing brace to append */
-        snprintf(out, max, "%s,\"battery\":%d,\"play_mode\":%d}\n", clean_json, batt, play_mode);
+    size_t len = strlen(g_cached_clean_json);
+    if(len > 1 && g_cached_clean_json[0] == '{' && g_cached_clean_json[len - 1] == '}') {
+        char temp_copy[3584];
+        snprintf(temp_copy, sizeof(temp_copy), "%s", g_cached_clean_json);
+        temp_copy[len - 1] = 0;
+        snprintf(out, max, "%s,\"battery\":%d,\"play_mode\":%d}\n", temp_copy, batt, play_mode);
     } else {
         snprintf(out, max, "{\"battery\":%d,\"play_mode\":%d}\n", batt, play_mode);
     }
@@ -734,6 +768,11 @@ static void handle_websocket(int fd) {
     size_t in_len = 0;
     int tick_count = 0;
 
+    if(__sync_fetch_and_add(&g_active_ws_clients, 1) == 0) {
+        int afd = creat("/tmp/diskos_ws_active", 0644);
+        if(afd >= 0) close(afd);
+    }
+
     /* Send initial status immediately upon connection */
     get_current_player_status(cur_status, sizeof(cur_status));
     ws_send_text(fd, cur_status);
@@ -745,8 +784,8 @@ static void handle_websocket(int fd) {
         pfd.events = POLLIN | POLLERR | POLLHUP;
         pfd.revents = 0;
 
-        /* Poll with 250ms timeout */
-        int ret = poll(&pfd, 1, 250);
+        /* Poll with 1000ms timeout (immediate on POLLIN) */
+        int ret = poll(&pfd, 1, 1000);
         if(ret < 0) {
             if(errno == EINTR) continue;
             break;
@@ -805,18 +844,22 @@ static void handle_websocket(int fd) {
             }
         }
 
-        /* Periodic check (every 250ms tick) */
+        /* Periodic check (every 1000ms tick) */
         tick_count++;
         get_current_player_status(cur_status, sizeof(cur_status));
 
-        /* If status changed OR 5 seconds elapsed without an update (heartbeat = 20 ticks) */
-        if(strcmp(cur_status, last_status) != 0 || tick_count >= 20) {
+        /* If status changed OR 5 seconds elapsed without an update (heartbeat = 5 ticks) */
+        if(strcmp(cur_status, last_status) != 0 || tick_count >= 5) {
             if(ws_send_text(fd, cur_status) != 0) {
                 break; /* Failed to send -> client disconnected */
             }
             snprintf(last_status, sizeof(last_status), "%s", cur_status);
             tick_count = 0;
         }
+    }
+
+    if(__sync_sub_and_fetch(&g_active_ws_clients, 1) == 0) {
+        unlink("/tmp/diskos_ws_active");
     }
 }
 
@@ -833,6 +876,29 @@ static void send_response_headers(int fd, int code, const char *status, const ch
         code, status);
     if(type) {
         len += snprintf(header + len, sizeof(header) - len, "Content-Type: %s\r\n", type);
+    }
+    if(content_length >= 0) {
+        len += snprintf(header + len, sizeof(header) - len, "Content-Length: %ld\r\n", content_length);
+    }
+    len += snprintf(header + len, sizeof(header) - len, "\r\n");
+    write(fd, header, len);
+}
+
+static void send_static_response_headers(int fd, int code, const char *status, const char *type, long content_length, const char *cache_control) {
+    char header[512];
+    int len = snprintf(header, sizeof(header),
+        "HTTP/1.1 %d %s\r\n"
+        "Server: diskOS-Webd\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n"
+        "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
+        "Connection: close\r\n",
+        code, status);
+    if(type) {
+        len += snprintf(header + len, sizeof(header) - len, "Content-Type: %s\r\n", type);
+    }
+    if(cache_control) {
+        len += snprintf(header + len, sizeof(header) - len, "Cache-Control: %s\r\n", cache_control);
     }
     if(content_length >= 0) {
         len += snprintf(header + len, sizeof(header) - len, "Content-Length: %ld\r\n", content_length);
@@ -1568,6 +1634,8 @@ static void *handle_client(void *arg) {
             if(pm >= 0 && pm <= 4) {
                 char pm_s[16]; snprintf(pm_s, sizeof(pm_s), "%d", pm);
                 update_config_value("work_mode", pm_s);
+                g_cached_work_mode = pm;
+                g_last_conf_check = time(NULL);
                 char m[32]; snprintf(m, sizeof(m), "0102000C%04X", pm & 0xFFFF);
                 send_player_cmd(m);
             }
@@ -1611,7 +1679,7 @@ static void *handle_client(void *arg) {
         if(afd >= 0) {
             struct stat st;
             fstat(afd, &st);
-            send_response_headers(fd, 200, "OK", mime, st.st_size);
+            send_static_response_headers(fd, 200, "OK", mime, st.st_size, "public, max-age=60");
             char buf[BUFFER_SIZE];
             ssize_t bytes;
             while((bytes = read(afd, buf, sizeof(buf))) > 0) {
@@ -1621,7 +1689,7 @@ static void *handle_client(void *arg) {
         } else {
             /* 1x1 transparent SVG fallback */
             const char *svg = "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>";
-            send_response_headers(fd, 200, "OK", "image/svg+xml", strlen(svg));
+            send_static_response_headers(fd, 200, "OK", "image/svg+xml", strlen(svg), "public, max-age=60");
             write(fd, svg, strlen(svg));
         }
         close(fd);
@@ -1646,7 +1714,12 @@ static void *handle_client(void *arg) {
     if(sfd >= 0) {
         struct stat st;
         fstat(sfd, &st);
-        send_response_headers(fd, 200, "OK", get_mime_type(file_target), st.st_size);
+        const char *mime = get_mime_type(file_target);
+        const char *cc = "no-cache";
+        if(strstr(file_target, ".css") || strstr(file_target, ".js") || strstr(file_target, ".svg") || strstr(file_target, ".png")) {
+            cc = "public, max-age=86400";
+        }
+        send_static_response_headers(fd, 200, "OK", mime, st.st_size, cc);
         char buf[BUFFER_SIZE];
         ssize_t bytes;
         while((bytes = read(sfd, buf, sizeof(buf))) > 0) {
@@ -1661,9 +1734,29 @@ static void *handle_client(void *arg) {
     return NULL;
 }
 
+static void cleanup_pid_files(void) {
+    unlink("/tmp/diskos-webd.pid");
+    unlink("/tmp/diskos_ws_active");
+}
+
+static void sig_handler(int sig) {
+    (void)sig;
+    cleanup_pid_files();
+    _exit(0);
+}
+
 int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
+    signal(SIGINT, sig_handler);
+    signal(SIGTERM, sig_handler);
+    atexit(cleanup_pid_files);
     srand((unsigned int)time(NULL));
+
+    FILE *pf = fopen("/tmp/diskos-webd.pid", "w");
+    if(pf) {
+        fprintf(pf, "%d\n", getpid());
+        fclose(pf);
+    }
 
     for(int i = 1; i < argc; i++) {
         if(strcmp(argv[i], "-p") == 0 && i + 1 < argc) {

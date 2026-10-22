@@ -203,6 +203,8 @@ static int wifi_sanitize_savenets(void){
         l = strchr(l, '\n'); if(l) l++;
     }
     system("" WCLI "save_config >/dev/null 2>&1");
+    /* Enable 802.11 power saving (DTIM beacon sleep) on AP6212 / BCM43438 */
+    system("iw dev wlan0 set power_save on 2>/dev/null || iw wlan0 set power_save on 2>/dev/null || iwconfig wlan0 power on 2>/dev/null");
     return 1;
 }
 
@@ -657,6 +659,7 @@ void wifi_supervise(void){
             system("/usr/bin/wifi_up.sh >/dev/null 2>&1 &");
         }
     } else if(up && !want){                 /* should be off but a late wifi_up won -> enforce off */
+        system("[ -x /usr/data/bin/diskos-web.sh ] && /bin/sh /usr/data/bin/diskos-web.sh stop >/dev/null 2>&1");
         system("/usr/bin/wifi_down.sh >/dev/null 2>&1");
     }
 }

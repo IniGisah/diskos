@@ -78,6 +78,7 @@ case "$1" in
         for p in $(pidof diskos-webd 2>/dev/null); do
             kill -9 "$p" 2>/dev/null
         done
+        rm -f "$PIDFILE" /tmp/diskos_ws_active 2>/dev/null
         echo "stopped"
         ;;
     status)

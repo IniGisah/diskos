@@ -98,9 +98,22 @@ static void vinyl_rotate(int32_t tenths)
     double a = (double)tenths * 3.14159265358979 / 1800.0;
     int32_t c = (int32_t)lround(cos(a) * 65536.0), sn = (int32_t)lround(sin(a) * 65536.0);
     const int32_t h = VIN_W / 2;
+
+    /* Precompute row span boundaries once to eliminate 360 floating-point sqrt() calls per frame */
+    static int16_t s_row_hw[VIN_W];
+    static int s_hw_init = 0;
+    if(!s_hw_init) {
+        for(int y = 0; y < VIN_W; y++) {
+            int32_t dy = y - h;
+            int32_t r2 = h * h - dy * dy;
+            s_row_hw[y] = (r2 > 0) ? (int16_t)sqrt((double)r2) : 0;
+        }
+        s_hw_init = 1;
+    }
+
     for (int y = 0; y < VIN_W; y++) {
         int32_t dy = y - h;
-        int32_t hw = (int32_t)sqrt((double)(h * h - dy * dy));   /* only the round screen's span of this row */
+        int32_t hw = s_row_hw[y];
         int x0 = h - hw, x1 = h + hw;
         if (x0 < 0) x0 = 0;
         if (x1 > VIN_W) x1 = VIN_W;
@@ -482,10 +495,7 @@ static void saver_anim_cb(lv_timer_t *t)
 static void vspin_cb(void *var, int32_t v){
     static uint32_t last = 0;
     uint32_t now = lv_tick_get();
-    /* 30 fps. With diskOS's own rotation (vinyl_rotate) a frame costs ~7 ms, so the loop would otherwise run ~60 fps
-     * and spend the saving on frames nobody needs: at 27 s/rev, 30 fps is under half a degree per frame (smooth), and
-     * the cap sits far above the render time, so the cadence stays even. Device: ~58% CPU (old LVGL transform) ->
-     * ~44% uncapped (measured with /proc stat ticks over 10 s); the cap avoids extra frames. */
+    /* 30 fps (33 ms). At 27 s/rev, 30 fps turns under 0.45 degrees per frame. */
     if (now - last < 33) return;
     last = now;
     g_vangle = v % 3600;

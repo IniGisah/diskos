@@ -46,7 +46,17 @@ void usage_save(void){
     FILE *f = fopen(tmp, "wb"); if(!f) return;
     uint32_t hdr[2] = { 0x31475355u /* "USG1" */, (uint32_t)g_n };
     int ok = fwrite(hdr, sizeof hdr, 1, f) == 1;
-    for(int i = 0; ok && i < g_n; i++) ok = fwrite(at(i), sizeof(usmp_t), 1, f) == 1;
+
+    if(ok && g_n > 0){
+        int first_slice = US_CAP - g_head;
+        if(first_slice > g_n) first_slice = g_n;
+        ok = (fwrite(&g_s[g_head], sizeof(usmp_t), first_slice, f) == (size_t)first_slice);
+
+        int second_slice = g_n - first_slice;
+        if(ok && second_slice > 0){
+            ok = (fwrite(&g_s[0], sizeof(usmp_t), second_slice, f) == (size_t)second_slice);
+        }
+    }
     if(fflush(f) != 0) ok = 0;
     fsync(fileno(f));
     if(fclose(f) != 0) ok = 0;
@@ -85,7 +95,9 @@ void usage_tick(int screen_on, int playing){
     if(m != g_cur_min){
         if(g_batt >= 0) push(g_cur_min * 60u, g_batt, g_acc);
         g_cur_min = m; g_acc = 0;
-        if(++g_unsaved >= 10) usage_save();
+        g_unsaved++;
+        int threshold = (g_chg || screen_on) ? 15 : 60;
+        if(g_unsaved >= threshold) usage_save();
     }
     g_acc |= (g_chg ? FL_CHG : 0) | (screen_on ? FL_SCR : 0) | (playing ? FL_PLAY : 0);
 }

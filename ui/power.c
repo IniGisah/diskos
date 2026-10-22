@@ -556,7 +556,7 @@ void power_tick(uint32_t last_input_ms, int playing) {
                       (uint32_t)power_idle_secs(cfg_get_int("idle_off_idx", 0)),
                       playing, last_input_ms, idle_request);
   }
-  if (have_last && now - last < 5000u)
+  if (have_last && now - last < 15000u)
     return;
   last = now;
   have_last = 1;

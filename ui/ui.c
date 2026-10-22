@@ -872,7 +872,13 @@ void ui_np_title_scroll(int visible)
 static int g_np_vinyl = 0;
 static int g_spinning  = 0;
 
-static void spin_cb(void *var, int32_t v){ lv_image_set_rotation((lv_obj_t *)var, v % 3600); }
+static void spin_cb(void *var, int32_t v){
+    static uint32_t last = 0;
+    uint32_t now = lv_tick_get();
+    if(now - last < 33) return;
+    last = now;
+    lv_image_set_rotation((lv_obj_t *)var, v % 3600);
+}
 
 /* Start/stop the vinyl spin. Idempotent - main.c calls this every loop with the
  * live condition (vinyl style && playing && Now Playing visible && screen on),

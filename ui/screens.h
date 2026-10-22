@@ -48,6 +48,7 @@ enum {
 void webui_create(lv_obj_t *root);
 void webui_open(void);
 void webui_refresh(void);
+void webui_sync_pause(int pause);
 void usage_create(lv_obj_t *root);
 void usage_refresh(void);
 void usage_tick(int screen_on, int playing);

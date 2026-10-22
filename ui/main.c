@@ -24,6 +24,7 @@
 #include <linux/input.h>   /* EVIOCGKEY / KEY_MAX for the boot-time Vol-Up override */
 #include <net/if.h>
 #include <sys/prctl.h>
+#include <poll.h>
 #include "sqlite3.h"
 #include "lvgl/lvgl.h"
 #include "lvgl/src/core/lv_refr_private.h"
@@ -933,12 +934,16 @@ static void storage_tick(lv_timer_t *t){
         if(g_sd_phase != SD_UNKNOWN) storage_unknown("artwork decoder did not exit");
         return;
     }
+    static uint32_t last_sd_period = 100;
     if(g_sd_phase == SD_LOCAL){
+        uint32_t p = (g_screen_off ? 2000 : 1000);
+        if(last_sd_period != p){ lv_timer_set_period(t, p); last_sd_period = p; }
         if(!sd_io_allowed() && storage_media_local()){
             if(sd_io_resume() && mdb_total_song_count() == 0 && !mdb_load_failed()) scanner_start();
         }
         return;
     }
+    if(last_sd_period != 100){ lv_timer_set_period(t, 100); last_sd_period = 100; }
     if(g_sd_phase == SD_DRAIN){
         if(sd_io_active() == 0 && atomic_load(&g_sd_writers) == 0){
             if(!storage_mark('E', 3)){ storage_unknown("cannot record export request"); return; }
@@ -1911,7 +1916,9 @@ int ui_play_book(const char *path, long resume_ms){
 static void book_tick(lv_timer_t *t){
     (void)t;
     if(!ui_local_playback_allowed()) return;
+    static uint32_t last_book_period = 400;
     if(!g_book_sess[0]){
+        if(last_book_period != 2500){ lv_timer_set_period(t, 2500); last_book_period = 2500; }
         /* Adopt an orphaned book: after a UI-only restart the player still plays the book but our
          * session was lost, so checkpointing stops. If a book is the current track, re-establish the
          * session (no resume - it's already positioned; checkpoint immediately) and re-assert Single. */
@@ -1944,6 +1951,7 @@ static void book_tick(lv_timer_t *t){
         }
         return;                                            /* nothing to do this tick (adopted next tick) */
     }
+    if(last_book_period != 400){ lv_timer_set_period(t, 400); last_book_period = 400; }
     track_state_t st; ipc_get_state(&st);
     uint32_t now = lv_tick_get();
     int past_deadline = (int32_t)(now - g_book_deadline) >= 0;
@@ -2414,8 +2422,17 @@ static void polls_set_paused(int paused){
      * controller and the whole SoC (device-verified 2026-08-26: stock never sleeps the screen and
      * never freezes; pausing this poll at screen-off is what introduced the freeze). Only the visual
      * polls (art/lyrics/weather) pause - they wake nothing useful behind a dark screen. */
-    if(paused){ lv_timer_pause(g_t_art);  lv_timer_pause(g_t_lyr);  lv_timer_pause(g_t_wx);  }
-    else      { lv_timer_resume(g_t_art); lv_timer_resume(g_t_lyr); lv_timer_resume(g_t_wx); }
+    if(paused){
+        lv_timer_pause(g_t_art);
+        lv_timer_pause(g_t_lyr);
+        lv_timer_pause(g_t_wx);
+        webui_sync_pause(access("/tmp/diskos_ws_active", F_OK) != 0);
+    } else {
+        lv_timer_resume(g_t_art);
+        lv_timer_resume(g_t_lyr);
+        lv_timer_resume(g_t_wx);
+        webui_sync_pause(0);
+    }
 }
 
 /* Periodic RTC save WITHOUT blocking the UI thread. It used to run `hwclock -w` through run_bounded, which
@@ -3744,7 +3761,7 @@ int main(int argc, char **argv){
                 /* No automatic 0666/0657: 0666 releases a live local output. */
             }
         }
-        ui_np_title_scroll(bl_state != 2);
+        ui_np_title_scroll(bl_state == 0);
         if(bl_state != 2 && (g_draw_dark || st.seq != last || playing != last_playing || ui_take_art_force())){
             last = st.seq; last_playing = playing;
             ui_update(&st);
@@ -4159,7 +4176,16 @@ int main(int argc, char **argv){
                 inject_pending = 0;                       /* a newer frame cancels a press not yet sent */
                 power_note_input();                       /* a press is input: restarts the idle power-off countdown */
                 switch(screen_frame_step(on, bl_state, &pk.player_off, poweroff_inhibit)){
-                case SF_INJECT: inject_pending = 1; inject_for = sq; inject_gen = gen; inject_due = lv_tick_get() + 300; break;
+                case SF_INJECT:
+                    /* The user pressed power to wake after auto-sleep timeout!
+                     * Turn on the hardware display immediately (<100ms latency) instead of
+                     * waiting for the player's double round-trip. Sync player in background. */
+                    hardware_screen_wake(ui_effective_brightness());
+                    bl_state = 0; g_screen_off = 0; manual_btn_off = 0; last_activity = lv_tick_get();
+                    draw_set_dark(0);
+                    if(screen_current() == SCR_SAVER) screen_back();
+                    inject_pending = 1; inject_for = sq; inject_gen = gen; inject_due = lv_tick_get() + 250;
+                    break;
                 case SF_OFF:      /* the player slept its panel: power the rail down to match */
                     draw_set_dark(1);
                     bl_state = 2; g_screen_off = 1; manual_btn_off = 1;
@@ -4335,17 +4361,23 @@ int main(int argc, char **argv){
         g_screen_off = (bl_state == 2);   /* publish for the slow polls (skip the hcitool spawn while off) */
         advance_probe_tick(bl_state != 2);
         g_bl_idle = (bl_state >= 1);   /* prewarm worker reads this: only work while dimmed/off */
-        int busy = lv_anim_count_running() > 0 || prev_ts == LV_INDEV_STATE_PRESSED;
+        int finger_down = (prev_ts == LV_INDEV_STATE_PRESSED);
+        int anim_active = (lv_anim_count_running() > 0);
+        int busy = anim_active || finger_down;
+        (void)busy;
         if(bl_state == 2){
-            /* deep idle (panel off): sleep ~5x/s REGARDLESS of any running animation. Nothing is
-             * visible, so a stray infinite anim (e.g. a Wi-Fi/BT scan glyph left spinning, or the
-             * saver's own motion) must NOT drop us to the 5ms 'busy' cap and spin the CPU at 200Hz -
-             * that was the real reason "screen off" wasn't saving power. Wake stays reliable because
-             * the raw evdev fd (drained every loop, above) holds a real finger-press in its kernel
-             * queue across the 200ms sleep; we no longer rely on catching an LVGL press-edge. */
-            wait = 200;
+            /* deep idle (panel off): target 500ms sleep or next timer due */
+            wait = 500;
+        } else if(bl_state == 1){
+            /* Screensaver mode: cap at 33ms (~30 Hz) */
+            uint32_t cap = 33;
+            if(wait > cap) wait = cap;
         } else {
-            uint32_t cap = busy ? 5 : 30;
+            /* Active screen on (bl_state == 0):
+             * 8ms for active touch drag tracking (low-latency touch/scroll);
+             * 33ms (~30 FPS) for non-touch animations (vinyl spin, progress glow) to cut CPU load in half;
+             * 33ms for static UI idle. */
+            uint32_t cap = finger_down ? 8 : 33;
             if(wait > cap) wait = cap;
         }
 #ifdef DISKOS_PROFILE
@@ -4353,7 +4385,31 @@ int main(int argc, char **argv){
           unsigned long long body = (unsigned long long)(pc.tv_sec - pa.tv_sec) * 1000000000ULL + (unsigned long long)(pc.tv_nsec - pa.tv_nsec) - prof_h;
           prof_loop(busy, bl_state, lv_anim_count_running(), prof_h, body); }
 #endif
-        usleep(wait*1000);
+        if(bl_state == 2){
+            struct pollfd pfds[2];
+            int nfds = 0;
+            int pwr_fd = pwrkey_get_fd();
+            if(pwr_fd >= 0){
+                pfds[nfds].fd = pwr_fd;
+                pfds[nfds].events = POLLIN;
+                pfds[nfds].revents = 0;
+                nfds++;
+            }
+            int touch_wake_en = cfg_get_int("touch_wake", 0);
+            if(g_touch_raw >= 0 && touch_wake_en && !manual_btn_off){
+                pfds[nfds].fd = g_touch_raw;
+                pfds[nfds].events = POLLIN;
+                pfds[nfds].revents = 0;
+                nfds++;
+            }
+            if(nfds > 0){
+                poll(pfds, nfds, wait);
+            } else {
+                usleep(wait * 1000);
+            }
+        } else {
+            usleep(wait * 1000);
+        }
     }
     return 0;
 }

@@ -16,6 +16,7 @@
 #include <net/if.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <signal.h>
 
 #define WEBSCRIPT "/usr/data/bin/diskos-web.sh"
 
@@ -60,18 +61,45 @@ static void escape_json_str(char *dst, const char *src, size_t max) {
     dst[d] = 0;
 }
 
+static lv_timer_t *g_webui_sync_timer = NULL;
+static track_state_t g_last_synced_st;
+static int g_last_synced_playing = -1;
+static long g_last_synced_pos_sec = -1;
+static int g_last_synced_valid = 0;
+
+void webui_sync_pause(int pause) {
+    if(!g_webui_sync_timer) return;
+    if(pause) lv_timer_pause(g_webui_sync_timer);
+    else      lv_timer_resume(g_webui_sync_timer);
+}
+
 static void webui_status_sync_tick(lv_timer_t *t) {
     (void)t;
+    /* Skip writing if web daemon is not running and no WebSocket clients are connected */
+    if(access("/tmp/diskos-webd.pid", F_OK) != 0 && access("/tmp/diskos_ws_active", F_OK) != 0) {
+        return;
+    }
+
     track_state_t st;
     ipc_get_state(&st);
+    int playing = ui_is_playing();
+    long pos_sec = st.position_ms / 1000;
+
+    if(g_last_synced_valid) {
+        int changed = (playing != g_last_synced_playing) ||
+                      (st.seq != g_last_synced_st.seq) ||
+                      (st.volume != g_last_synced_st.volume) ||
+                      (st.sample_rate != g_last_synced_st.sample_rate) ||
+                      (st.is_dsd != g_last_synced_st.is_dsd) ||
+                      (playing && pos_sec != g_last_synced_pos_sec);
+        if(!changed) return; /* Skip file I/O completely when state hasn't changed */
+    }
 
     char esc_title[320], esc_artist[200], esc_album[200], esc_path[320];
     escape_json_str(esc_title, st.title, sizeof(esc_title));
     escape_json_str(esc_artist, st.artist, sizeof(esc_artist));
     escape_json_str(esc_album, st.album, sizeof(esc_album));
     escape_json_str(esc_path, st.path, sizeof(esc_path));
-
-    int playing = ui_is_playing();
 
     const char *tmp_path = "/tmp/diskos_player.json.tmp";
     const char *final_path = "/tmp/diskos_player.json";
@@ -89,6 +117,11 @@ static void webui_status_sync_tick(lv_timer_t *t) {
                st.sample_rate, st.is_dsd ? "true" : "false");
     fclose(f);
     rename(tmp_path, final_path);
+
+    g_last_synced_st = st;
+    g_last_synced_playing = playing;
+    g_last_synced_pos_sec = pos_sec;
+    g_last_synced_valid = 1;
 }
 
 static int wlan_ip_str(char *out, int n){
@@ -105,6 +138,17 @@ static int wlan_ip_str(char *out, int n){
 }
 
 static int check_daemon_running(void){
+    FILE *pf = fopen("/tmp/diskos-webd.pid", "r");
+    if(pf){
+        int pid = -1;
+        if(fscanf(pf, "%d", &pid) == 1 && pid > 1){
+            if(kill(pid, 0) == 0){
+                fclose(pf);
+                return 1;
+            }
+        }
+        fclose(pf);
+    }
     DIR *d = opendir("/proc"); if(!d) return 0;
     struct dirent *e; int found = 0;
     while((e = readdir(d))){
@@ -166,7 +210,8 @@ void webui_refresh(void){
         } else if(sd_ready){
             lv_label_set_text(g_status_lbl, "Status: SD READY");
             lv_obj_set_style_text_color(g_status_lbl, acc, 0);
-            snprintf(url_buf, sizeof url_buf, has_ip ? "http://%s:8080/" : "Ready to install");
+            if(has_ip) snprintf(url_buf, sizeof url_buf, "http://%s:8080/", ip);
+            else       snprintf(url_buf, sizeof url_buf, "Ready to install");
             if(g_main_btn){
                 lv_obj_clear_state(g_main_btn, LV_STATE_DISABLED);
                 lv_obj_set_style_bg_color(g_main_btn, acc, 0);
@@ -311,7 +356,7 @@ void webui_create(lv_obj_t *root){
     lv_obj_set_style_text_font(g_btn_lbl, TF(UI_16), 0);
     lv_obj_set_style_text_color(g_btn_lbl, theme_on_color(acc), 0);
 
-    lv_timer_create(webui_status_sync_tick, 500, NULL);
+    g_webui_sync_timer = lv_timer_create(webui_status_sync_tick, 1000, NULL);
     webui_refresh();
 }
 
