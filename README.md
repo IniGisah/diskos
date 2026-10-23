@@ -48,12 +48,12 @@
 
 <table>
 <tr>
-<td align="center"><img src="docs/tour/now-playing.png" width="220" alt="Now Playing"><br><sub>Now Playing</sub></td>
-<td align="center"><img src="docs/tour/up-next.png" width="220" alt="Up Next"><br><sub>Up Next</sub></td>
-<td align="center"><img src="docs/tour/lyrics-timed.png" width="220" alt="Timed lyrics"><br><sub>Timed lyrics</sub></td>
+<td align="center"><img src="docs/tour/beam-picker.png" width="220" alt="The Beam picker listing Cast and AirPlay TVs"><br><sub>Beam to a speaker or TV</sub></td>
+<td align="center"><img src="docs/tour/beam-now-playing.png" width="220" alt="Now Playing while beaming to Bedroom TV"><br><sub>Now Playing while beaming</sub></td>
+<td align="center"><img src="docs/tour/airplay-receiving.png" width="220" alt="AirPlay Receiving with the sender's song and artwork"><br><sub>AirPlay Receiving</sub></td>
 </tr>
 <tr>
-<td align="center"><img src="docs/tour/song-info.png" width="220" alt="Song Info"><br><sub>Song Info</sub></td>
+<td align="center"><img src="docs/tour/lyrics-timed.png" width="220" alt="Timed lyrics"><br><sub>Timed lyrics</sub></td>
 <td align="center"><img src="docs/tour/cover-flow.png" width="220" alt="Cover Flow"><br><sub>Album cover flow</sub></td>
 <td align="center"><img src="docs/tour/keyboard.png" width="220" alt="Search keyboard"><br><sub>Search and keyboard</sub></td>
 </tr>
