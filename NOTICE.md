@@ -113,7 +113,7 @@ that; this is a reading of those licence texts, not legal advice. The licence
 texts govern their components.
 
 **Python runtime + libraries (Linux/macOS source releases).** The installer runs **from
-source** with **your own Python**. The two Python dependencies (`pyusb`, `pycryptodome`) are fetched
+source** with **your own Python**. The four Python dependencies (`pyusb`, `pycryptodome`, `certifi`, `platformdirs`) are fetched
 from PyPI by *your* `pip` into a local `.venv` (created by `./install.sh`); CPython, `tkinter`, and
 their transitive native libraries (OpenSSL, Tk/Tcl, the X11 stack, freetype, fontconfig, zlib, etc.)
 all come from **your system's Python** - this project ships none of them, so their redistribution
@@ -145,6 +145,8 @@ involved in the source release.)
 |---|---|
 | **pyusb** (USB device detection) | BSD-3-Clause; `licenses/BSD-3-Clause-pyusb.txt` matches the locked 1.3.1 wheel byte for byte |
 | **pycryptodome** (AES-decrypt of FiiO OTA chunks) | BSD-2-Clause + public-domain (Unlicense), with CC0 SipHash in native arithmetic. Windows wheel text: `licenses/PyCryptodome-3.23.0-Windows-LICENSE.rst`, with runtime-module notices and the wheel's OCB patent statement in `licenses/PyCryptodome-3.23.0-Windows-NOTICES.txt`. Native-source comments, including BLAKE2, Keccak, LibTomCrypt and SipHash: `licenses/PyCryptodome-3.23.0-Native-NOTICES.txt`; complete bundled LibTomCrypt dedication: `licenses/PyCryptodome-3.23.0-libtom-LICENSE.txt`; SipHash dedication: `licenses/CC0-1.0-SipHash.txt`. The existing `licenses/pycryptodome-LICENSE.txt` has the wheel's wording with LF instead of CRLF |
+| **certifi 2026.2.25** (CA bundle for verified HTTPS) | MPL-2.0; wheel bundle notice: `licenses/MPL-2.0-certifi.txt`; complete licence: `licenses/MPL-2.0.txt`. Unmodified package source is available from PyPI for certifi 2026.2.25. |
+| **platformdirs 4.2.2** (platform directory discovery) | MIT; `licenses/MIT-platformdirs.txt` preserves the wheel LICENSE |
 | **CPython** (system Python for source runs; 3.12.10 x64 in the Windows dependency inventory) | PSF-2.0 and historical Python terms; `licenses/PSF-Python.txt` plus the complete Windows distribution notice `licenses/CPython-3.12.10-Windows-LICENSE.txt` and exact-install incorporated-software section in `licenses/CPython-3.12.10-Incorporated-Software.txt` |
 | **PyInstaller** runtime bootloader (Windows package and self-built onefile) | GPL-2.0 **with a bootloader exception** permitting distribution of the packaged app under any license |
 
@@ -253,6 +255,17 @@ in `site/fonts/`; see [the font index](licenses/README.md#website-fonts).
   text at the end of `ui/tools/stb_image.h`, pinned in `ui/tools/stb_image.VERSION`) and the static musl C
   runtime (MIT). stb_image is NOT part of `mq_ui`.
 
+  **`diskos-audiodec`** (source `ui/tools/diskos_audiodec.c`, new in 1.2.2) is a small helper that decodes audio
+  for Cast and AirPlay sending. It is diskOS's own code (SPDX `MIT` in the helper sources, covered by
+  `ui/tools/AUDIO_STOCK_LICENSE`) and is embedded inside the `mq_ui` binary, which is GPL-3.0-or-later; `mq_ui`
+  writes it out at run time. It links **dynamically** against the FFmpeg libraries (`libavformat`, `libavcodec`,
+  `libavutil`) that are already installed on the Disc in FiiO's firmware. Only FFmpeg's public headers (4.2.2,
+  checked by SHA-256 in `ui/third_party/build-stock-audiodec.sh`) are used to compile it.
+  FFmpeg's public headers are LGPL-2.1-or-later; the constants, layouts and small
+  macros used here fall within LGPL-2.1 section 5. The licence text is supplied in
+  `licenses/LGPL-2.1.txt`. No FFmpeg implementation source files are compiled into
+  the helper, and no FiiO shared libraries are redistributed.
+
   The built `mq_ui` binary statically incorporates these third-party components, whose licenses
   apply to the shipped binary (and whose source ships in `ui/` / `ui/lvgl/`):
 
@@ -260,7 +273,17 @@ in `site/fonts/`; see [the font index](licenses/README.md#website-fonts).
   |---|---|---|
   | **musl libc** (static C runtime) | MIT | `licenses/MIT-musl.txt`; source: https://musl.libc.org/ |
   | **FreeType 2.13.3** (TrueType renderer) | FreeType License (FTL) | `ui/third_party/freetype-2.13.3/docs/FTL.TXT` |
+  | **mbedTLS 3.6.7** (TLS and crypto for Cast and AirPlay; new in 1.2.2) | Apache-2.0 (upstream is Apache-2.0 OR GPL-2.0-or-later; used under Apache-2.0) | `licenses/Apache-2.0-mbedTLS.txt`; source: `ui/third_party/mbedtls-3.6.7/` |
+  | **Monocypher 4.0.2** (Ed25519 / X25519 / ChaCha20-Poly1305 for AirPlay pairing; new in 1.2.2) | BSD-2-Clause OR CC0-1.0 | `licenses/BSD-2-Clause-Monocypher.txt` (includes the CC0 text); source: `ui/third_party/monocypher-4.0.2/` |
+  | **libplist 2.6.0** (Apple property lists, AirPlay; new in 1.2.2) | LGPL-2.1-or-later (see below); `jsmn.c` MIT, `time64.c` MIT | `licenses/LGPL-2.1-libplist.txt`, `licenses/MIT-libplist-jsmn.txt` (Copyright (c) 2010 Serge A. Zaitsev), `licenses/MIT-libplist-time64.txt`; source: `ui/third_party/libplist-2.6.0/` |
+  | **SpeexDSP 1.2.1** (`resample.c` only, sample-rate conversion; new in 1.2.2) | BSD-3-Clause | `licenses/BSD-3-Clause-SpeexDSP.txt` and `licenses/BSD-3-Clause-SpeexDSP-resampler.txt` (Jean-Marc Valin and Thorvald Natvig); source: `ui/third_party/speexdsp-1.2.1/` |
+  | **dr_libs** (`dr_flac.h`, `dr_mp3.h`, `dr_wav.h`, David Reid; audio decoding; new in 1.2.2) | Public domain (Unlicense) OR MIT-0 | `licenses/Unlicense-or-MIT-0-dr_libs.txt`; source: `ui/third_party/dr_libs-dfe8377631000664666519fdb83da193fd8037f4/` |
+  | **nanopb 0.4.9.1** (Protocol Buffers runtime for Cast; new in 1.2.2) | zlib | `licenses/Zlib-nanopb.txt`; source: `ui/third_party/nanopb-0.4.9.1/` |
+  | **Cast channel schema** (`cast_channel.proto` from Google's openscreen project, compiled with nanopb into `cast_channel.pb.c`; new in 1.2.2) | BSD-3-Clause (Copyright 2019 The Chromium Authors for the schema; Copyright 2018 The Chromium Authors in the upstream licence) | `licenses/BSD-3-Clause-openscreen.txt`; source: `ui/third_party/cast/` |
   | **LVGL** (UI toolkit) | MIT | `licenses/MIT-LVGL.txt` |
+  | **LodePNG 20230410** (Cast artwork PNG encoder; Copyright (c) 2005-2023 Lode Vandevenne) | zlib | `licenses/Zlib-LodePNG.txt`; source: `ui/lvgl/src/libs/lodepng/` |
+  | **stb_image_write.h v1.16** (AirPlay artwork JPEG encoder; Copyright (c) 2017 Sean Barrett; new in 1.2.2) | MIT OR Unlicense | `licenses/MIT-or-Unlicense-stb_image_write.txt`; source: `ui/third_party/stb-1ee679ca/` |
+  | **gifdec** (GIF decoder, via LVGL) | Public domain upstream; LVGL changes MIT | `licenses/MIT-LVGL.txt`; upstream dedication: https://github.com/lecram/gifdec |
   | **JSMN** (JSON parser) | MIT | `licenses/MIT-JSMN.txt` |
   | **SQLite** (amalgamation) | Public domain | https://sqlite.org/copyright.html |
   | **MD5** (Peslyak/Solar Designer) | Public domain | `ui/md5.c` |
@@ -279,7 +302,19 @@ in `site/fonts/`; see [the font index](licenses/README.md#website-fonts).
   | **Nunito** (converted as `diskos_stone`) | SIL OFL 1.1 | `licenses/OFL-1.1-Nunito.txt` |
   | **Courier Prime** (converted as `diskos_zine`) | SIL OFL 1.1 | `licenses/OFL-1.1-CourierPrime.txt` |
   | **Rubik Glitch** (converted as `diskos_zine_glitch`) | SIL OFL 1.1 | `licenses/OFL-1.1-RubikGlitch.txt` |
+  | **Noto Sans** and, new in 1.2.2, **Noto Sans Hebrew** (converted as `font_intl_14` to `font_intl_20`; Latin-extended, Greek, Cyrillic and Hebrew glyphs) | SIL OFL 1.1 | `licenses/OFL-1.1-NotoSans.txt` |
   | **Font Awesome Free** glyphs (via LVGL `LV_SYMBOL_*`) | OFL 1.1 (fonts) + CC-BY 4.0 (icons) | `licenses/OFL-1.1-FontAwesome.txt`, `licenses/CC-BY-4.0.txt` |
+
+**libplist (LGPL-2.1-or-later) is statically linked into `mq_ui`.** The `mq_ui` binary as a whole is distributed
+under GPL-3.0-or-later. libplist and its use remain covered by LGPL-2.1-or-later;
+the licence text is `licenses/LGPL-2.1-libplist.txt`. We use LGPL-2.1 section 6(a):
+the corresponding libplist source, including libcnary, and the complete UI source,
+configurations and build scripts are supplied so recipients can modify libplist
+and rebuild and relink `mq_ui`. Modification for personal use and reverse
+engineering to debug such modifications are permitted. The unmodified library
+source is in `ui/third_party/libplist-2.6.0/`; its recipe is
+`ui/third_party/build-libplist.sh`.
+Upstream pins, URLs and the list of pruned files are in `ui/third_party/VENDOR.json`.
 
 The UI is based in part on the work of the FreeType Team. Portions of this
 software are copyright (C) 2024 The FreeType Project (https://freetype.org/).
@@ -295,6 +330,15 @@ Copyright (c) 2019 nyorain (https://github.com/nyorain/dlg), distributed under
 the Boost Software License, Version 1.0; the complete text is in
 `licenses/BSL-1.0-dlg.txt`. These headers have their own licence and are not
 used by the current build, which leaves `FT_DEBUG_LOGGING` disabled.
+
+## JPEG artwork encoder
+
+stb_image_write.h v1.16, Copyright (c) 2017 Sean Barrett, is used under
+the MIT licence (alternatively available under the Unlicense).
+Pinned source: nothings/stb@1ee679ca2ef753a528db5ba6801e1067b40481b8.
+The unchanged header is retained in `ui/third_party/stb-1ee679ca`; the
+complete terms are in `licenses/MIT-or-Unlicense-stb_image_write.txt`.
+
 Source Han Sans SC remains covered by the shipped OFL-1.1 notice, including the
 regenerated CJK supplement. The runtime TTC is read from the stock firmware and
 is not distributed here.
@@ -303,9 +347,10 @@ is not distributed here.
 
 - **FiiO's stock rootfs** - you supply your own official firmware; the installer only reads it locally
   and never redistributes it.
-- **ffmpeg** - diskOS no longer uses it for album artwork: as of 1.2.0 artwork is decoded by the
-  bundled `diskos-artdec` helper (see above; `ui/art.c`). FiiO's stock firmware has its own ffmpeg on
-  the device; the installer does **not** ship or call it for artwork.
+- **ffmpeg libraries** - diskOS does not redistribute FiiO's FFmpeg shared libraries. Album artwork is decoded by the bundled
+  `diskos-artdec` helper (see above; `ui/art.c`). The `diskos-audiodec` helper (see above) links dynamically
+  against the FFmpeg libraries that FiiO's stock firmware already has on the Disc, and is built using only
+  FFmpeg's public headers; the installer does **not** ship those libraries.
 
 ---
 
@@ -318,3 +363,15 @@ is not distributed here.
 - Upstream versions and corresponding source are shipped in-tree for the GPL/LGPL native
   binaries: Linux squashfs-tools 4.6.1 and libusb 1.0.27; macOS arm64 squashfs-tools 4.7.5 and libusb 1.0.30; liblzo2 2.10, the SPL, and usbboot. Source is in [`corresponding-source/`](corresponding-source/) and [`spl-src/`](spl-src/).
   The SPL includes the unresolved DDR parameter block described in [`SPL_SOURCE.md`](SPL_SOURCE.md).
+
+## macOS frozen app
+
+The frozen macOS app includes framework CPython and Tcl/Tk, PyUSB, PyCryptodome,
+certifi, platformdirs, and native flash tools with private libraries.
+The selected runtime's complete notices and component/version mapping ship in
+`licenses/macos/`; native-tool sources, patches and formulas ship under
+`corresponding-source/macos-arm64/`. `src/usbboot/` and the build recipes allow
+rebuilding and relinking the native tools against modified libusb. Keep those
+files with the app when redistributing. See `build/MACOS_FROZEN_DEPENDENCIES.md`
+for the required matching-runtime notice/source additions. The freezer refuses
+a package missing these files. Ad-hoc signing adds no redistribution restriction.

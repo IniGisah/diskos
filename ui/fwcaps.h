@@ -47,4 +47,7 @@ int fw_artist_class_settable(void);
 int fw_folder_jump_settable(void);    /* 0687 = folder jump (V2.28/V2.40/V2.57) */
 int fw_track_display_settable(void);  /* 064d = track display (V2.40/V2.57) */
 
+/* Initial receiver target only; older/unknown firmware has no qualified contract. */
+int fw_airplay_receiver(void);
+
 #endif /* FWCAPS_H */

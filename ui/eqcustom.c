@@ -37,8 +37,8 @@ static lv_obj_t *g_bval[NBAND];          /* band value labels */
 static lv_obj_t *g_master;               /* master gain slider */
 static lv_obj_t *g_mval;                 /* master value label */
 static lv_obj_t *g_slotlbl;              /* "USER1" selector label */
-static int       g_curve_known = 1;      /* 0 after a FAILED slot read: the sliders show a placeholder-flat,
-                                          * NOT the real curve, so an edit must not persist over the stock one */
+static int       g_curve_known;          /* editing requires a successful slot read; a failed refresh keeps
+                                          * the previously displayed curve and its slot identity */
 static int       g_slot_parametric = 0;  /* 1 when the loaded stock slot uses parametric params (filterType/Q/
                                           * fractional gain) the graphic editor can't represent: block edits so
                                           * an accidental drag doesn't FLATTEN a real stock PEQ preset */
@@ -130,45 +130,38 @@ static void persist_slot(int slot){
 /* pull a slot's curve into the sliders (no apply). A diskOS-owned slot comes from cfg; a slot we
  * have never edited shows the player's EXISTING (stock) PEQ curve, so selecting or first-editing
  * it never silently zeroes a stock USER preset. */
-static void load_slot(int slot){
-    g_slot_parametric = 0;
-    g_slot_foreign = 0;
+static int load_slot_read(int slot){
+    int dg[NBAND]={0}, dm=0;
+    int r=mdb_get_peq(slot,&dm,dg);
+    if(r<0) return 0;
+    int gr=r>0 ? mdb_peq_is_graphic(slot) : 1;
+    if(gr<0) return 0;
+    g_slot_parametric=(gr==0);
+    g_slot_foreign=0;
+    g_curve_known=(gr==1);
     if(slot_has_cfg(slot)){
         int cg[NBAND]; char k[24];
         for(int i=0;i<NBAND;i++){ band_key(k,sizeof k,slot,i); cg[i]=cfg_get_int(k,0); }
-        char mk[24]; master_key(mk,sizeof mk,slot);
-        int cm = cfg_get_int(mk,0);
-        /* A slot we own in cfg can still be changed underneath us by the stock player (to a different
-         * graphic curve, or to a parametric one). Reconcile our cfg against the LIVE DB curve: only when
-         * they still agree is cfg authoritative and safe to write back on select. Otherwise treat the slot
-         * as foreign - show the DB's current curve and never let a plain re-select overwrite it. */
-        int dg[NBAND] = {0}, dm = 0;
-        int r  = mdb_get_peq(slot, &dm, dg);           /* 1=found, 0=empty(flat), -1=read failed */
-        int gr = (r > 0) ? mdb_peq_is_graphic(slot)    /* 1 graphic / 0 parametric / -1 classify-failed */
-                         : (r == 0 ? 1 : -1);          /* empty = flat = graphic; read-fail = unknown */
-        if(r < 0 || gr < 0){
-            show_curve(cg, cm); g_curve_known = 0; g_slot_foreign = 1;  /* DB read/classify failed: block edit + overwrite */
-        } else if(gr == 0){
-            show_curve(dg, dm); g_slot_parametric = 1;                  /* changed to PARAMETRIC in stock: show it, */
-            g_curve_known = 0;  g_slot_foreign = 1;                     /* block edit AND overwrite */
-        } else if(dm == cm && memcmp(dg, cg, sizeof dg) == 0){
-            show_curve(cg, cm); g_curve_known = 1;                      /* cfg == DB: still ours, editable + safe to write back */
-        } else {
-            show_curve(dg, dm); g_curve_known = 1; g_slot_foreign = 1;  /* different GRAPHIC curve in stock: show truth, select-only until an explicit edit adopts it */
-        }
-    } else {
-        int g[NBAND], m=0;
-        int r = mdb_get_peq(slot,&m,g);     /* 1=found, 0=empty (flat is real), -1=read failed */
-        if(r > 0){
-            show_curve(g, m);
-            int gr = mdb_peq_is_graphic(slot);   /* 1 = graphic, 0 = parametric, -1 = classify read failed */
-            g_slot_parametric = (gr == 0);
-            g_curve_known = (gr == 1);           /* ONLY a confirmed-graphic slot is editable; parametric OR a
-                                                  * failed classification blocks the edit (never flatten unverified) */
-        }
-        else if(r == 0) { show_curve(NULL, 0); g_curve_known = 1; }   /* genuinely empty slot: flat IS the curve */
-        else            { show_curve(NULL, 0); g_curve_known = 0; }   /* read FAILED: unknown curve, block edits */
+        master_key(k,sizeof k,slot);
+        int cm=cfg_get_int(k,0);
+        g_slot_foreign=gr==0 || dm!=cm || memcmp(dg,cg,sizeof dg)!=0;
     }
+    show_curve(dg,dm);
+    return 1;
+}
+
+static int load_slot(int slot){
+    if(!mdb_ui_read_begin()){
+        g_curve_known=0; g_slot_foreign=1;
+        ui_toast("EQ read failed, try again"); return 0;
+    }
+    int ok=load_slot_read(slot);
+    mdb_ui_read_end();
+    if(!ok){
+        g_curve_known=0; g_slot_foreign=1;
+        ui_toast("EQ read failed, try again");
+    }
+    return ok;
 }
 
 /* switch the edited slot: show its curve, then apply it live. A diskOS-owned slot is written
@@ -177,10 +170,10 @@ static void load_slot(int slot){
 static void set_slot(int slot){
     if(slot < SLOT_MIN) slot = SLOT_MIN;
     if(slot > SLOT_MAX) slot = SLOT_MAX;
+    if(!load_slot(slot)) return;
     g_slot = slot;
     cfg_set_int("eq_slot", g_slot);
     if(g_slotlbl){ char b[16]; snprintf(b,sizeof b,"USER%d", g_slot-10); lv_label_set_text(g_slotlbl, b); }
-    load_slot(g_slot);
     if(!fw_custom_peq_writable()) return;               /* view-only: show the slot's curve, select nothing */
     if(slot_has_cfg(g_slot) && !g_slot_foreign){
         if(!apply_now()) ui_toast("Couldn't apply EQ");   /* our curve, DB agrees -> write back + select */
@@ -335,10 +328,10 @@ void eqcustom_refresh(void){
     int pre  = cfg_get_int("eq_preset", -1);
     if(pre >= SLOT_MIN && pre <= SLOT_MAX) init = pre;
     if(init < SLOT_MIN || init > SLOT_MAX) init = SLOT_MIN;
+    if(!load_slot(init)) return;
     g_slot = init;
     cfg_set_int("eq_slot", g_slot);
     char b[16]; snprintf(b, sizeof b, "USER%d", g_slot-10); lv_label_set_text(g_slotlbl, b);
-    load_slot(g_slot);       /* pull the slot's curve into the sliders WITHOUT applying */
 }
 
 void eqcustom_create(lv_obj_t *root){
@@ -360,13 +353,12 @@ void eqcustom_create(lv_obj_t *root){
     /* the slot selector sits under the title as it does under Default's (whose title ends at y 56): a taller title
      * face moves it down by the difference, a filled title cap puts it below the cap; the sliders give up the room */
     g_eq_drop = 0;
+    kit_pass(root);
     lv_obj_update_layout(root);
     if(title){
         lv_area_t a; lv_obj_get_coords(title, &a);
-        if(lv_obj_get_style_bg_opa(title, 0) > LV_OPA_50) g_eq_drop = a.y2 + 2 - 48;
-        else if(a.y2 > 56) g_eq_drop = a.y2 - 56 + 4;   /* and a little air: its faces are taller */
+        g_eq_drop = a.y2 + 8 - 48;
         if(g_eq_drop < 0) g_eq_drop = 0;
-        if(g_eq_drop > 40) g_eq_drop = 40;
     }
 
     make_slot_selector(root);

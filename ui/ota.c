@@ -19,6 +19,9 @@
 #include <dirent.h>
 #include <glob.h>
 #include <signal.h>
+#include <poll.h>
+#include <pthread.h>
+#include <semaphore.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
 #include <sys/statvfs.h>
@@ -186,20 +189,142 @@ static int run_capture(char *const argv[], int use_path, int merge_err, char *bu
     return (waited && WIFEXITED(st)) ? WEXITSTATUS(st) : -1;
 }
 
+/* One deferred child at most. No new fetch is admitted until it is collected.
+ * The cleanup thread sleeps when idle and never uses blocking waitpid. */
+static atomic_flag fetch_busy = ATOMIC_FLAG_INIT;
+static _Atomic pid_t fetch_deferred;
+static pthread_once_t fetch_reaper_once = PTHREAD_ONCE_INIT;
+static sem_t fetch_reap_ready;
+static int fetch_reaper_ok;
+
+static void *fetch_reaper(void *unused){
+    (void)unused;
+    for(;;){
+        while(sem_wait(&fetch_reap_ready) != 0) {}
+        pid_t child = atomic_load(&fetch_deferred);
+        for(;;){
+            pid_t w = waitpid(child, NULL, WNOHANG);
+            if(w == child || (w < 0 && errno == ECHILD)) break;
+            poll(NULL, 0, 100);
+        }
+        atomic_store(&fetch_deferred, 0);
+    }
+    return NULL;
+}
+
+static void fetch_reaper_init(void){
+    pthread_attr_t attr;
+    pthread_t th;
+    if(sem_init(&fetch_reap_ready, 0, 0) != 0) return;
+    if(pthread_attr_init(&attr) != 0){ sem_destroy(&fetch_reap_ready); return; }
+    int rc = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if(rc == 0) rc = pthread_create(&th, &attr, fetch_reaper, NULL);
+    pthread_attr_destroy(&attr);
+    if(rc != 0){ sem_destroy(&fetch_reap_ready); return; }
+    fetch_reaper_ok = 1;
+}
+
+/* Release lookup only: the verifier deliberately retains run_capture above. */
+static int64_t fetch_now_ms(void){
+    struct timespec ts;
+    if(clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return -1;
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static int fetch_capture(char *const argv[], char *buf, size_t cap, const _Atomic int *cancel){
+    int64_t start = fetch_now_ms();
+    if(start < 0 || (cancel && atomic_load(cancel))) return -1;
+    int64_t deadline = start + OTA_FETCH_DEADLINE_S * 1000;
+    int fds[2];
+    if(pipe2(fds, O_CLOEXEC) != 0) return -1;
+    if(fcntl(fds[0], F_SETFL, O_NONBLOCK) != 0){ close(fds[0]); close(fds[1]); return -1; }
+    pid_t child = fork();
+    if(child < 0){ close(fds[0]); close(fds[1]); return -1; }
+    if(child == 0){
+        /* Never exec in diskOS's group, even if group setup fails. The parent
+         * also owns the deadline while this setup (including open) is running. */
+        if(setpgid(0, 0) != 0) _exit(127);
+        int nul = open("/dev/null", O_RDWR);
+        if(nul < 0 || dup2(nul, 0) < 0 || dup2(fds[1], 1) < 0 || dup2(nul, 2) < 0) _exit(127);
+        if(nul > 2) close(nul);
+        close(fds[0]); close(fds[1]);
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+    close(fds[1]);
+    /* Resolve the pre-setpgid scheduling race; a group ID of child can never
+     * name diskOS's own group. Always kill the direct child too on failure. */
+    setpgid(child, child);
+    size_t got = 0;
+    int eof = 0, status;
+    for(;;){
+        int64_t now = fetch_now_ms();
+        if(now < 0 || now >= deadline || (cancel && atomic_load(cancel))) break;
+        if(!eof){
+            ssize_t nread = read(fds[0], buf + got, cap - got);
+            if(nread > 0){
+                got += (size_t)nread;
+                if(got == cap) break;                 /* same JSON cap as before */
+                continue;                            /* recheck deadline on every read */
+            }
+            if(nread == 0){ eof = 1; close(fds[0]); }
+            else if(errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) break;
+        }
+        if(eof){
+            pid_t w = waitpid(child, &status, WNOHANG);
+            if(w == child){
+                buf[got] = 0;
+                return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+            }
+            if(w < 0 && errno != EINTR) break;
+        }
+        int ms = (int)(deadline - now);
+        if(ms > 50) ms = 50;                          /* cancellation latency */
+        struct pollfd fd = { eof ? -1 : fds[0], POLLIN, 0 };
+        if(poll(&fd, 1, ms) < 0 && errno != EINTR) break;
+    }
+    if(!eof) close(fds[0]);
+    killpg(child, SIGKILL);
+    kill(child, SIGKILL);
+    /* No blocking waitpid, including after SIGKILL. Give normal kernel exit
+     * up to one extra second; EINTR neither restarts nor shortens that budget. */
+    int64_t reap_deadline = fetch_now_ms() + 1000;
+    for(;;){
+        pid_t w = waitpid(child, &status, WNOHANG);
+        if(w == child || (w < 0 && errno == ECHILD)) return -1;
+        int64_t now = fetch_now_ms();
+        if(now < 0 || now >= reap_deadline) break;
+        poll(NULL, 0, 10);
+    }
+    atomic_store(&fetch_deferred, child);
+    sem_post(&fetch_reap_ready);
+    return -1;
+}
+
 int ota_fetch_release(const ota_paths_t *p, char *tag, size_t n, int *has_bundle){
+    return ota_fetch_release_cancel(p, tag, n, has_bundle, NULL);
+}
+
+int ota_fetch_release_cancel(const ota_paths_t *p, char *tag, size_t n, int *has_bundle, const _Atomic int *cancel){
     if(has_bundle) *has_bundle = 0;
+    if(atomic_flag_test_and_set(&fetch_busy)) return -1;
+    pthread_once(&fetch_reaper_once, fetch_reaper_init);
+    if(!fetch_reaper_ok || atomic_load(&fetch_deferred)){
+        atomic_flag_clear(&fetch_busy);
+        return -1;
+    }
     char *buf = malloc(OTA_JSON_CAP + 1);
-    if(!buf) return -1;
+    if(!buf){ atomic_flag_clear(&fetch_busy); return -1; }
     char *argv[] = { "wget", "-qO-", "-T", "12", (char *)p->latest_url, NULL };
-    size_t got; int capped;
-    int rc = run_capture(argv, 1, 0, buf, OTA_JSON_CAP + 1, &got, &capped);
+    int rc = fetch_capture(argv, buf, OTA_JSON_CAP + 1, cancel);
     int ok = -1;
-    if(rc == 0 && !capped && sys_parse_tag(buf, tag, n) == 0){
+    if(rc == 0 && sys_parse_tag(buf, tag, n) == 0){
         ok = 0;
         int tv[3];
         if(has_bundle) *has_bundle = ota_ver_parse(tag, 1, tv) == 0 && ota_assets_ok(buf);   /* a tag outside the grammar is never offered */
     }
     free(buf);
+    atomic_flag_clear(&fetch_busy);
     return ok;
 }
 
@@ -539,8 +664,7 @@ int ota_stage(const ota_paths_t *p, const char *running, const char *tag, ota_pr
     if(ota_ver_cmp(tag, 1, ver, 0) != 0) return fin(ufd, ifd, OTA_E_BAD);                /* signed version must be the release's */
 
     /* commit: ready last, fsync everything (errors are failures), keep the old pending until the new one is durable */
-    if(atomic_load(&pg->cancel)) return fin(ufd, ifd, OTA_E_CANCEL);
-    atomic_store(&pg->phase, 3);
+    if(!ota_begin_commit(pg)) return fin(ufd, ifd, OTA_E_CANCEL);
     int wfd = openat(ifd, "ready.tmp", O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
     if(wfd < 0) return fin(ufd, ifd, OTA_E_IO);
     char rt[80]; int rl = snprintf(rt, sizeof rt, "version=%s\nepoch=%s\n", ver, ep);

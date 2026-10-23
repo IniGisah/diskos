@@ -499,7 +499,7 @@ class ElevationTests(unittest.TestCase):
 
 class GuiDriverTests(unittest.TestCase):
     def test_remove_panel_text_per_platform(self):
-        prefix = "Deletes this installer's saved state and owned GUI logs from THIS computer. "
+        prefix = "Deletes cached firmware, partial downloads, saved recovery images, installer state and owned GUI logs from THIS computer. "
         suffix = "If diskOS is still on the device, use 'Restore stock firmware' first."
         for host in ('windows', 'linux', 'macos'):
             with self.subTest(host=host):

@@ -171,7 +171,10 @@ static void fb_scan_leased(const char *dir, fb_result_t *res){
                 else if(fb_has_ext(nm, ".iso")){
                     char ip[FB_MAXPATH];
                     int pn = snprintf(ip, sizeof ip, "%s/%s", dir, nm);
-                    if(pn <= 0 || pn >= (int)sizeof ip || mdb_subtrack_count(ip, 1) <= 0) continue;
+                    if(pn <= 0 || pn >= (int)sizeof ip) continue;
+                    int count=mdb_subtrack_count(ip,1);
+                    if(count<0){ res->cancelled=1; closedir(d); return; }
+                    if(!count) continue;
                     kind = FB_K_ISO;
                 } else continue;
             }
@@ -423,7 +426,10 @@ static void fb_play(const char *name){
 /* Play the CUE/ISO tracks of `paths` (their SONG rows, TRACK order) through the exact queue the album drill uses. */
 static void fb_play_tracks(const char *const *paths, int n){
     mdb_plan_t plan;
-    if(!mdb_subtrack_plan(paths, n, &plan)){ ui_toast("Not in library"); return; }
+    if(!mdb_ui_read_begin()){ ui_toast("Library busy - try again"); return; }
+    int found=mdb_subtrack_plan(paths,n,&plan);
+    mdb_ui_read_end();
+    if(found<=0){ ui_toast(found<0 ? "Library busy - try again" : "Not in library"); return; }
     int ok = ui_play_plan(&plan, plan.ids[0]);
     mdb_plan_free(&plan);
     if(ok) screen_show(SCR_NOWPLAYING);
@@ -432,13 +438,20 @@ static void fb_play_tracks(const char *const *paths, int n){
  * library files whose CUE rows are the sheet's tracks. */
 #define FB_CUE_FILES 64
 static char g_cue_paths[FB_CUE_FILES][FB_MAXPATH];
-static int fb_cue_seen(const char *path){ return mdb_subtrack_count(path, 0) > 0; }
+static int g_cue_failed;
+static int fb_cue_seen(const char *path){
+    int n=mdb_subtrack_count(path,0);
+    if(n<0) g_cue_failed=1;
+    return n>0;
+}
 static void fb_play_sheet(const char *name){
     char full[FB_MAXPATH];
     int n = snprintf(full, sizeof full, "%s/%s", g_dir, name);
     if(n <= 0 || n >= (int)sizeof full){ ui_toast("Path too long"); return; }
     int np = 0;
+    g_cue_failed=0;
     if(sd_io_begin()){ np = scan_cue_files(full, g_cue_paths, FB_CUE_FILES, fb_cue_seen); sd_io_end(); }
+    if(g_cue_failed){ ui_toast("Library busy - try again"); return; }
     const char *paths[FB_CUE_FILES];
     for(int i = 0; i < np; i++) paths[i] = g_cue_paths[i];
     fb_play_tracks(paths, np);   /* np == 0: "Not in library" */

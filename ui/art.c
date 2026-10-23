@@ -2,6 +2,7 @@
 /* Copyright (C) 2026 diskOS contributors */
 #include "sdio.h"
 #include "art.h"
+#include "receiver.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -408,4 +409,51 @@ int art_make_all_ex_gen(const char *track, const char *cover_bmp, const char *th
     t_kill_preset_valid = 0;
     sd_io_end();
     return result;
+}
+
+#ifndef RECEIVER_ART_PATH
+#define RECEIVER_ART_PATH "/usr/data/fiio/cover.jpg"
+#endif
+static int receiver_art_same_file(const struct stat *a, const struct stat *b){
+    return a->st_dev==b->st_dev && a->st_ino==b->st_ino && a->st_size==b->st_size &&
+        a->st_mtim.tv_sec==b->st_mtim.tv_sec && a->st_mtim.tv_nsec==b->st_mtim.tv_nsec &&
+        a->st_ctim.tv_sec==b->st_ctim.tv_sec && a->st_ctim.tv_nsec==b->st_ctim.tv_nsec;
+}
+/* One immutable, bounded tmpfs snapshot. No sibling/online fallback or SD cache.
+ * aa05 does not prove publication succeeded or that these bytes own this item
+ * (see the binding in ipc.c). File checks protect the copy interval only. */
+int art_receiver_decode(const receiver_art_key *key, const char *cover,
+                        const char *thumb, const char *backdrop, unsigned gen){
+    int rc=-1, src=-1, dst=-1;
+    char temp[]="/tmp/.diskos-receiver-XXXXXX", buf[8192];
+    struct stat before, after, path;
+    if(!receiver_art_current(key)) return -2;
+    src=open(RECEIVER_ART_PATH,O_RDONLY|O_CLOEXEC|O_NOFOLLOW|O_NONBLOCK);
+    if(src<0 || fstat(src,&before) || !S_ISREG(before.st_mode) ||
+       before.st_size<=0 || before.st_size>(8<<20)) goto done;
+    dst=mkstemp(temp);
+    if(dst<0) goto done;
+    off_t left=before.st_size;
+    while(left>0){
+        ssize_t n=read(src,buf,left<(off_t)sizeof buf ? (size_t)left : sizeof buf);
+        if(n<0 && errno==EINTR) continue;
+        if(n<=0 || !receiver_art_current(key)) goto done;
+        for(ssize_t off=0;off<n;){
+            ssize_t w=write(dst,buf+off,(size_t)(n-off));
+            if(w<0 && errno==EINTR) continue;
+            if(w<=0) goto done;
+            off+=w;
+        }
+        left-=n;
+    }
+    if(fstat(src,&after) || lstat(RECEIVER_ART_PATH,&path) ||
+       !receiver_art_same_file(&before,&after) || !receiver_art_same_file(&before,&path)) goto done;
+    close(dst); dst=-1;
+    rc=art_run_pipeline(temp,cover,thumb,backdrop,1,gen,art_now_ms()+15000);
+    if(!receiver_art_current(key)) rc=-2;
+done:
+    if(src>=0) close(src);
+    if(dst>=0) close(dst);
+    unlink(temp);
+    return rc;
 }

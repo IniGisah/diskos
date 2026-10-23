@@ -361,6 +361,93 @@ static int ad_opus_tags(const unsigned char *p, uint32_t n){
     }
     return 1;   /* RFC 7845 permits padding after the comments */
 }
+/* Streaming Vorbis-comment compactor. Only wanted text survives; vendor, pictures
+ * and unused fields consume no packet storage. All declared lengths still have to
+ * finish. Bounds: 64 MiB physical headers, 262144 pages, 65536 entries, 1 MiB
+ * retained text. An oversized wanted field is incomplete, never absent. */
+#define AD_TAG_BYTES (64u*1024*1024)
+#define AD_TAG_PAGES 262144u
+typedef struct {
+    unsigned stage, have, prefix, opus, selected;
+    uint32_t left, count, entries, used, kept, size;
+    unsigned char word[8], field[32];
+} ad_comment_stream;
+static void ad_put_le32(unsigned char *p, uint32_t v){
+    for(unsigned i=0;i<4;i++) p[i]=(unsigned char)(v>>(8*i));
+}
+static int ad_comment_wanted(const unsigned char *p, unsigned n){
+    static const char *const keys[]={"TITLE=","ARTIST=","ALBUM=","GENRE=","ALBUMARTIST=","ALBUM ARTIST=","TRACKNUMBER=","DISCNUMBER="};
+    for(unsigned k=0;k<sizeof keys/sizeof keys[0];k++){
+        unsigned len=(unsigned)strlen(keys[k]);
+        if(n<len) continue;
+        unsigned i=0;
+        while(i<len && (p[i]|32)==((unsigned char)keys[k][i]|32)) i++;
+        if(i==len) return 1;
+    }
+    return 0;
+}
+/* Feed packet fragments; return 1, or AD_DEFERRED on resource/work limits,
+ * or 0 on malformed data. `out` has 1 MiB capacity. */
+static int ad_comment_feed(ad_comment_stream *c, unsigned char *out,
+                            const unsigned char *p, unsigned n){
+    while(n){
+        if(c->stage==0){
+            unsigned need=c->opus ? 8 : 7;
+            unsigned take=need-c->have; if(take>n) take=n;
+            memcpy(c->word+c->have,p,take); c->have+=take; p+=take; n-=take;
+            if(c->have<need) continue;
+            if(memcmp(c->word,c->opus ? "OpusTags" : "\003vorbis",need)) return 0;
+            memcpy(out,c->word,need); memset(out+need,0,8);
+            c->prefix=need; c->used=need+8; c->stage=1; c->have=0;
+        } else if(c->stage==1 || c->stage==3 || c->stage==4){
+            unsigned take=4-c->have; if(take>n) take=n;
+            memcpy(c->word+c->have,p,take); c->have+=take; p+=take; n-=take;
+            if(c->have<4) continue;
+            uint32_t value=ad_le32(c->word); c->have=0;
+            if(c->stage==1){ c->left=value; c->stage=value ? 2 : 3; }
+            else if(c->stage==3){
+                if(value>65536) return AD_DEFERRED;
+                c->count=value; c->stage=value ? 4 : 6;
+            } else { c->left=c->size=value; c->selected=0; c->stage=5; }
+        } else if(c->stage==2){
+            unsigned take=c->left<n ? c->left : n;
+            c->left-=take; p+=take; n-=take;
+            if(!c->left) c->stage=3;
+        } else if(c->stage==5){
+            unsigned take=c->left<n ? c->left : n;
+            if(!c->selected){
+                unsigned room=sizeof c->field-c->have, copy=take<room ? take : room;
+                memcpy(c->field+c->have,p,copy); c->have+=copy;
+                c->left-=copy; p+=copy; n-=copy;
+                if(c->left && c->have<sizeof c->field) continue;
+                c->selected=ad_comment_wanted(c->field,c->have) ? 2 : 1;
+                if(c->selected==2){
+                    if(c->used>1024*1024-4 || c->size>1024*1024-c->used-4) return AD_DEFERRED;
+                    ad_put_le32(out+c->used,c->size); c->used+=4;
+                    memcpy(out+c->used,c->field,c->have); c->used+=c->have; c->kept++;
+                }
+            } else {
+                if(c->selected==2){ memcpy(out+c->used,p,take); c->used+=take; }
+                c->left-=take; p+=take; n-=take;
+            }
+            if(c->left) continue;
+            c->have=0; c->entries++; c->stage=c->entries==c->count ? 6 : 4;
+        } else { /* Opus permits padding; Vorbis requires its framing bit. */
+            if(!c->opus && c->stage==6){ if(!(*p&1)) return 0; c->stage=7; }
+            return 1;
+        }
+    }
+    return 1;
+}
+static int ad_comment_finish(ad_comment_stream *c, unsigned char *out){
+    /* Empty last item can end exactly at the packet boundary. */
+    if(c->stage==5 && !c->left){
+        c->entries++; c->stage=c->entries==c->count ? 6 : 4;
+    }
+    if(c->stage!=(c->opus ? 6u : 7u)) return 0;
+    ad_put_le32(out+c->prefix+4,c->kept);
+    return 1;
+}
 /* Strict comment result for current-file TITLE consumers; scanner stays tolerant.
  * Validate every TITLE, including duplicates, so unusable values cannot hide behind
  * a previous success. First nonempty usable value wins, like the scanner. */
@@ -544,12 +631,13 @@ static long long ad_opus(FILE *f, unsigned char **tags, uint32_t *taglen,
     int pending=0, audio_seen=0;
     off_t fsz=ad_size(f), tags_end=0;
     int small=fsz<=AD_OPUS_SMALL;
-    size_t budget=2*1024*1024;
+    size_t budget=AD_TAG_BYTES;
+    ad_comment_stream comments={.opus=1};
     if(fsz<0){ result=-1; goto done; }
     if(!page || !pkt){ result=AD_DEFERRED; goto done; }
     if(fseeko(f,0,SEEK_SET)){ result=-1; goto done; }
     for(unsigned pages=0;; pages++){
-        if(packets<2 && pages>=64){ result=AD_DEFERRED; goto done; }
+        if(packets<2 && pages>=AD_TAG_PAGES){ result=AD_DEFERRED; goto done; }
         if(cancel && cancel(ctx)){ result=AD_CANCELLED; goto done; }
         if(budget<27){ result=small && packets>=2 ? 0 : AD_DEFERRED; goto done; }
         budget-=27;
@@ -578,15 +666,22 @@ static long long ad_opus(FILE *f, unsigned char **tags, uint32_t *taglen,
         unsigned completed=0;
         for(unsigned i=0;i<ns;i++){
             unsigned len=page[27+i];
-            if(len>PACKET_MAX-plen){ result=AD_DEFERRED; goto done; }
-            memcpy(pkt+plen,page+off,len); plen+=len; off+=len;
+            if(packets==1){
+                int cr=ad_comment_feed(&comments,pkt,page+off,len);
+                if(cr!=1){ result=cr; goto done; }
+            } else {
+                if(len>PACKET_MAX-plen){ result=AD_DEFERRED; goto done; }
+                memcpy(pkt+plen,page+off,len); plen+=len;
+            }
+            off+=len;
             pending=len==255;
             if(pending) continue;
             if(!packets){
                 if(pages || i+1!=ns || flags!=2 || granule || !ad_opus_head(pkt,plen)) goto done;
                 skip=pkt[10]|((unsigned)pkt[11]<<8); mapping=pkt[18];
             } else if(packets==1){
-                if(i+1!=ns || (flags&4) || granule || !ad_opus_tags(pkt,plen)) goto done;
+                if(i+1!=ns || (flags&4) || granule || !ad_comment_finish(&comments,pkt)) goto done;
+                plen=comments.used;
                 if(tags){ *tags=pkt; *taglen=plen; pkt=NULL; result=1; goto done; }
                 if(mapping) goto done;   /* multistream packet durations are unsupported */
                 tags_end=ftello(f);

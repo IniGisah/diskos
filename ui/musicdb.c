@@ -21,9 +21,22 @@
 #define DB_PATH "/usr/data/fiio/db/song.db"
 
 /* The whole library is held in a dynamically-sized array (no fixed cap): sized to
- * the actual SONG count at load. Loaded ONCE at startup, so the realloc never moves
- * under live pointers. */
+ * the actual SONG count at load. Reloads publish a complete replacement before
+ * the UI rebuilds its row pointers. */
 static mdb_song_t *g_songs = NULL;
+static char **g_catalog_paths;
+
+static void catalog_paths_free(char **paths, int n){
+    if(!paths) return;
+    for(int i=0;i<n;i++) free(paths[i]);
+    free(paths);
+}
+
+static int catalog_paths_differ(char **a, char **b, int n){
+    for(int i=0;i<n;i++)
+        if(strcmp(a[i], b[i])) return 1;
+    return 0;
+}
 static int g_n = 0;
 static int g_cap = 0;
 static int g_load_err = 0;   /* mdb_load hit a DB error (BUSY/IOERR/OOM) vs a genuinely empty library */
@@ -63,68 +76,108 @@ static void trim(char *s){
     while(n>0 && (s[n-1]==' '||s[n-1]=='\t'||s[n-1]=='\r'||s[n-1]=='\n')) s[--n]=0;
 }
 
-/* One cached read/write connection, opened lazily. Holds no lock while idle, so
- * it coexists with mq_player (rollback-journal DB) via the busy timeout. All
- * mdb_* calls run on the UI thread. Prepared statements + bound params replace
- * the old popen("sqlite3 ...") + hand-built SQL (no escaping/injection/parse
- * bugs, no fork/exec per query). */
+/* One cached read/write connection, opened lazily. UI-owned: no lock sleeps. Workers open their own handles, so a
+ * worker's busy handler or statement mutex cannot stall the display thread. */
 static sqlite3 *g_db;
-/* g_db is shared across the UI thread, the art worker, and the prewarm thread.
- * The lazy open MUST be serialized (a plain `if(!g_db) open` is a data race: two
- * threads can both open, publish competing handles, and corrupt state -> SIGSEGV).
- * The mutex also gives a memory barrier so a published g_db is fully initialised
- * before another thread sees it. FULLMUTEX makes concurrent USE of the open handle
- * safe (sqlite serializes every API call on it). */
 static pthread_mutex_t g_db_mu = PTHREAD_MUTEX_INITIALIZER;
 static sqlite3 *db(void){
     pthread_mutex_lock(&g_db_mu);
     if(!g_db){
         sqlite3 *tmp = NULL;
         if(sqlite3_open_v2(DB_PATH, &tmp, SQLITE_OPEN_READWRITE|SQLITE_OPEN_FULLMUTEX, NULL) == SQLITE_OK){
-            sqlite3_busy_timeout(tmp, 4000);
+            sqlite3_busy_timeout(tmp, 0);
+            int busy=0, rc;
             /* persistent per-song accent cache (computed once from album art, survives reboot).
              * ALTER is idempotent here: harmless error if the column already exists. */
-            sqlite3_exec(tmp, "ALTER TABLE SONG ADD COLUMN ACCENT INTEGER DEFAULT 0;", 0, 0, 0);
+            rc=sqlite3_exec(tmp, "ALTER TABLE SONG ADD COLUMN ACCENT INTEGER DEFAULT 0;", 0, 0, 0);
+            busy |= rc==SQLITE_BUSY || rc==SQLITE_LOCKED;
             /* the cover fingerprint (artcache_key) the accent was computed from: a replaced cover -> new
              * fingerprint -> the accent is recomputed instead of staying on the old art's colour */
-            sqlite3_exec(tmp, "ALTER TABLE SONG ADD COLUMN ACCENT_KEY TEXT;", 0, 0, 0);
+            rc=sqlite3_exec(tmp, "ALTER TABLE SONG ADD COLUMN ACCENT_KEY TEXT;", 0, 0, 0);
+            busy |= rc==SQLITE_BUSY || rc==SQLITE_LOCKED;
             /* diskOS-owned play history (separate table -> no SONG schema change, survives rescans,
              * ignored by the stock player). Drives Most-Played / Recently-Played. */
-            sqlite3_exec(tmp, "CREATE TABLE IF NOT EXISTS PLAY_STATS(PATH TEXT PRIMARY KEY, "
+            rc=sqlite3_exec(tmp, "CREATE TABLE IF NOT EXISTS PLAY_STATS(PATH TEXT PRIMARY KEY, "
                               "PLAYS INTEGER DEFAULT 0, LAST_PLAYED INTEGER DEFAULT 0);", 0, 0, 0);
+            busy |= rc==SQLITE_BUSY || rc==SQLITE_LOCKED;
             /* diskOS-owned audiobook progress (separate table, path-keyed like PLAY_STATS, survives
              * rescans + the stock DB rebuild). One bookmark per book; MEMBER_PATH is the file that was
              * playing (a multipart book has several), POSITION_MS the spot within it. */
-            sqlite3_exec(tmp, "CREATE TABLE IF NOT EXISTS BOOK_PROGRESS(BOOK_KEY TEXT PRIMARY KEY, "
+            rc=sqlite3_exec(tmp, "CREATE TABLE IF NOT EXISTS BOOK_PROGRESS(BOOK_KEY TEXT PRIMARY KEY, "
                               "MEMBER_PATH TEXT NOT NULL, POSITION_MS INTEGER NOT NULL DEFAULT 0, "
                               "UPDATED_AT INTEGER NOT NULL DEFAULT 0, COMPLETED INTEGER NOT NULL DEFAULT 0);", 0, 0, 0);
+            busy |= rc==SQLITE_BUSY || rc==SQLITE_LOCKED;
             /* diskOS-owned monotone counter + per-playlist export identity. A playlist's export filename
              * is keyed by a UID from this counter, NOT its pid or creation time: the create-allocator can
              * reuse a pid after a delete (it UPDATEs a new row's id upward without advancing
              * sqlite_sequence), and two creations can share a whole-second ADD_TIME, so neither is a
              * reuse-proof identity. The counter only ever increases and is persisted, so a UID is never
              * reused across playlist lifetimes -> two different playlists never target the same .m3u. */
-            sqlite3_exec(tmp, "CREATE TABLE IF NOT EXISTS DISKOS_META(K TEXT PRIMARY KEY, V INTEGER NOT NULL);", 0, 0, 0);
-            sqlite3_exec(tmp, "CREATE TABLE IF NOT EXISTS DISKOS_PL_EXPORT(PID INTEGER PRIMARY KEY, UID INTEGER NOT NULL);", 0, 0, 0);
-            g_db = tmp;   /* publish only after full init */
+            rc=sqlite3_exec(tmp, "CREATE TABLE IF NOT EXISTS DISKOS_META(K TEXT PRIMARY KEY, V INTEGER NOT NULL);", 0, 0, 0);
+            busy |= rc==SQLITE_BUSY || rc==SQLITE_LOCKED;
+            rc=sqlite3_exec(tmp, "CREATE TABLE IF NOT EXISTS DISKOS_PL_EXPORT(PID INTEGER PRIMARY KEY, UID INTEGER NOT NULL);", 0, 0, 0);
+            busy |= rc==SQLITE_BUSY || rc==SQLITE_LOCKED;
+            if(busy) sqlite3_close(tmp);   /* retry schema setup after the lock clears */
+            else g_db = tmp;
         } else if(tmp){ sqlite3_close(tmp); }
     }
     sqlite3 *ret = g_db;
     pthread_mutex_unlock(&g_db_mu);
     return ret;
 }
+/* A read snapshot is acquired before a UI list replaces its previous rows.
+ * A successful probe holds a SHARED lock through rendering's DB queries. Busy
+ * leaves the display alone; reopening retries. No worker uses this connection. */
+static unsigned g_ui_read_depth;
+static int g_ui_read_owns;
+int mdb_ui_read_begin(void){
+    sqlite3 *d=db();
+    if(!d) return 0;
+    int owns=sqlite3_get_autocommit(d);
+    if(owns && !g_ui_read_depth && !mdb_playlist_sync_registry()) return 0;
+    if(sqlite3_exec(d,"SAVEPOINT ui_read;",0,0,0)!=SQLITE_OK) return 0;
+    sqlite3_stmt *st=NULL;
+    int rc=sqlite3_prepare_v2(d,"SELECT ID FROM SONG LIMIT 1;",-1,&st,NULL);
+    if(rc==SQLITE_OK) rc=sqlite3_step(st);
+    sqlite3_finalize(st);
+    if(rc==SQLITE_ROW || rc==SQLITE_DONE){
+        if(!g_ui_read_depth) g_ui_read_owns=owns;
+        g_ui_read_depth++; return 1;
+    }
+    sqlite3_exec(d,"ROLLBACK TO ui_read; RELEASE ui_read;",0,0,0);
+    return 0;
+}
+void mdb_ui_read_end(void){
+    if(!g_db || !g_ui_read_depth) return;
+    g_ui_read_depth--;
+    if(sqlite3_exec(g_db,"RELEASE ui_read;",0,0,0)!=SQLITE_OK){
+        /* Close a failed snapshot without leaving a transaction open.
+         * Registry writes commit before this read-only snapshot starts. */
+        if(!g_ui_read_depth && g_ui_read_owns) sqlite3_exec(g_db,"ROLLBACK;",0,0,0);
+        else sqlite3_exec(g_db,"ROLLBACK TO ui_read; RELEASE ui_read;",0,0,0);
+    }
+    if(!g_ui_read_depth) g_ui_read_owns=0;
+}
+/* Short-lived, worker-owned reader. No schema writes and no UI mutex. */
+static sqlite3 *db_reader(void){
+    sqlite3 *d=NULL;
+    if(sqlite3_open_v2(DB_PATH,&d,SQLITE_OPEN_READONLY|SQLITE_OPEN_NOMUTEX,NULL)!=SQLITE_OK){
+        if(d) sqlite3_close(d);
+        return NULL;
+    }
+    sqlite3_busy_timeout(d,500);
+    return d;
+}
 /* Dedicated connection for the worker-thread accent cache (mdb_set_song_accent / mdb_song_accent_fresh) ONLY.
  * Keeping that UPDATE off g_db means a worker's row-change can never be misread by a
  * UI-thread sqlite3_changes() (which follows the UI thread's own step()), and a worker
  * write can never join/rollback a g_db transaction. INVARIANT: nothing else may use
  * g_db_w, and no code here may call sqlite3_changes() on it (would reintroduce a race
- * between the two worker threads). Shorter busy_timeout than g_db: a stuck UI txn must
+ * between the two worker threads). A 500 ms busy timeout: a stuck UI txn must
  * not wedge art decode for seconds - the accent write is best-effort, retried next decode. */
 static sqlite3 *g_db_w;
 static pthread_mutex_t g_db_w_mu = PTHREAD_MUTEX_INITIALIZER;
 static sqlite3 *db_w(void){
-    db();   /* ensure the main connection (and its ACCENT-column ALTER) is initialised first,
-             * so g_db_w never races an ALTER and the SONG.ACCENT column always exists. */
     pthread_mutex_lock(&g_db_w_mu);
     if(!g_db_w){
         sqlite3 *tmp = NULL;
@@ -139,15 +192,18 @@ static sqlite3 *db_w(void){
 }
 /* per-song accent (0xRRGGBB packed, 0 = not computed yet). Persisted in SONG.ACCENT. */
 int mdb_song_accent(const char *path){
-    sqlite3 *d = db(); if(!d || !path) return 0;
-    sqlite3_stmt *st; int rgb = 0;
+    sqlite3 *d = db(); if(!d || !path) return -1;
+    sqlite3_stmt *st=NULL; int rgb = -1;
     if(sqlite3_prepare_v2(d, "SELECT ACCENT FROM SONG WHERE PATH=? LIMIT 1;", -1, &st, NULL) == SQLITE_OK){
         sqlite3_bind_text(st, 1, path, -1, SQLITE_STATIC);
-        if(sqlite3_step(st) == SQLITE_ROW) rgb = sqlite3_column_int(st, 0);
-        sqlite3_finalize(st);
+        int rc=sqlite3_step(st);
+        if(rc==SQLITE_ROW) rgb=sqlite3_column_int(st,0);
+        else if(rc==SQLITE_DONE) rgb=0;
     }
+    sqlite3_finalize(st);
     return rgb;
 }
+
 void mdb_set_song_accent(const char *path, int rgb, const char *cover_key){
     sqlite3 *d = db_w(); if(!d || !path) return;   /* worker-only write on its private connection */
     sqlite3_stmt *st;
@@ -183,10 +239,9 @@ int mdb_song_accent_fresh(const char *path, const char *cover_key){
 }
 /* prewarm iterator: next SONG with ID > after_id, ordered by ID (covers ALL rows,
  * not just the in-memory cap). Fills *id and path. Returns 1 if a row was found.
- * Own prepared statement each call -> safe to call from the prewarm thread under
- * SQLITE_THREADSAFE=1 (serialized) alongside the UI thread's DB use. */
+ * Each call owns a read-only connection; never waits on the UI connection mutex. */
 int mdb_prewarm_next(int after_id, int *id, char *path, int cap){
-    sqlite3 *d = db(); if(!d) return 0;
+    sqlite3 *d = db_reader(); if(!d) return 0;
     sqlite3_stmt *st; int found = 0;
     if(sqlite3_prepare_v2(d, "SELECT ID, PATH FROM SONG WHERE ID > ? ORDER BY ID LIMIT 1;", -1, &st, NULL) == SQLITE_OK){
         sqlite3_bind_int(st, 1, after_id);
@@ -198,6 +253,7 @@ int mdb_prewarm_next(int after_id, int *id, char *path, int cap){
         }
         sqlite3_finalize(st);
     }
+    sqlite3_close(d);
     return found;
 }
 /* text column, never NULL (so snprintf "%s" is safe) */
@@ -227,10 +283,24 @@ static int playlist_has_m3u_cols(sqlite3 *d){ return table_has_col(d, "CUSTOM_PL
     "CASE WHEN (IS_CUE=1 OR IS_ISO=1) THEN TRACK END,ID"
 #define MDB_GROUP_CODE_EXPR "CASE WHEN NULLIF(ALBUM_ARTIST,'') IS NOT NULL AND ALBUM_ARTIST_CODE IS NOT NULL THEN ALBUM_ARTIST_CODE ELSE ARTIST_CODE END"
 
-int mdb_load(void){
-    g_n = 0; g_load_err = 0;
-    groups_free();                 /* library reloaded -> drop cached Artists/Albums/Genres */
+static sqlite3_int64 g_catalog_version = -1;
+static int g_catalog_changed;
+static sqlite3_int64 mdb_data_version(void){
+    sqlite3_stmt *st = NULL;
+    sqlite3_int64 v = -1;
+    sqlite3 *d = db();
+    if(d && sqlite3_prepare_v2(d, "PRAGMA main.data_version;", -1, &st, NULL) == SQLITE_OK
+       && sqlite3_step(st) == SQLITE_ROW) v = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    return v;
+}
+
+static int mdb_read(int compare){
+    int row = 0;
+    if(!compare) g_n = 0;
+    g_load_err = 0;
     sqlite3 *d = db(); if(!d){ g_load_err = 1; return 0; }
+    if(!compare){
     /* size the array to the real count first (no 1500 cap) */
     sqlite3_stmt *cst;
     int count = 0, count_ok = 0;
@@ -247,6 +317,9 @@ int mdb_load(void){
                                                                * which otherwise reads as a benign race -
                                                                * flag it so a partial library isn't silent */
     if(g_cap == 0){ if(count > 0) g_load_err = 1; return 0; }   /* count>0 but no cap => OOM (error); count==0 => empty */
+    g_catalog_paths = calloc((size_t)g_cap, sizeof *g_catalog_paths);
+    if(!g_catalog_paths){ g_load_err = 1; return 0; }
+    }
     sqlite3_stmt *st;
     /* col 6 = the Artists-view key under "Album Artist": the album artist, else the artist. The player keys its type-2
      * queue with COALESCE(ALBUM_ARTIST,ARTIST) (V2.40 0x44b818 / V2.57 0x450f88), which files an EMPTY-STRING album
@@ -267,7 +340,7 @@ int mdb_load(void){
     else snprintf(codes, sizeof codes, "0,0,0,0");
     snprintf(sql, sizeof sql,
         "SELECT IFNULL(TITLE,IFNULL(NAME,'Untitled')),IFNULL(ARTIST,''),IFNULL(ALBUM,''),"
-        "IFNULL(DURATION,0),ID,IFNULL(GENRE,''),%s,IFNULL(TRACK,0),%s FROM SONG "
+        "IFNULL(DURATION,0),ID,IFNULL(GENRE,''),%s,IFNULL(TRACK,0),%s,IFNULL(PATH,'') FROM SONG "
         "WHERE lower(PATH) NOT LIKE '%%.m4b' "   /* audiobooks live in the Books view, not the music lists */
         "ORDER BY %s;",
         has_aa ? "IFNULL(COALESCE(NULLIF(ALBUM_ARTIST,''),ARTIST),'')" : "IFNULL(ARTIST,'')",
@@ -275,8 +348,18 @@ int mdb_load(void){
         has_codes ? MDB_SONG_ORDER : "1 COLLATE NOCASE");
     if(sqlite3_prepare_v2(d, sql, -1, &st, NULL) != SQLITE_OK){ g_load_err = 1; return 0; }
     int rc = SQLITE_DONE;
-    while(g_n < g_cap && (rc = sqlite3_step(st)) == SQLITE_ROW){
-        mdb_song_t *s = &g_songs[g_n++];
+    while((compare || g_n < g_cap) && (rc = sqlite3_step(st)) == SQLITE_ROW){
+        mdb_song_t next;
+        mdb_song_t *s = compare ? &next : &g_songs[g_n++];
+        memset(s, 0, sizeof *s);
+        if(!compare){
+            g_catalog_paths[g_n-1] = strdup(colt(st,12));
+            if(!g_catalog_paths[g_n-1]){
+                g_load_err = 1;
+                sqlite3_finalize(st);
+                return 0;
+            }
+        }
         snprintf(s->title,  MDB_STR, "%s", colt(st,0));
         snprintf(s->artist, MDB_STR, "%s", colt(st,1));
         snprintf(s->album,  MDB_STR, "%s", colt(st,2));
@@ -289,13 +372,71 @@ int mdb_load(void){
         s->code_artist = sqlite3_column_int(st,8); s->code_album = sqlite3_column_int(st,9);
         s->code_genre  = sqlite3_column_int(st,10); s->code_group = sqlite3_column_int(st,11);
         trim(s->title); trim(s->artist); trim(s->album); trim(s->genre);   /* album_h keeps the exact (untrimmed, untruncated) identity */
+        if(compare && (row >= g_n ||
+           memcmp(&g_songs[row], s, sizeof *s) ||
+           strcmp(g_catalog_paths[row], colt(st,12)))){
+            sqlite3_finalize(st); return 1;
+        }
+        row++;
     }
     /* rc==ROW means we stopped only because the buffer filled (more rows than COUNT -> a benign
      * add-between-queries race, not an error). Anything other than ROW/DONE is a mid-query
      * BUSY/IOERR -> a partial load that must NOT read as "empty" to the startup auto-scan. */
     if(rc != SQLITE_ROW && rc != SQLITE_DONE) g_load_err = 1;
     sqlite3_finalize(st);
+    return compare ? row != g_n : g_n;
+}
+
+/* Publish only a complete load. Keep old row pointers and group caches on error or
+ * identical data (notably worker ACCENT writes). Sample before reading so a commit
+ * during the load remains detectable at the next requested check. */
+int mdb_load(void){
+    sqlite3 *d = db();
+    if(d) sqlite3_busy_timeout(d, 0); /* reload retries must never wait on a competing writer */
+    sqlite3_int64 v = mdb_data_version();
+    mdb_song_t *old = g_songs;
+    char **old_paths = g_catalog_paths;
+    int n = g_n, cap = g_cap;
+    g_songs = NULL; g_cap = 0;
+    g_catalog_paths = NULL;
+    mdb_read(0);
+    g_catalog_changed = !g_load_err && (n != g_n ||
+        (n && (memcmp(old, g_songs, (size_t)n * sizeof *old) ||
+               catalog_paths_differ(old_paths, g_catalog_paths, n))));
+    if(!g_catalog_changed){
+        catalog_paths_free(g_catalog_paths, g_n);
+        g_catalog_paths = old_paths;
+        free(g_songs); g_songs = old; g_n = n; g_cap = cap;
+    } else {
+        groups_free();
+        catalog_paths_free(old_paths, n);
+        free(old);
+    }
+    if(!g_load_err) g_catalog_version = v;
+    if(d) sqlite3_busy_timeout(d, 0);
     return g_n;
+}
+int mdb_catalog_changed(void){ return g_catalog_changed; }
+static int mdb_check_external(void){
+    sqlite3_int64 v = mdb_data_version();
+    if(!g_load_err && v >= 0 && v == g_catalog_version) return 0;
+    if(v < 0){ g_load_err = 1; return 0; }
+    /* Stream the same visible fields into one stack row: no catalogue allocation
+     * or cache invalidation for ACCENT-only writes. Stop at the first difference. */
+    if(!g_load_err && !mdb_read(1)){
+        if(!g_load_err) g_catalog_version = v;
+        return 0;
+    }
+    mdb_load();
+    return g_catalog_changed;
+}
+
+int mdb_refresh_external(void){
+    sqlite3 *d = db();
+    if(d) sqlite3_busy_timeout(d, 0);
+    int changed = mdb_check_external();
+    if(d) sqlite3_busy_timeout(d, 0);
+    return changed;
 }
 
 int mdb_song_count(void){ return g_n; }
@@ -322,27 +463,29 @@ int mdb_load_failed(void){ return g_load_err; }   /* 1 if the last mdb_load hit 
 const mdb_song_t *mdb_song(int i){ return (i>=0 && i<g_n) ? &g_songs[i] : NULL; }
 
 /* On-demand PATH lookup by song ID (not cached in mdb_song_t to save RAM;
- * taps are rare so a per-tap query is fine). Returns 1 on success. */
+ * taps are rare so a per-tap query is fine). 1 found, 0 absent, -1 retry. */
 int mdb_song_path(int id, char *out, int cap){
     if(!out || cap<=0) return 0;
-    out[0]=0;
-    sqlite3 *d = db(); if(!d) return 0;
-    sqlite3_stmt *st;
-    if(sqlite3_prepare_v2(d, "SELECT PATH FROM SONG WHERE ID=? LIMIT 1;", -1, &st, NULL) != SQLITE_OK) return 0;
-    sqlite3_bind_int(st, 1, id);
-    if(sqlite3_step(st) == SQLITE_ROW) snprintf(out, cap, "%s", colt(st,0));
+    sqlite3 *d=db(); if(!d) return -1;
+    sqlite3_stmt *st=NULL;
+    if(sqlite3_prepare_v2(d,"SELECT PATH FROM SONG WHERE ID=? LIMIT 1;",-1,&st,NULL)!=SQLITE_OK) return -1;
+    sqlite3_bind_int(st,1,id);
+    int rc=sqlite3_step(st), found=-1;
+    if(rc==SQLITE_ROW){ snprintf(out,cap,"%s",colt(st,0)); found=out[0] ? 1 : 0; }
+    else if(rc==SQLITE_DONE){ out[0]=0; found=0; }
     sqlite3_finalize(st);
-    return out[0] ? 1 : 0;
+    return found;
 }
 
-/* On-demand SONG.ID for an absolute file path (folder browser -> library play). 0 if not indexed. */
+/* On-demand SONG.ID: 0 if not indexed, -1 if the read failed. */
 int mdb_song_id_by_path(const char *path){
     if(!path || !*path) return 0;
-    sqlite3 *d = db(); if(!d) return 0;
+    sqlite3 *d = db(); if(!d) return -1;
     sqlite3_stmt *st;
-    if(sqlite3_prepare_v2(d, "SELECT ID FROM SONG WHERE PATH=? LIMIT 1;", -1, &st, NULL) != SQLITE_OK) return 0;
+    if(sqlite3_prepare_v2(d, "SELECT ID FROM SONG WHERE PATH=? LIMIT 1;", -1, &st, NULL) != SQLITE_OK) return -1;
     sqlite3_bind_text(st, 1, path, -1, SQLITE_TRANSIENT);
-    int id = (sqlite3_step(st) == SQLITE_ROW) ? sqlite3_column_int(st, 0) : 0;
+    int rc=sqlite3_step(st);
+    int id = rc==SQLITE_ROW ? sqlite3_column_int(st,0) : (rc==SQLITE_DONE ? 0 : -1);
     sqlite3_finalize(st);
     return id;
 }
@@ -363,23 +506,27 @@ int mdb_song_album(int id, char *out, int cap){
 /* Canonical ALBUM + ARTIST for a song by its PATH. The player's a2 metadata
  * strings can differ from the DB's stored values (whitespace/encoding/suffix),
  * so a Go-to-Album/Artist drill must match by the DB record, not the metadata
- * string, or it finds nothing. Returns 1 if the row was found. */
+ * string, or it finds nothing. 1 found, 0 absent, -1 retry (outputs preserved). */
 int mdb_song_meta_by_path(const char *path, char *album, int acap, char *artist, int arcap){
-    if(album && acap>0) album[0]=0;
-    if(artist && arcap>0) artist[0]=0;
     if(!path || !path[0]) return 0;
-    sqlite3 *d = db(); if(!d) return 0;
+    sqlite3 *d = db_reader(); if(!d) return -1;
+    sqlite3_busy_timeout(d,0);   /* UI and queue worker both call this helper */
     sqlite3_stmt *st;
     if(sqlite3_prepare_v2(d, "SELECT IFNULL(ALBUM,''),IFNULL(ARTIST,'') FROM SONG WHERE PATH=? LIMIT 1;",
-                          -1, &st, NULL) != SQLITE_OK) return 0;
+                          -1, &st, NULL) != SQLITE_OK){ sqlite3_close(d); return -1; }
     sqlite3_bind_text(st, 1, path, -1, SQLITE_STATIC);
-    int found = 0;
-    if(sqlite3_step(st) == SQLITE_ROW){
+    int found = -1;
+    int rc=sqlite3_step(st);
+    if(rc == SQLITE_ROW){
         if(album  && acap>0)  snprintf(album,  acap,  "%s", colt(st,0));
         if(artist && arcap>0) snprintf(artist, arcap, "%s", colt(st,1));
         found = 1;
+    } else if(rc==SQLITE_DONE){
+        found=0;
+        if(album && acap>0) album[0]=0;
+        if(artist && arcap>0) artist[0]=0;
     }
-    sqlite3_finalize(st);
+    sqlite3_finalize(st); sqlite3_close(d);
     return found;
 }
 
@@ -454,29 +601,35 @@ int mdb_artist_class_type(void){
     return v;
 }
 
-int mdb_play_pos(int id, int list_type, const char *name){
-    /* The title-code ordering the player uses for non-album lists (kept in step with MDB_FAV_ORDER). */
-    static const char *ORDER_TAIL =
-        "CASE WHEN IS_CUE=0 AND IS_ISO=0 THEN 1 WHEN IS_CUE=1 OR IS_ISO=1 THEN 2 END,"
-        "CASE WHEN (IS_CUE=0 AND IS_ISO=0) THEN CASE WHEN TITLE IS NOT NULL THEN TITLE_CODE ELSE NAME_CODE END END,"
-        "CASE WHEN (IS_CUE=1 OR IS_ISO=1) THEN NAME_CODE END,"
-        "CASE WHEN (IS_CUE=1 OR IS_ISO=1) THEN ID END,"
-        "CASE WHEN (IS_CUE=1 OR IS_ISO=1) THEN TRACK END";
-    static const char *ORDER_ALBUM =
-        "CASE WHEN DISC=0 THEN 1 ELSE 0 END,DISC,"
-        "CASE WHEN TRACK=0 THEN 1 ELSE 0 END,TRACK,"
-        "CASE WHEN TITLE IS NOT NULL THEN TITLE_CODE ELSE NAME_CODE END";
-
-    sqlite3 *d = db(); if(!d) return 0;
-    /* order + filter column are CONSTANTS chosen by list_type (never user text);
-     * the playlist NAME is bound, not interpolated. */
-    const char *order = (list_type==3) ? ORDER_ALBUM : ORDER_TAIL;
-    const char *col   = (list_type==3) ? "ALBUM" : (list_type==2) ? "ARTIST" : (list_type==10) ? "GENRE" : NULL;
+/* The player's per-list-type ORDER BY and filter column, shared by mdb_play_pos and mdb_list_song_ids so a Cast queue is in
+ * exactly the order a position is computed in. MDB_ALBUM_ORDER is the one album-order text (types 3/7/8). */
+#define MDB_ALBUM_ORDER "CASE WHEN DISC=0 THEN 1 ELSE 0 END,DISC,CASE WHEN TRACK=0 THEN 1 ELSE 0 END,TRACK," \
+                        "CASE WHEN TITLE IS NOT NULL THEN TITLE_CODE ELSE NAME_CODE END"   /* player album order (3/7/8) */
+/* The title-code ordering the player uses for non-album lists (kept in step with MDB_FAV_ORDER). */
+static const char *const MDB_ORDER_TAIL =
+    "CASE WHEN IS_CUE=0 AND IS_ISO=0 THEN 1 WHEN IS_CUE=1 OR IS_ISO=1 THEN 2 END,"
+    "CASE WHEN (IS_CUE=0 AND IS_ISO=0) THEN CASE WHEN TITLE IS NOT NULL THEN TITLE_CODE ELSE NAME_CODE END END,"
+    "CASE WHEN (IS_CUE=1 OR IS_ISO=1) THEN NAME_CODE END,"
+    "CASE WHEN (IS_CUE=1 OR IS_ISO=1) THEN ID END,"
+    "CASE WHEN (IS_CUE=1 OR IS_ISO=1) THEN TRACK END";
+/* order + filter column are CONSTANTS chosen by list_type (never user text); col NULL = unfiltered. Returns 0 when the
+ * player's Artist grouping setting cannot be read (type 2 only). */
+static int play_list_clause(int list_type, const char **order, const char **col){
+    *order = (list_type==3) ? MDB_ALBUM_ORDER : MDB_ORDER_TAIL;
+    *col   = (list_type==3) ? "ALBUM" : (list_type==2) ? "ARTIST" : (list_type==10) ? "GENRE" : NULL;
     if(list_type == 2){   /* the artist queue follows the player's Artist/Album-Artist setting */
         int cls = mdb_artist_class_type();
         if(cls < 0) return 0;                       /* unknown: "not found" -> the caller plays it via all songs */
-        if(cls == 1) col = "COALESCE(ALBUM_ARTIST,ARTIST)";
+        if(cls == 1) *col = "COALESCE(ALBUM_ARTIST,ARTIST)";
     }
+    return 1;
+}
+
+int mdb_play_pos(int id, int list_type, const char *name){
+    sqlite3 *d = db(); if(!d) return 0;
+    /* the playlist NAME is bound, not interpolated. */
+    const char *order, *col;
+    if(!play_list_clause(list_type, &order, &col)) return 0;
     char sql[1400];
     /* Exclude .m4b from the row-numbering so the position is BOOK-FREE, matching the music queue once books
      * are migrated out of SONG (the play path gates on that). Without this, a book still sitting in SONG
@@ -499,8 +652,6 @@ int mdb_play_pos(int id, int list_type, const char *name){
 }
 
 /* ---- Album identity + play plans ------------------------------------------------------------------------------ */
-#define MDB_ALBUM_ORDER "CASE WHEN DISC=0 THEN 1 ELSE 0 END,DISC,CASE WHEN TRACK=0 THEN 1 ELSE 0 END,TRACK," \
-                        "CASE WHEN TITLE IS NOT NULL THEN TITLE_CODE ELSE NAME_CODE END"   /* player album order (3/7/8) */
 #define MDB_TYPE7_MAX 1000 /* bytes per type-7 key: the player sscanf()s each into a 1024-byte stack buffer (V2.40
                            * 0x42399c/0x423bbc, V2.57 0x429008/0x429228 - static RE); keys are < MDB_STR anyway */
 #define MDB_KEY_WHERE "((COALESCE(ALBUM_ARTIST,ARTIST)=?1) OR (?1 IS NULL AND COALESCE(ALBUM_ARTIST,ARTIST) IS NULL)) AND ALBUM=?2"
@@ -556,13 +707,41 @@ static int ids_ordered(const char *where, const char *p1, int p1null, const char
     if(p1null) sqlite3_bind_null(st, 1); else sqlite3_bind_text(st, 1, p1 ? p1 : "", -1, SQLITE_STATIC);
     if(p2) sqlite3_bind_text(st, 2, p2, -1, SQLITE_STATIC);
     int n = 0, rc;
-    while((rc = sqlite3_step(st)) == SQLITE_ROW){ if(n < cap) ids[n] = sqlite3_column_int(st, 0); n++; }
+    while((rc = sqlite3_step(st)) == SQLITE_ROW){ if(n < cap && ids) ids[n] = sqlite3_column_int(st, 0); n++; }
     sqlite3_finalize(st);
     return rc == SQLITE_DONE ? n : -1;
 }
 int mdb_album_key_song_ids(const mdb_album_key_t *k, int *ids, int cap){
     if(!k || !k->album[0]) return -1;
     return ids_ordered(MDB_KEY_WHERE, k->owner, k->owner_null, k->album, 1, ids, cap);
+}
+/* The SONG.IDs of one stock list, in the order the player queues them (Cast selection source; read-only, no reserved slot).
+ * Types 1 (all), 2 (artist), 3 (album), 10 (genre) use play_list_clause - the clause mdb_play_pos ranks with - and, like it,
+ * leave .m4b books out; type 8 (genre + album, name = the player's {"style":"..", "album":".."} payload, parsed with the
+ * player's own %[^"] rule) goes through ids_ordered. Returns the full match count (ids written up to cap), -1 on a DB error,
+ * an unknown list type or a name that does not fit the type. Ties in the sort key are left to SQLite exactly as the
+ * player's own INSERT...SELECT leaves them. */
+int mdb_list_song_ids(int list_type, const char *name, int *ids, int cap){
+    if(!name) name = "";
+    if(list_type == 8){
+        char style[MDB_STR], album[MDB_STR];
+        if(sscanf(name, "{\"style\":\"%159[^\"]\", \"album\":\"%159[^\"]\"}", style, album) != 2 || !album[0]) return -1;
+        return ids_ordered("GENRE=?1 AND ALBUM=?2", style, 0, album, 1, ids, cap);
+    }
+    if(list_type != 1 && list_type != 2 && list_type != 3 && list_type != 10) return -1;
+    sqlite3 *d = db(); if(!d) return -1;
+    const char *order, *col;
+    if(!play_list_clause(list_type, &order, &col)) return -1;
+    char sql[1000];
+    snprintf(sql, sizeof sql, "SELECT ID FROM SONG WHERE %s%slower(PATH) NOT LIKE '%%.m4b' ORDER BY %s;",
+             col ? col : "", col ? "=? AND " : "", order);
+    sqlite3_stmt *st;
+    if(sqlite3_prepare_v2(d, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    if(col) sqlite3_bind_text(st, 1, name, -1, SQLITE_STATIC);
+    int n = 0, rc;
+    while((rc = sqlite3_step(st)) == SQLITE_ROW){ if(n < cap && ids) ids[n] = sqlite3_column_int(st, 0); n++; }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
 }
 static int same_seq(const int *a, int na, const int *b, int nb){ return na == nb && (na == 0 || !memcmp(a, b, (size_t)na * sizeof *a)); }
 /* The play plan for one album: the stock album queue (type 3, ALBUM=?) when it holds exactly this album's rows in the
@@ -688,37 +867,42 @@ int mdb_plan_pos(const mdb_plan_t *plan, int song_id){
 void mdb_plan_free(mdb_plan_t *plan){ if(plan){ free(plan->ids); plan->ids = NULL; plan->count = 0; } }
 
 /* CUE / ISO sub-tracks kept under one file PATH (Browse Files): how many rows PATH has with IS_CUE or IS_ISO set
- * (iso_only = count IS_ISO rows only). 0 when none or on a DB error. */
+ * (iso_only = count IS_ISO rows only). 0 when none, -1 on a DB error. */
 int mdb_subtrack_count(const char *path, int iso_only){
-    sqlite3 *d = db(); if(!d || !path) return 0;
-    sqlite3_stmt *st; int n = 0;
+    if(!path) return 0;
+    sqlite3 *d = db_reader(); if(!d) return -1;
+    sqlite3_busy_timeout(d,0);   /* also called by UI; never sleep */
+    sqlite3_stmt *st; int n = -1;
     if(sqlite3_prepare_v2(d, iso_only ? "SELECT COUNT(*) FROM SONG WHERE PATH=?1 AND COALESCE(IS_ISO,0)=1;"
-                                      : "SELECT COUNT(*) FROM SONG WHERE PATH=?1 AND (COALESCE(IS_CUE,0)=1 OR COALESCE(IS_ISO,0)=1);", -1, &st, NULL) != SQLITE_OK) return 0;
+                                      : "SELECT COUNT(*) FROM SONG WHERE PATH=?1 AND (COALESCE(IS_CUE,0)=1 OR COALESCE(IS_ISO,0)=1);", -1, &st, NULL) != SQLITE_OK){ sqlite3_close(d); return -1; }
     sqlite3_bind_text(st, 1, path, -1, SQLITE_STATIC);
     if(sqlite3_step(st) == SQLITE_ROW) n = sqlite3_column_int(st, 0);
     sqlite3_finalize(st);
+    sqlite3_close(d);
     return n;
 }
 /* The exact queue for the CUE/ISO tracks of `paths` (each in TRACK order, files in the order given): a type-5 plan, since
- * no stock list type holds them. 1 = built (caller frees), 0 = none of the paths has sub-track rows. */
+ * no stock list type holds them. 1 built (caller frees), 0 absent, -1 failed (no partial plan). */
 int mdb_subtrack_plan(const char *const *paths, int npaths, mdb_plan_t *plan){
     if(!plan || !paths || npaths <= 0) return 0;
     memset(plan, 0, sizeof *plan);
-    sqlite3 *d = db(); if(!d) return 0;
+    sqlite3 *d = db(); if(!d) return -1;
     sqlite3_stmt *st;
-    if(sqlite3_prepare_v2(d, "SELECT ID FROM SONG WHERE PATH=?1 AND (COALESCE(IS_CUE,0)=1 OR COALESCE(IS_ISO,0)=1) ORDER BY TRACK,ID;", -1, &st, NULL) != SQLITE_OK) return 0;
+    if(sqlite3_prepare_v2(d, "SELECT ID FROM SONG WHERE PATH=?1 AND (COALESCE(IS_CUE,0)=1 OR COALESCE(IS_ISO,0)=1) ORDER BY TRACK,ID;", -1, &st, NULL) != SQLITE_OK) return -1;
     int cap = 0, n = 0; int *ids = NULL;
     for(int i = 0; i < npaths; i++){
         if(!paths[i]) continue;
         sqlite3_reset(st); sqlite3_bind_text(st, 1, paths[i], -1, SQLITE_STATIC);
-        while(sqlite3_step(st) == SQLITE_ROW){
+        int rc;
+        while((rc=sqlite3_step(st)) == SQLITE_ROW){
             if(n == cap){
                 int nc = cap ? cap * 2 : 32; int *ni = realloc(ids, (size_t)nc * sizeof *ids);
-                if(!ni){ free(ids); sqlite3_finalize(st); return 0; }
+                if(!ni){ free(ids); sqlite3_finalize(st); return -1; }
                 ids = ni; cap = nc;
             }
             ids[n++] = sqlite3_column_int(st, 0);
         }
+        if(rc!=SQLITE_DONE){ free(ids); sqlite3_finalize(st); return -1; }
     }
     sqlite3_finalize(st);
     if(n <= 0){ free(ids); return 0; }
@@ -1315,9 +1499,7 @@ int mdb_scope_album_plan(int kind, const char *key, const char *album, mdb_plan_
     "CASE WHEN (IS_CUE=1 OR IS_ISO=1) THEN NAME_CODE END," \
     "CASE WHEN (IS_CUE=1 OR IS_ISO=1) THEN ID END," \
     "CASE WHEN (IS_CUE=1 OR IS_ISO=1) THEN TRACK END"
-int mdb_favorites(mdb_song_t *out, int cap, int stock_order){
-    sqlite3 *d = db(); if(!d) return 0;
-    sqlite3_stmt *st;
+static int fav_prepare(sqlite3 *d, int stock_order, sqlite3_stmt **st){   /* shared by mdb_favorites and mdb_favorite_ids: one SQL text */
     /* MY_LOVE.ID is its OWN autoincrement, NOT a SONG.ID. Rows carry both: the SONG.ID (resolved by PATH,
      * 0 if the song left the library) for the all-songs play, and the MY_LOVE.ID for removal and the V2.57
      * favourites queue. With stock_order the rows follow that queue, so row N is queue position N. */
@@ -1334,7 +1516,12 @@ int mdb_favorites(mdb_song_t *out, int cap, int stock_order){
         "(SELECT S.ID FROM SONG S WHERE S.PATH=MY_LOVE.PATH ORDER BY S.TRACK, S.ID LIMIT 1)),ID "
         "FROM MY_LOVE WHERE lower(PATH) NOT LIKE '%%.m4b' ORDER BY %s;",   /* books have their own view */
         stock_order ? MDB_FAV_ORDER : "1 COLLATE NOCASE");
-    if(sqlite3_prepare_v2(d, sql, -1, &st, NULL) != SQLITE_OK) return 0;
+    return sqlite3_prepare_v2(d, sql, -1, st, NULL) == SQLITE_OK;
+}
+int mdb_favorites(mdb_song_t *out, int cap, int stock_order){
+    sqlite3 *d = db(); if(!d) return 0;
+    sqlite3_stmt *st;
+    if(!fav_prepare(d, stock_order, &st)) return 0;
     int n=0;
     while(n<cap && sqlite3_step(st) == SQLITE_ROW){
         mdb_song_t *s = &out[n++];
@@ -1351,6 +1538,20 @@ int mdb_favorites(mdb_song_t *out, int cap, int stock_order){
     sqlite3_finalize(st); return n;
 }
 
+/* Cast: the favourites that still have a library song, in the stock queue order, ids only (4 + 4 bytes each, not an 836-byte mdb_song_t). */
+int mdb_favorite_ids(int *song_ids, int *love_ids, int cap){
+    sqlite3 *d = db(); sqlite3_stmt *st; int n = 0;
+    if(!d || !song_ids || !love_ids || cap <= 0 || !fav_prepare(d, 1, &st)) return -1;
+    int rc;
+    while((rc = sqlite3_step(st)) == SQLITE_ROW){
+        int sid = sqlite3_column_int(st, 4);
+        if(sid <= 0) continue;                          /* the song left the library: nothing to cast */
+        if(n == cap){ n = -1; break; }
+        song_ids[n] = sid; love_ids[n++] = sqlite3_column_int(st, 5);
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_ROW || rc == SQLITE_DONE ? n : -1;
+}
 int mdb_favorite_count(void){
     sqlite3 *d = db(); if(!d) return -1;
     sqlite3_stmt *st; int n = -1;
@@ -1370,17 +1571,18 @@ int mdb_love_path(int love_id, char *out, int cap){
 }
 
 /* ---- Play history (diskOS PLAY_STATS): Most-Played / Recently-Played ------- */
-/* Record one play: bump PLAYS + stamp LAST_PLAYED for this path. Best-effort. */
-void mdb_record_play(const char *path){
-    if(!path || !path[0]) return;
-    sqlite3 *d = db(); if(!d) return;
+/* Record one play; failure leaves the caller's retry identity unchanged. */
+int mdb_record_play(const char *path){
+    if(!path || !path[0]) return 0;
+    sqlite3 *d = db(); if(!d) return 0;
     sqlite3_stmt *st;
     if(sqlite3_prepare_v2(d,
         "INSERT INTO PLAY_STATS(PATH,PLAYS,LAST_PLAYED) VALUES(?1,1,?2) "
-        "ON CONFLICT(PATH) DO UPDATE SET PLAYS=PLAYS+1, LAST_PLAYED=?2;", -1, &st, NULL) != SQLITE_OK) return;
+        "ON CONFLICT(PATH) DO UPDATE SET PLAYS=PLAYS+1, LAST_PLAYED=?2;", -1, &st, NULL) != SQLITE_OK) return 0;
     sqlite3_bind_text (st, 1, path, -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(st, 2, (sqlite3_int64)time(NULL));
-    sqlite3_step(st); sqlite3_finalize(st);
+    int rc=sqlite3_step(st); sqlite3_finalize(st);
+    return rc==SQLITE_DONE;
 }
 /* Fill `out` with songs from PLAY_STATS joined to SONG, ordered by plays (by_recent=0) or by
  * last-played time (by_recent=1). Playback is by SONG.ID, same as favourites. Returns count. */
@@ -1425,18 +1627,21 @@ int mdb_mostplayed(mdb_song_t *out, int cap){ return mdb_stats_list(out, cap, 0)
 int mdb_recent(mdb_song_t *out, int cap){ return mdb_stats_list(out, cap, 1); }
 
 /* GENRE of the SONG row for `path` (or its sub-track `track`; the first row when 0), for the Song Info page. 1 = found (out set, "" when
- * untagged), 0 = no row / DB error. Safe off the UI thread (own prepared statement on the shared serialized handle). */
+ * untagged), 0 = no row, -1 = retry (out untouched). Worker owns a short-lived read-only connection. */
 int mdb_song_genre(const char *path, int track, char *out, int cap){
-    if(cap > 0) out[0] = 0;
-    sqlite3 *d = db(); if(!d || !path || !path[0] || cap <= 0) return 0;
-    sqlite3_stmt *st; int found = 0;
+    if(!path || !path[0] || cap <= 0) return 0;
+    sqlite3 *d = db_reader(); if(!d) return -1;
+    sqlite3_stmt *st; int found = -1;
     /* track > 0 = a CUE/ISO sub-track: that exact (PATH, TRACK) row, since the rows of one sheet can carry different genres */
     if(sqlite3_prepare_v2(d, track > 0 ? "SELECT IFNULL(GENRE,'') FROM SONG WHERE PATH=?1 AND TRACK=?2 AND (IS_CUE=1 OR IS_ISO=1) ORDER BY ID LIMIT 1;"
-                                       : "SELECT IFNULL(GENRE,'') FROM SONG WHERE PATH=?1 ORDER BY ID LIMIT 1;", -1, &st, NULL) != SQLITE_OK) return 0;
+                                       : "SELECT IFNULL(GENRE,'') FROM SONG WHERE PATH=?1 ORDER BY ID LIMIT 1;", -1, &st, NULL) != SQLITE_OK){ sqlite3_close(d); return -1; }
     sqlite3_bind_text(st, 1, path, -1, SQLITE_STATIC);
     if(track > 0) sqlite3_bind_int(st, 2, track);
-    if(sqlite3_step(st) == SQLITE_ROW){ snprintf(out, (size_t)cap, "%s", colt(st, 0)); found = 1; }
+    int rc=sqlite3_step(st);
+    if(rc == SQLITE_ROW){ snprintf(out, (size_t)cap, "%s", colt(st, 0)); found = 1; }
+    else if(rc==SQLITE_DONE){ out[0]=0; found=0; }
     sqlite3_finalize(st);
+    sqlite3_close(d);
     return found;
 }
 
@@ -1927,6 +2132,7 @@ int mdb_playlist_sync_registry(void){
 }
 
 long mdb_playlist_create(const char *name){
+    if(!name || strlen(name) >= MDB_STR) return 0;
     sqlite3 *d = db(); if(!d) return 0;
     /* Store the CANONICAL (trimmed) name - the same form mdb_playlists shows and export writes. Leading/
      * trailing whitespace in the raw name would otherwise let a display "Rock" (from stored " Rock") miss
@@ -2151,17 +2357,17 @@ long mdb_book_scope_set(const char *path){
 int mdb_playlist_add_group(long pid, const char *col, const char *val){
     if(pid<=0 || !col || !val || !val[0]) return 0;
     if(strcmp(col,"ALBUM") && strcmp(col,"ARTIST") && strcmp(col,"GENRE")) return 0;   /* whitelist */
-    sqlite3 *d = db(); if(!d) return 0;
+    sqlite3 *d = db(); if(!d) return -1;
     char sql[1600];
     snprintf(sql, sizeof sql,
              "INSERT OR IGNORE INTO CUSTOM_PLAYLIST (" PL_COLS ") SELECT ?1," PL_SRC " FROM SONG S WHERE S.%s=?2 " PL_NODUP
              " GROUP BY S.PATH,IFNULL(S.TRACK,0) ORDER BY MIN(S.ID);", col);
     sqlite3_stmt *st;
-    if(sqlite3_prepare_v2(d, sql, -1, &st, NULL) != SQLITE_OK) return 0;
+    if(sqlite3_prepare_v2(d, sql, -1, &st, NULL) != SQLITE_OK) return -1;
     sqlite3_bind_int64(st, 1, pid);
     sqlite3_bind_text(st, 2, val, -1, SQLITE_TRANSIENT);
     int rc = sqlite3_step(st); sqlite3_finalize(st);
-    return (rc == SQLITE_DONE) ? sqlite3_changes(d) : 0;
+    return (rc == SQLITE_DONE) ? sqlite3_changes(d) : -1;
 }
 /* Add exactly these SONG rows (by SONG.ID: the songs a list shows, so any grouping - artist credits, album artist, a CUE
  * track - is preserved as displayed). Rows already held, and repeats, are skipped. Returns the number added, or -1 if the
@@ -2518,6 +2724,7 @@ int mdb_peq_is_graphic(int style_preset){
 }
 
 int mdb_playlist_rename(long pid, const char *name){
+    if(!name || strlen(name) >= MDB_STR) return 0;
     if(pid<=0) return 0;
     sqlite3 *d = db(); if(!d) return 0;
     int owns_txn = sqlite3_get_autocommit(d);
@@ -2597,13 +2804,26 @@ int mdb_playlist_songs(long pid, mdb_song_t *out, int cap){
     return n;
 }
 
+/* Cast (14g): the row ids of a playlist in the order mdb_playlist_songs lists them (same WHERE and ORDER BY ID), duplicates kept. */
+int mdb_playlist_rows(long pid, int *ids, int cap){
+    if(pid <= 0) return -1;
+    sqlite3 *d = db(); if(!d) return -1;
+    sqlite3_stmt *st;
+    if(sqlite3_prepare_v2(d, "SELECT ID FROM CUSTOM_PLAYLIST WHERE PLAYLIST_ID=? ORDER BY ID;", -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_int64(st, 1, pid);
+    int n = 0, rc;
+    while((rc = sqlite3_step(st)) == SQLITE_ROW){ if(n < cap && ids) ids[n] = sqlite3_column_int(st, 0); n++; }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
 /* Track count in a playlist. */
 int mdb_playlist_count(long pid){
-    sqlite3 *d = db(); if(!d) return 0;
+    sqlite3 *d = db(); if(!d) return -1;
     sqlite3_stmt *st;
-    if(sqlite3_prepare_v2(d, "SELECT COUNT(*) FROM CUSTOM_PLAYLIST WHERE PLAYLIST_ID=?;", -1, &st, NULL) != SQLITE_OK) return 0;
+    if(sqlite3_prepare_v2(d, "SELECT COUNT(*) FROM CUSTOM_PLAYLIST WHERE PLAYLIST_ID=?;", -1, &st, NULL) != SQLITE_OK) return -1;
     sqlite3_bind_int64(st, 1, pid);
-    int n=0; if(sqlite3_step(st) == SQLITE_ROW) n = sqlite3_column_int(st,0);
+    int n=-1; if(sqlite3_step(st) == SQLITE_ROW) n = sqlite3_column_int(st,0);
     sqlite3_finalize(st);
     return n;
 }
@@ -2754,9 +2974,10 @@ static void utf8_fix(char *s){
 static int song_subtrack_exists(sqlite3 *d, const char *path, int track){
     sqlite3_stmt *st; int yes = 0;
     if(sqlite3_prepare_v2(d, "SELECT 1 FROM SONG WHERE PATH=?1 AND IFNULL(TRACK,0)=?2 AND (IFNULL(IS_CUE,0)<>0 OR IFNULL(IS_ISO,0)<>0) LIMIT 1;",
-                          -1, &st, NULL) != SQLITE_OK) return 0;
+                          -1, &st, NULL) != SQLITE_OK) return -1;
     sqlite3_bind_text(st, 1, path, -1, SQLITE_STATIC); sqlite3_bind_int(st, 2, track);
-    yes = (sqlite3_step(st) == SQLITE_ROW);
+    int rc=sqlite3_step(st);
+    yes = rc==SQLITE_ROW ? 1 : (rc==SQLITE_DONE ? 0 : -1);
     sqlite3_finalize(st);
     return yes;
 }
@@ -2827,8 +3048,8 @@ static int import_m3u_file(const char *m3u_path){
      * leaves NO partial playlist behind, so playlist_id_by_name can't block a clean retry on the next
      * scan. This replaces a best-effort delete that could itself fail under the same lock and strand the
      * partial forever. mdb_playlist_create's inner SAVEPOINT nests cleanly inside this transaction. */
-    sqlite3 *d = db(); if(!d){ fclose(fp); return 0; }
-    if(sqlite3_exec(d, "BEGIN IMMEDIATE;", 0, 0, 0) != SQLITE_OK){ fclose(fp); return 0; }   /* writer busy -> retry next scan */
+    sqlite3 *d = db(); if(!d){ fclose(fp); return -1; }
+    if(sqlite3_exec(d, "BEGIN IMMEDIATE;", 0, 0, 0) != SQLITE_OK){ fclose(fp); return -1; }   /* writer busy -> retry next scan */
     /* A playlist of this name already exists (or, for a file-name stem, "punjabi music?" saved as "punjabi music_"): never
      * touch it. The file imports under the first free "<name> (N)" instead - unless, after reading, its tracks turn out
      * to be exactly those of the existing playlist or ANY of its "(N)" copies, in which case it is the same playlist
@@ -2853,7 +3074,7 @@ static int import_m3u_file(const char *m3u_path){
           }
           sqlite3_finalize(ns);
       }
-      if(rc != SQLITE_DONE){ sqlite3_exec(d, "ROLLBACK;", 0, 0, 0); fclose(fp); return 0; }   /* not "no copies": unknown */
+      if(rc != SQLITE_DONE){ sqlite3_exec(d, "ROLLBACK;", 0, 0, 0); fclose(fp); return -1; }   /* not "no copies": unknown */
       (void)nl;
       if(!used[1] && !from_directive){
           long id0 = playlist_id_by_file_name(name);
@@ -2905,9 +3126,12 @@ static int import_m3u_file(const char *m3u_path){
         if(!found && !rherr) found = song_resolve(p, songpath, sizeof songpath, &rherr);   /* still try the intact relative entry */
         if(rherr){ db_err = 1; break; }   /* a resolver DB error (not a clean miss) -> abandon, don't commit a partial */
         if(!found) continue;              /* genuine no-match / ambiguous -> skip this line */
-        if(want_track && !song_subtrack_exists(d, songpath, track_no)){
-            fprintf(stderr, "m3u import: '%s' track %d not in the library - import incomplete, rolled back\n", songpath, track_no);
-            db_err = 1; break;   /* a tagged track that can't be found: never commit the rest as if it were whole */
+        if(want_track){
+            int exists=song_subtrack_exists(d,songpath,track_no);
+            if(exists<=0){
+                fprintf(stderr,"m3u import: '%s' track %d unavailable - import incomplete, rolled back\n",songpath,track_no);
+                db_err=exists<0 ? 1 : 2; break; /* a failed lookup retries; a missing tagged track skips this file */
+            }
         }
         if(!pid){ pid = mdb_playlist_create(cname); if(pid<=0){ db_err = 1; break; } }
         int aerr = 0;
@@ -2924,12 +3148,13 @@ static int import_m3u_file(const char *m3u_path){
         for(int i = 0; i < nclash; i++)
         { int sm = playlist_same_members(d, pid, clash[i]);
           if(sm < 0){ fprintf(stderr, "m3u import: could not compare with playlist %ld - import incomplete, rolled back\n", clash[i]);
-                      sqlite3_exec(d, "ROLLBACK;", 0, 0, 0); return 0; }
+                      sqlite3_exec(d, "ROLLBACK;", 0, 0, 0); return -1; }
           if(sm){ sqlite3_exec(d, "ROLLBACK;", 0, 0, 0); return 0; } }   /* imported before */
         if(sqlite3_exec(d, "COMMIT;", 0, 0, 0) == SQLITE_OK) return added;
+        db_err=1;
     }
     sqlite3_exec(d, "ROLLBACK;", 0, 0, 0);
-    return 0;
+    return db_err==1 || read_err ? -1 : 0;
 }
 /* Scan a directory (one level) for *.m3u / *.m3u8 and import each new one.
  * Returns the number of NEW playlists imported. */
@@ -2945,7 +3170,9 @@ static int import_m3u_dir_budget(const char *dir, int *budget){
         char path[600];
         if(snprintf(path, sizeof path, "%s/%s", dir, n) >= (int)sizeof path) continue;   /* too long: skip, never truncate */
         if(budget) budget[0]--;
-        if(import_m3u_file(path) > 0) total++;
+        int added=import_m3u_file(path);
+        if(added<0){ total=-1; break; }
+        if(added>0) total++;
     }
     closedir(d);
     return total;
@@ -2963,9 +3190,11 @@ static int mdb_import_m3u_dir_leased(const char *dir){ return import_m3u_dir_bud
 #define M3U_WALK_ENTRIES 65536   /* directory entries read per import (both passes) */
 /* budget: [0] folders, [1] M3U files, [2] directory entries still allowed */
 static void import_m3u_walk(const char *dir, int depth, int *budget, int *total){
-    if(budget[0] <= 0 || budget[1] <= 0 || budget[2] <= 0) return;
+    if(*total<0 || budget[0] <= 0 || budget[1] <= 0 || budget[2] <= 0) return;
     budget[0]--;
-    *total += import_m3u_dir_budget(dir, budget + 1);
+    int n=import_m3u_dir_budget(dir,budget+1);
+    if(n<0){ *total=-1; return; }
+    *total+=n;
     if(depth >= M3U_WALK_DEPTH) return;
     DIR *d = opendir(dir); if(!d) return;
     struct dirent *e;
@@ -2990,7 +3219,7 @@ static int mdb_import_m3u_sd_leased(const char *root){
 /* number of playlists - lets callers size a dynamic buffer to the real count (no fixed cap). */
 int mdb_playlist_num(void){
     sqlite3 *d = db(); if(!d) return 0;
-    mdb_playlist_sync_registry();   /* every playlist listing starts from agreeing registries (best-effort) */
+    if(!g_ui_read_depth && !mdb_playlist_sync_registry()) return -1;
     sqlite3_stmt *st; int n=0;
     if(sqlite3_prepare_v2(d, "SELECT COUNT(*) FROM PLAYLIST_INFO;", -1, &st, NULL) == SQLITE_OK){
         if(sqlite3_step(st) == SQLITE_ROW) n = sqlite3_column_int(st,0);
@@ -3037,14 +3266,14 @@ int mdb_search(const char *q, const mdb_song_t **out, int cap){
 }
 
 int mdb_import_m3u_dir(const char *dir){
-    if(!sd_io_begin()) return 0;
+    if(!sd_io_begin()) return -1;
     int result = mdb_import_m3u_dir_leased(dir);
     sd_io_end();
     return result;
 }
 
 int mdb_import_m3u_sd(const char *root){
-    if(!sd_io_begin()) return 0;
+    if(!sd_io_begin()) return -1;
     int result = mdb_import_m3u_sd_leased(root);
     sd_io_end();
     return result;
@@ -3077,21 +3306,52 @@ static sqlite3 *qdb(void){
 }
 static int q_busy(int rc){ rc &= 0xFF; return rc == SQLITE_BUSY || rc == SQLITE_LOCKED; }
 
+/* A queue row's length for display. A queue built from the reserved slot carries 86400000 (24 h) when the source song's
+ * length is unknown (the slot builders need a non-zero value, see mdb_plan_materialize), and the player copies it into
+ * LIST_SONG_n. A real recording of exactly that length is stored the same way, so the value alone cannot tell them
+ * apart; the source can: the placeholder is written only when the source has no length. So 86400000 is shown only if the
+ * library row it came from (SONG by PATH+TRACK, or BOOKS by PATH) really holds 86400000; otherwise it is unknown (0).
+ * Nothing stored or sent to the player changes. A lookup that cannot be made hides the value rather than show 1440:00. */
+static int q_src_holds(sqlite3 *d, const char *sql, const char *path, sqlite3_int64 track, int by_track){
+    sqlite3_stmt *s = NULL; int hit = 0;
+    if(sqlite3_prepare_v2(d, sql, -1, &s, NULL) != SQLITE_OK){ if(s) sqlite3_finalize(s); return -1; }
+    sqlite3_bind_text(s, 1, path, -1, SQLITE_STATIC);
+    if(by_track) sqlite3_bind_int64(s, 2, track);
+    int rc = sqlite3_step(s);
+    if(rc == SQLITE_ROW){
+        hit = sqlite3_column_int64(s, 0) == 86400000 ? 1 : -1;
+        if(sqlite3_step(s) != SQLITE_DONE) hit = -1;
+    } else if(rc != SQLITE_DONE) hit = -1;
+    sqlite3_finalize(s);
+    return hit;
+}
+static int q_real_dur(sqlite3 *d, sqlite3_int64 dm, const char *path, sqlite3_int64 track){
+    if(dm <= 0 || dm > 2147483647) return 0;
+    if(dm != 86400000) return (int)dm;
+    if(!path || !path[0]) return 0;
+    int song = q_src_holds(d,
+        "SELECT DURATION FROM SONG WHERE PATH=?1 AND IFNULL(TRACK,0)=?2 LIMIT 2;", path, track, 1);
+    int book = q_src_holds(d,
+        "SELECT DURATION FROM BOOKS WHERE PATH=?1 LIMIT 2;", path, track, 0);
+    if((song == 1 && book == 0) || (song == 0 && book == 1)) return (int)dm;
+    return 0;
+}
+
 int mdb_upnext(int shuffle, int cur_pos_id, const char *cur_path, mdb_qrow_t *out, int cap, int *more){
     if(more) *more = 0;
     if(!out || cap < 1) return MDB_UPNEXT_ERROR;
     sqlite3 *d = qdb(); if(!d) return MDB_UPNEXT_ERROR;
     const char *sql = shuffle
-        ? "WITH B AS (SELECT ID,ROW_NUMBER() OVER (ORDER BY ID) AS ORD,TITLE,NAME,ARTIST,PATH,DURATION FROM LIST_SONG_0),"
+        ? "WITH B AS (SELECT ID,ROW_NUMBER() OVER (ORDER BY ID) AS ORD,TITLE,NAME,ARTIST,PATH,DURATION,TRACK FROM LIST_SONG_0),"
           "C AS (SELECT (SELECT COUNT(*) FROM LIST_SONG_0) AS N0,(SELECT COUNT(*) FROM LIST_SONG_3) AS N3,"
           "(SELECT COUNT(DISTINCT POS_ID) FROM LIST_SONG_3) AS ND,"
           "CASE WHEN ?1>0 THEN ?1 ELSE (SELECT CASE WHEN COUNT(*)=1 THEN MAX(ID) END FROM LIST_SONG_0 WHERE PATH=?2) END AS TID),"
-          "X AS (SELECT R.ID AS RID,B.ID AS BID,B.ORD,B.TITLE,B.NAME,B.ARTIST,B.PATH,B.DURATION FROM LIST_SONG_3 R LEFT JOIN B ON B.ID=R.POS_ID) "
-          "SELECT C.N0,C.N3,C.ND,C.TID,X.RID,X.BID,X.ORD,X.TITLE,X.NAME,X.ARTIST,X.PATH,X.DURATION FROM C LEFT JOIN X ON 1 ORDER BY X.RID;"
-        : "WITH B AS (SELECT ID,ROW_NUMBER() OVER (ORDER BY ID) AS ORD,TITLE,NAME,ARTIST,PATH,DURATION FROM LIST_SONG_0),"
+          "X AS (SELECT R.ID AS RID,B.ID AS BID,B.ORD,B.TITLE,B.NAME,B.ARTIST,B.PATH,B.DURATION,B.TRACK FROM LIST_SONG_3 R LEFT JOIN B ON B.ID=R.POS_ID) "
+          "SELECT C.N0,C.N3,C.ND,C.TID,X.RID,X.BID,X.ORD,X.TITLE,X.NAME,X.ARTIST,X.PATH,X.DURATION,X.TRACK FROM C LEFT JOIN X ON 1 ORDER BY X.RID;"
+        : "WITH B AS (SELECT ID,ROW_NUMBER() OVER (ORDER BY ID) AS ORD,TITLE,NAME,ARTIST,PATH,DURATION,TRACK FROM LIST_SONG_0),"
           "C AS (SELECT (SELECT COUNT(*) FROM LIST_SONG_0) AS N0,"
           "CASE WHEN ?1>0 THEN ?1 ELSE (SELECT CASE WHEN COUNT(*)=1 THEN MAX(ID) END FROM LIST_SONG_0 WHERE PATH=?2) END AS TID) "
-          "SELECT C.N0,C.N0,C.N0,C.TID,B.ID,B.ID,B.ORD,B.TITLE,B.NAME,B.ARTIST,B.PATH,B.DURATION FROM C LEFT JOIN B ON 1 ORDER BY B.ID;";
+          "SELECT C.N0,C.N0,C.N0,C.TID,B.ID,B.ID,B.ORD,B.TITLE,B.NAME,B.ARTIST,B.PATH,B.DURATION,B.TRACK FROM C LEFT JOIN B ON 1 ORDER BY B.ID;";
     sqlite3_stmt *q = NULL;
     int rc = sqlite3_prepare_v2(d, sql, -1, &q, NULL);
     if(rc != SQLITE_OK){ int b = q_busy(sqlite3_extended_errcode(d)); if(q) sqlite3_finalize(q); return b ? MDB_UPNEXT_BUSY : MDB_UPNEXT_ERROR; }
@@ -3127,7 +3387,7 @@ int mdb_upnext(int shuffle, int cur_pos_id, const char *cur_path, mdb_qrow_t *ou
         snprintf(r->artist, sizeof r->artist, "%s", ar ? ar : "");
         snprintf(r->path, sizeof r->path, "%s", p ? p : "");
         sqlite3_int64 dm = sqlite3_column_int64(q, 11);           /* copied from SONG by the player at queue build */
-        r->dur_ms = (dm > 0 && dm <= 2147483647) ? (int)dm : 0;
+        r->dur_ms = q_real_dur(d, dm, p, sqlite3_column_int64(q, 12));
     }
     int busy = (rc != SQLITE_ROW && rc != SQLITE_DONE) && q_busy(sqlite3_extended_errcode(d));
     sqlite3_finalize(q);
@@ -3156,6 +3416,182 @@ int mdb_queue_row_valid(int base_id, int ord, const char *path){
     return v;
 }
 
+/* Cast queue snapshot (see musicdb.h). A private read connection per call, one BEGIN ... close: the counts, the base order,
+ * the shuffle list and the current-row lookup all see one database snapshot, so a player rewriting LIST_SONG_0/3 meanwhile
+ * can never yield a mixed result. The caller runs it on a worker thread, never the UI thread. */
+static sqlite3 *qsnap_open(void){
+    sqlite3 *d = NULL;
+    if(sqlite3_open_v2(DB_PATH, &d, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK){
+        sqlite3_busy_timeout(d, 200);
+        if(sqlite3_exec(d, "BEGIN;", NULL, NULL, NULL) == SQLITE_OK) return d;
+    }
+    if(d) sqlite3_close(d);
+    return NULL;
+}
+static int qsnap_rc(sqlite3 *d){ return q_busy(sqlite3_extended_errcode(d)) ? MDB_UPNEXT_BUSY : MDB_UPNEXT_ERROR; }
+void mdb_qsnap_free(mdb_qsnap_t *s){
+    if(!s) return;
+    free(s->base); free(s->shuf); free(s->flags);
+    memset(s, 0, sizeof *s);
+}
+int mdb_queue_snapshot(int shuffle, int cur_pos_id, const char *cur_path, int cap, mdb_qsnap_t *o){
+    if(!o) return MDB_UPNEXT_ERROR;
+    memset(o, 0, sizeof *o);
+    if(cap < 1) return MDB_UPNEXT_ERROR;
+    sqlite3 *d = qsnap_open(); if(!d) return MDB_UPNEXT_ERROR;
+    sqlite3_stmt *q = NULL;
+    mdb_qsnap_t s; memset(&s, 0, sizeof s);
+    int r = MDB_UPNEXT_ERROR, rc, n0, n3, i, hits = 0, cur_id = 0;
+    rc = sqlite3_prepare_v2(d, shuffle ? "SELECT (SELECT COUNT(*) FROM LIST_SONG_0),(SELECT COUNT(*) FROM LIST_SONG_3);"
+                                       : "SELECT COUNT(*),0 FROM LIST_SONG_0;", -1, &q, NULL);
+    if(rc != SQLITE_OK || sqlite3_step(q) != SQLITE_ROW){ r = qsnap_rc(d); goto out; }
+    n0 = sqlite3_column_int(q, 0); n3 = sqlite3_column_int(q, 1);
+    sqlite3_finalize(q); q = NULL;
+    if(n0 == 0){ r = (shuffle && n3) ? MDB_UPNEXT_NOTFOUND : MDB_UPNEXT_EMPTY; goto out; }
+    if(n0 > cap){ r = MDB_QSNAP_TOO_LARGE; goto out; }                       /* never truncated */
+    if(shuffle && n3 != n0){ r = MDB_UPNEXT_NOTFOUND; goto out; }            /* the player is still building it */
+    s.base = malloc((size_t)n0 * sizeof(int)); s.flags = calloc((size_t)n0, 1);
+    if(shuffle) s.shuf = malloc((size_t)n0 * sizeof(int));
+    if(!s.base || !s.flags || (shuffle && !s.shuf)) goto out;
+    if(sqlite3_prepare_v2(d, "SELECT ID,IFNULL(IS_CUE,0),IFNULL(IS_ISO,0) FROM LIST_SONG_0 ORDER BY ID;", -1, &q, NULL) != SQLITE_OK){ r = qsnap_rc(d); goto out; }
+    for(i = 0; (rc = sqlite3_step(q)) == SQLITE_ROW; i++){
+        sqlite3_int64 id = sqlite3_column_int64(q, 0);
+        if(i >= n0 || id < 1 || id > INT_MAX) goto out;
+        s.base[i] = (int)id;
+        s.flags[i] = (unsigned char)((sqlite3_column_int(q, 1) ? 1 : 0) | (sqlite3_column_int(q, 2) ? 2 : 0));
+    }
+    if(rc != SQLITE_DONE || i != n0){ r = rc == SQLITE_DONE ? MDB_UPNEXT_ERROR : qsnap_rc(d); goto out; }
+    sqlite3_finalize(q); q = NULL;
+    if(shuffle){                          /* captured as stored; only an exact permutation of the base is accepted */
+        if(sqlite3_prepare_v2(d, "SELECT POS_ID FROM LIST_SONG_3 ORDER BY ID;", -1, &q, NULL) != SQLITE_OK){ r = qsnap_rc(d); goto out; }
+        for(i = 0; (rc = sqlite3_step(q)) == SQLITE_ROW; i++){
+            sqlite3_int64 id = sqlite3_column_type(q, 0) == SQLITE_NULL ? 0 : sqlite3_column_int64(q, 0);
+            int key = (id > 0 && id <= INT_MAX) ? (int)id : 0, *hit = key ? bsearch(&key, s.base, (size_t)n0, sizeof(int), mdb_id_cmp) : NULL;
+            if(i >= n0 || !hit || (s.flags[hit - s.base] & 4)){ r = MDB_UPNEXT_NOTFOUND; goto out; }   /* extra, unknown or repeated */
+            s.flags[hit - s.base] |= 4; s.shuf[i] = key;
+        }
+        if(rc != SQLITE_DONE){ r = qsnap_rc(d); goto out; }
+        if(i != n0){ r = MDB_UPNEXT_NOTFOUND; goto out; }
+        for(i = 0; i < n0; i++) s.flags[i] &= 3;
+        sqlite3_finalize(q); q = NULL;
+    }
+    if(sqlite3_prepare_v2(d, "SELECT ID FROM LIST_SONG_0 WHERE (?1>0 AND ID=?1 AND (?2 IS NULL OR PATH=?2)) "
+                             "OR (?1<=0 AND ?2 IS NOT NULL AND PATH=?2) LIMIT 2;", -1, &q, NULL) != SQLITE_OK){ r = qsnap_rc(d); goto out; }
+    sqlite3_bind_int(q, 1, cur_pos_id > 0 ? cur_pos_id : 0);
+    if(cur_path && cur_path[0]) sqlite3_bind_text(q, 2, cur_path, -1, SQLITE_TRANSIENT); else sqlite3_bind_null(q, 2);
+    while((rc = sqlite3_step(q)) == SQLITE_ROW){ cur_id = sqlite3_column_int(q, 0); hits++; }
+    if(rc != SQLITE_DONE){ r = qsnap_rc(d); goto out; }
+    int *cp = hits == 1 ? bsearch(&cur_id, s.base, (size_t)n0, sizeof(int), mdb_id_cmp) : NULL;
+    if(!cp){ r = MDB_QSNAP_AMBIGUOUS; goto out; }                           /* current row missing or matched by several */
+    s.n = n0; s.cur = (int)(cp - s.base);
+    *o = s; memset(&s, 0, sizeof s); r = n0;
+out:
+    if(q) sqlite3_finalize(q);
+    sqlite3_close(d);                                                       /* ends the read transaction */
+    mdb_qsnap_free(&s);
+    return r;
+}
+
+int mdb_queue_rows(const int *ids, int n, mdb_qrow_t *out, unsigned char *flags){
+    if(!ids || !out || n < 1) return MDB_UPNEXT_ERROR;
+    sqlite3 *d = qsnap_open(); if(!d) return MDB_UPNEXT_ERROR;
+    sqlite3_stmt *q = NULL; int r = MDB_UPNEXT_ERROR, rc;
+    if(sqlite3_prepare_v2(d, "SELECT TITLE,NAME,ARTIST,PATH,DURATION,IFNULL(IS_CUE,0),IFNULL(IS_ISO,0),IFNULL(TRACK,0) FROM LIST_SONG_0 WHERE ID=?1;", -1, &q, NULL) != SQLITE_OK){ r = qsnap_rc(d); goto out; }
+    for(int i = 0; i < n; i++){
+        sqlite3_reset(q); sqlite3_bind_int(q, 1, ids[i]);
+        rc = sqlite3_step(q);
+        if(rc == SQLITE_DONE){ r = MDB_UPNEXT_NOTFOUND; goto out; }           /* the queue was rebuilt since the snapshot */
+        if(rc != SQLITE_ROW){ r = qsnap_rc(d); goto out; }
+        mdb_qrow_t *w = &out[i]; memset(w, 0, sizeof *w);
+        const char *t = (const char *)sqlite3_column_text(q, 0), *p = (const char *)sqlite3_column_text(q, 3);
+        if(!t || !t[0]) t = (const char *)sqlite3_column_text(q, 1);
+        if(!t || !t[0]){ const char *sl = p ? strrchr(p, '/') : NULL; t = sl ? sl + 1 : p; }
+        const char *ar = (const char *)sqlite3_column_text(q, 2);
+        w->base_id = ids[i];
+        snprintf(w->title, sizeof w->title, "%s", t ? t : "");
+        snprintf(w->artist, sizeof w->artist, "%s", ar ? ar : "");
+        snprintf(w->path, sizeof w->path, "%s", p ? p : "");
+        sqlite3_int64 dm = sqlite3_column_int64(q, 4);
+        w->dur_ms = q_real_dur(d, dm, p, sqlite3_column_int64(q, 7));
+        if(flags) flags[i] = (unsigned char)((sqlite3_column_int(q, 5) ? 1 : 0) | (sqlite3_column_int(q, 6) ? 2 : 0));
+    }
+    r = n;
+out:
+    if(q) sqlite3_finalize(q);
+    sqlite3_close(d);
+    return r;
+}
+
+/* Display rows for SONG.IDs (the Cast selection source), one read transaction like mdb_queue_rows. out may be NULL when only
+ * flags are wanted (the snapshot build checks every id this way in one pass); a repeated id yields a repeated row. */
+int mdb_song_rows(const int *ids, int n, mdb_srow_t *out, unsigned char *flags){
+    if(!ids || n < 1 || (!out && !flags)) return MDB_UPNEXT_ERROR;
+    sqlite3 *d = qsnap_open(); if(!d) return MDB_UPNEXT_ERROR;
+    sqlite3_stmt *q = NULL; int r = MDB_UPNEXT_ERROR, rc;
+    if(sqlite3_prepare_v2(d, "SELECT TITLE,NAME,ARTIST,PATH,DURATION,IFNULL(IS_CUE,0),IFNULL(IS_ISO,0),ALBUM FROM SONG WHERE ID=?1;", -1, &q, NULL) != SQLITE_OK){ r = qsnap_rc(d); goto out; }
+    for(int i = 0; i < n; i++){
+        sqlite3_reset(q); sqlite3_bind_int(q, 1, ids[i]);
+        rc = sqlite3_step(q);
+        if(rc == SQLITE_DONE){ r = MDB_UPNEXT_NOTFOUND; goto out; }           /* a rescan removed it since the selection was made */
+        if(rc != SQLITE_ROW){ r = qsnap_rc(d); goto out; }
+        if(out){
+            mdb_srow_t *w = &out[i]; memset(w, 0, sizeof *w);
+            const char *t = (const char *)sqlite3_column_text(q, 0), *p = (const char *)sqlite3_column_text(q, 3);
+            if(!t || !t[0]) t = (const char *)sqlite3_column_text(q, 1);
+            if(!t || !t[0]){ const char *sl = p ? strrchr(p, '/') : NULL; t = sl ? sl + 1 : p; }
+            const char *ar = (const char *)sqlite3_column_text(q, 2), *al = (const char *)sqlite3_column_text(q, 7);
+            w->id = ids[i];
+            snprintf(w->title, sizeof w->title, "%s", t ? t : "");
+            snprintf(w->artist, sizeof w->artist, "%s", ar ? ar : "");
+            snprintf(w->album, sizeof w->album, "%s", al ? al : "");
+            snprintf(w->path, sizeof w->path, "%s", p ? p : "");
+            sqlite3_int64 dm = sqlite3_column_int64(q, 4);
+            w->dur_ms = (dm > 0 && dm <= 2147483647) ? (int)dm : 0;
+        }
+        if(flags) flags[i] = (unsigned char)((sqlite3_column_int(q, 5) ? 1 : 0) | (sqlite3_column_int(q, 6) ? 2 : 0));
+    }
+    r = n;
+out:
+    if(q) sqlite3_finalize(q);
+    sqlite3_close(d);
+    return r;
+}
+
+/* Display rows for CUSTOM_PLAYLIST.IDs (the Cast playlist source), the shape of mdb_song_rows: one read transaction, a repeated id yields a repeated row,
+ * a missing id (the playlist was edited since) is MDB_UPNEXT_NOTFOUND. Nothing requires the path to have a SONG row. */
+int mdb_playlist_rows_get(const int *ids, int n, mdb_srow_t *out, unsigned char *flags){
+    if(!ids || n < 1 || (!out && !flags)) return MDB_UPNEXT_ERROR;
+    sqlite3 *d = qsnap_open(); if(!d) return MDB_UPNEXT_ERROR;
+    sqlite3_stmt *q = NULL; int r = MDB_UPNEXT_ERROR, rc;
+    if(sqlite3_prepare_v2(d, "SELECT TITLE,NAME,ARTIST,PATH,DURATION,IFNULL(IS_CUE,0),IFNULL(IS_ISO,0),ALBUM FROM CUSTOM_PLAYLIST WHERE ID=?1;", -1, &q, NULL) != SQLITE_OK){ r = qsnap_rc(d); goto out; }
+    for(int i = 0; i < n; i++){
+        sqlite3_reset(q); sqlite3_bind_int(q, 1, ids[i]);
+        rc = sqlite3_step(q);
+        if(rc == SQLITE_DONE){ r = MDB_UPNEXT_NOTFOUND; goto out; }
+        if(rc != SQLITE_ROW){ r = qsnap_rc(d); goto out; }
+        if(out){
+            mdb_srow_t *w = &out[i]; memset(w, 0, sizeof *w);
+            const char *t = (const char *)sqlite3_column_text(q, 0), *p = (const char *)sqlite3_column_text(q, 3);
+            if(!t || !t[0]) t = (const char *)sqlite3_column_text(q, 1);
+            if(!t || !t[0]){ const char *sl = p ? strrchr(p, '/') : NULL; t = sl ? sl + 1 : p; }
+            const char *ar = (const char *)sqlite3_column_text(q, 2), *al = (const char *)sqlite3_column_text(q, 7);
+            w->id = ids[i];
+            snprintf(w->title, sizeof w->title, "%s", t ? t : "");
+            snprintf(w->artist, sizeof w->artist, "%s", ar ? ar : "");
+            snprintf(w->album, sizeof w->album, "%s", al ? al : "");
+            snprintf(w->path, sizeof w->path, "%s", p ? p : "");
+            sqlite3_int64 dm = sqlite3_column_int64(q, 4);
+            w->dur_ms = (dm > 0 && dm <= 2147483647) ? (int)dm : 0;
+        }
+        if(flags) flags[i] = (unsigned char)((sqlite3_column_int(q, 5) ? 1 : 0) | (sqlite3_column_int(q, 6) ? 2 : 0));
+    }
+    r = n;
+out:
+    if(q) sqlite3_finalize(q);
+    sqlite3_close(d);
+    return r;
+}
+
 /* The player's own saved play mode (SYSCONFIG.PLAY_MODE, 0..4), -1 if unreadable. Only meaningful while diskOS has
  * never set a mode: the player loads it at start, and diskOS's 0102 sends override it from then on. */
 int mdb_sysconfig_play_mode(void){
@@ -3171,6 +3607,23 @@ int mdb_sysconfig_play_mode(void){
             sqlite3_finalize(st);
         }
     }
+    if(c) sqlite3_close(c);
+    return v;
+}
+
+/* Read-only quality evidence; BlueALSA reports LDAC's family, not its quality.
+ * V2.57 loads this column into 0x83a740 then 0x8a89c0+0x34. */
+int mdb_sysconfig_bt_codec(void){
+    sqlite3 *c = NULL; sqlite3_stmt *st = NULL; int v = -1;
+    if(sqlite3_open_v2(MDB_SYSCONFIG_PATH, &c, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK){
+        sqlite3_busy_timeout(c, 50);
+        if(sqlite3_prepare_v2(c, "SELECT BT_CODEC FROM SYSCONFIG WHERE ID=1;", -1, &st, NULL) == SQLITE_OK &&
+           sqlite3_step(st) == SQLITE_ROW && sqlite3_column_type(st, 0) == SQLITE_INTEGER){
+            sqlite3_int64 n = sqlite3_column_int64(st, 0);
+            if(n >= 0 && n <= 4) v = n;
+        }
+    }
+    if(st) sqlite3_finalize(st);
     if(c) sqlite3_close(c);
     return v;
 }

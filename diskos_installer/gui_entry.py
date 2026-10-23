@@ -11,6 +11,7 @@ import threading
 import traceback
 
 CHILD_MODE = "--_diskos-flash-child"
+FETCH_MODE = "--_diskos-fetch-helper"  # private firmware-acquisition helper; never the flash entry
 LOG_FOLDER = "diskos-installer-logs"
 LOG_MARKER = ".diskos-gui-logs"
 LOG_MAGIC = b"diskOS GUI diagnostics v1\n"
@@ -405,6 +406,11 @@ def _run_child(argv):
     return main(argv)
 
 
+def _run_fetch_helper(argv):
+    from diskos_installer.firmware_fetch import helper_main
+    return helper_main(argv)
+
+
 def _failure_event(log, exc):
     # Exception messages, source lines, filenames and locals are private. Keep
     # only known exception kinds, installer error codes and bootstrap line IDs.
@@ -424,11 +430,17 @@ def _failure_event(log, exc):
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     child = bool(argv and argv[0] == CHILD_MODE)
+    fetch = bool(argv and argv[0] == FETCH_MODE)
     saved = sys.stdin, sys.stdout, sys.stderr
     log_path = "(could not create a user log)"
     try:
         with ExitStack() as stack:
             try:
+                if fetch:  # headless helper: own pipes, no log, no GUI, no recursion
+                    if os.name == "nt":
+                        streams = [stack.enter_context(_child_stream(n, n == -10)) for n in (-10, -11, -12)]
+                        sys.stdin, sys.stdout, sys.stderr = streams
+                    return _run_fetch_helper(argv)
                 if child:
                     streams = [stack.enter_context(_child_stream(n, n == -10)) for n in (-10, -11, -12)]
                     sys.stdin, sys.stdout, sys.stderr = streams
@@ -451,7 +463,7 @@ def main(argv=None):
                     _show_error(str(exc))
                     return 1
                 reason = str(exc) or type(exc).__name__
-                if child and sys.stderr is not None:
+                if (child or fetch) and sys.stderr is not None:
                     try:
                         traceback.print_exc(file=sys.stderr)
                         sys.stderr.flush()
@@ -462,7 +474,7 @@ def main(argv=None):
                         _failure_event(sys.stderr, exc)
                     except Exception:
                         pass  # Diagnostics must not prevent the startup dialog.
-            if child:
+            if child or fetch:
                 return 1  # Missing pipes never fall back to a GUI or a null gate.
             _show_error(f"Could not start diskOS Installer:\n{reason}\n\nDetails: {log_path}\n"
                         "Use diskos-installer-cli.exe doctor for diagnostics.")

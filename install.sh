@@ -29,6 +29,10 @@ trap 'rm -f "$ERRTMP"' EXIT INT TERM
 
 # ---- locate a usable Python 3 -------------------------------------------------
 PY=""
+if [ "$(uname -s)" = Darwin ]; then
+    . "$HERE/build/macos-python.sh"
+    PY=$(select_macos_python) || exit 1
+else
 for c in python3 python; do
     if command -v "$c" >/dev/null 2>&1; then
         if "$c" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)' 2>/dev/null; then
@@ -36,6 +40,7 @@ for c in python3 python; do
         fi
     fi
 done
+fi
 if [ -z "$PY" ]; then
     echo "error: Python 3.8+ not found." >&2
     echo "  Arch/CachyOS:  sudo pacman -S python" >&2
@@ -62,8 +67,14 @@ fi
 VENV_PY="$HERE/.venv/bin/python"
 [ -x "$VENV_PY" ] || VENV_PY="$HERE/.venv/Scripts/python.exe"   # windows layout
 
+# A stale venv can still point at Apple's old Tk even after selecting a new Python.
+if [ "$(uname -s)" = Darwin ] && ! macos_python_ok "$VENV_PY"; then
+    echo 'error: existing .venv uses missing or old Tk. Rename .venv to .venv-old, then re-run ./install.sh.' >&2
+    exit 1
+fi
+
 # ---- install pinned dependencies ---------------------------------------------
-echo "==> installing dependencies (pyusb, pycryptodome)"
+echo "==> installing dependencies (pyusb, pycryptodome, certifi, platformdirs)"
 "$VENV_PY" -m pip install --upgrade pip >/dev/null 2>&1 || true
 "$VENV_PY" -m pip install -r "$HERE/requirements.txt"
 

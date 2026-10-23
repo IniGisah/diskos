@@ -48,6 +48,9 @@ static char g_cur_ssid[64];       /* currently-connected SSID (to mark the list)
 static lv_obj_t *g_info_list;     /* details screen */
 
 static void start_scan(void);     /* fwd */
+static int wifi_list_ready(void);
+static lv_timer_t *g_radio_timer;
+static void radio_on_poll_cb(lv_timer_t *t);
 static void wifi_lease_retry_reset(void);
 static void scan_fill(void);
 static void wifi_info_refresh(void);
@@ -98,7 +101,8 @@ static int wifi_shell(const char *cmd){
     }
     char bounded[1024], out[64];
     snprintf(bounded, sizeof bounded, "%s; printf '\nRC=%%d\n' \"$?\"", cmd);
-    ui_run_cap_bounded(bounded, out, sizeof out, 2000);
+    ui_run_cap_bounded(bounded, out, sizeof out,
+                       strstr(cmd, WCLI "scan ") ? 1700 : 2000);
     return strstr(out, "\nRC=0\n") ? 0 : -1;
 }
 #define system wifi_shell
@@ -181,7 +185,7 @@ static int wifi_radio_on(void){
  * that, so a ping (PONG) is the real "ready" signal. */
 static int wpa_ready(void){
     char buf[64];
-    run_cap(WCLI "ping 2>/dev/null", buf, sizeof buf);
+    ui_run_cap_bounded(WCLI "ping 2>/dev/null", buf, sizeof buf, 200);
     return strstr(buf, "PONG") != NULL;
 }
 /* returns 1 if it actually ran (ctrl interface ready), 0 if skipped so the caller keeps
@@ -228,11 +232,9 @@ void wifi_init_intent(void){
  * deliberate OFF against a late in-flight wifi_up. Self-rate-limited: safe to call each loop. */
 /* ---- V2.57 radio reconciliation ---------------------------------------------------------------------
  * V2.57's player turns Wi-Fi off at boot when both radios were saved on (keeps Bluetooth, saves WIFI_STATUS=0).
- * diskOS keeps its own "wifi_on" intent, and the keepalive below would restart Wi-Fi at once, undoing stock's
- * decision and leaving both radios fighting. So on firmware with that arbitration, each player generation (boot or
- * player restart) holds the keepalive until the player has answered and settled, then accepts stock's decision
- * ONLY for its exact signature. An explicit user choice at any point ends the hold and always wins; a player that
- * never answers releases the hold unchanged after RECO_GIVEUP_MS, so Wi-Fi cannot get stuck off. */
+ * diskOS keeps the user's saved "wifi_on" intent. Wait for stock startup to settle before restoring it.
+ * Stock arbitration must not turn that preference into a permanent OFF. Explicit user choices end the hold.
+ * A player that never answers releases the hold unchanged after RECO_GIVEUP_MS. */
 #define RECO_SETTLE_MS 9000      /* same settle as the local-init handshake (past the ~7 s mode-control window) */
 #define RECO_GIVEUP_MS 30000     /* silent player: release unchanged this long after arming */
 #define RECO_WINDOW_MS 30000     /* answered player: keep re-checking this long after its first frame, since stock's
@@ -244,8 +246,8 @@ static unsigned g_reco_rx0, g_reco_epoch0;
 static uint32_t g_reco_armed_at, g_reco_first_rx_at, g_reco_probe_at, g_reco_eval_at;
 static int      g_reco_seen_rx;
 
-/* The decision, pure: 1 = adopt stock's "Wi-Fi off" into diskOS's intent. Every input must be a clean 0/1 read
- * (callers pass -1 for anything unknown, which never adopts). */
+/* The decision, pure: 1 = stock boot arbitration has settled. Inputs must be clean 0/1 reads
+ * (callers pass -1 for anything unknown, which never matches). */
 static int wifi_reco_decide(int db_wifi, int db_bt, int eff_wifi, int eff_bt, int want_wifi, int user_changed){
     return db_wifi == 0 && db_bt == 1 && eff_wifi == 0 && eff_bt == 1 && want_wifi == 1 && !user_changed;
 }
@@ -287,6 +289,12 @@ static int wifi_effective(void){
     int blocked = wifi_rfkill_blocked();
     if(daemon || blocked == 0) return 1;
     return blocked == 1 ? 0 : -1;
+}
+
+/* Controls show the saved user choice, including while startup or recovery is pending.
+ * Readiness belongs in the page message; rfkill must not make an ON tap mean OFF. */
+int wifi_control_on(void){
+    return cfg_get_int("wifi_on", 1) != 0;
 }
 
 static void wifi_reconcile_poll(void){
@@ -331,9 +339,7 @@ static void wifi_reconcile_poll(void){
     if(lv_tick_get() - g_reco_first_rx_at >= RECO_WINDOW_MS){ g_reco_hold = 0; return; }
     if(g_intent_epoch != g_reco_epoch0){ g_reco_hold = 0; return; }        /* the user chose while we probed */
     if(wifi_reco_decide(dbw, dbb, effw, effb, cfg_get_int("wifi_on", 1), 0)){
-        cfg_set_int("wifi_on", 0);
-        ui_toast("Wi-Fi off: Bluetooth was on");
-        fprintf(stderr, "radio reconcile (gen %u): accepted stock's Bluetooth-priority boot, wifi_on=0\n", gen);
+        fprintf(stderr, "radio reconcile (gen %u): stock boot settled, retaining wifi_on=1\n", gen);
         g_reco_hold = 0;
         return;
     }
@@ -646,17 +652,42 @@ void wifi_supervise(void){
     int up   = wifi_radio_on();
     int want = cfg_get_int("wifi_on", 1);
 
+    /* A surviving PID can have lost its control service. Allow startup time,
+     * then replace only that daemon; wifi_shell preserves a surviving DHCP client. */
+    static uint32_t control_failed_at;
+    static unsigned control_epoch;
+    static int control_failed;
+    int ready = up && want ? wpa_ready() : 0;
+    want = cfg_get_int("wifi_on", 1);
+    if(control_epoch != g_intent_epoch || !up || !want || ready) control_failed = 0;
+    control_epoch = g_intent_epoch;
+    if(up && want && !ready){
+        if(!control_failed){ control_failed = 1; control_failed_at = lv_tick_get(); }
+        else if(lv_tick_elaps(control_failed_at) >= 30000){
+            control_failed_at = lv_tick_get();
+            if(system("killall -9 wpa_supplicant >/dev/null 2>&1") == 0){
+                up = 0; control_failed = 0;
+            }
+        }
+    }
+
     /* re-enable all nets + clear freq locks + persist once the supplicant is up, unless a
      * user connect is mid-flight (conn_poll_cb sanitizes on its outcome). */
-    if(up && g_sanitize_pending && !g_conn_timer && wifi_sanitize_savenets()) g_sanitize_pending = 0;
+    if(up && want && g_sanitize_pending && !g_conn_timer && wifi_sanitize_savenets()) g_sanitize_pending = 0;
 
+    /* Probe first, then re-read intent: no stale ON decision after a bounded probe.
+     * Restore only the interface for a surviving supplicant, leaving stock DHCP alone. */
+    int blocked = wifi_rfkill_blocked();
+    want = cfg_get_int("wifi_on", 1);
+    if(up && want && blocked == 1)
+        system("rfkill unblock wifi; ifconfig wlan0 up");
     if(!up && want){                        /* should be on but isn't -> (re)start */
         if(!g_wifi_last_start || lv_tick_elaps(g_wifi_last_start) > 30000){  /* 30s backoff */
-            g_wifi_last_start = lv_tick_get();
             g_sanitize_pending = 1;         /* sanitize once this new instance is up */
-            system("/usr/bin/wifi_up.sh >/dev/null 2>&1 &");
+            if(system("/usr/bin/wifi_up.sh >/dev/null 2>&1 &") == 0)
+                g_wifi_last_start = lv_tick_get();
         }
-    } else if(up && !want){                 /* should be off but a late wifi_up won -> enforce off */
+    } else if(!want && (up || blocked != 1)){                 /* should be off but a late wifi_up won -> enforce off */
         system("/usr/bin/wifi_down.sh >/dev/null 2>&1");
     }
 }
@@ -865,6 +896,7 @@ static const char *wifi_apply_net(int id, const char *ssid, const char *key){
 /* ---- connect ------------------------------------------------------------ */
 static void wifi_connect(const char *ssid, const char *key){
     wifi_lease_retry_reset();
+    if(!wifi_list_ready()) return;
     char buf[2048];
     if(key && key[0] && !wifi_psk_len_ok(key)){ ui_toast("Password must be 8 to 63 characters"); return; }
     int id = -1;
@@ -903,11 +935,11 @@ static void wifi_connect(const char *ssid, const char *key){
     const char *why = wifi_apply_net(id, ssid, key);
     if(why){ ui_toast(why); return; }
     if(g_conn_timer){ lv_timer_del(g_conn_timer); g_conn_timer = NULL; }
-    if(system("" WCLI "save_config >/dev/null 2>&1")) fprintf(stderr, "wifi connect: save_config failed\n");   /* non-fatal: connection still works unsaved */
+    int save_failed = wifi_step(WCLI "save_config 2>/dev/null", "save_config");
     /* don't claim success yet - poll for the real outcome (assoc + DHCP). */
     snprintf(g_conn_ssid, sizeof g_conn_ssid, "%s", ssid);
     g_conn_id = id;
-    ui_toast("Connecting...");
+    ui_toast(save_failed ? "Wi-Fi settings not saved" : "Connecting...");
     g_conn_start = lv_tick_get();
     g_conn_timer = lv_timer_create(conn_poll_cb, 1000, NULL);
 }
@@ -1052,6 +1084,7 @@ static void net_cb(lv_event_t *e){
     int secured   = flags & 1;
     int connected = flags & 2;
     if(!ssid || !ssid[0]) return;
+    if(!wifi_list_ready()) return;
     if(connected){
         wifi_info_open();                 /* tap the joined network -> details */
     } else if(secured){
@@ -1214,17 +1247,33 @@ static int wifi_cur_rssi(void){
     return wifi_parse_rssi(b);
 }
 
+/* A missing service says nothing about the saved profiles. Only the active page
+ * owns readiness polling and list messages (password completion can run elsewhere). */
+static int wifi_list_ready(void){
+    const char *msg = NULL;
+    if(!cfg_get_int("wifi_on", 1)) msg = "Wi-Fi is off";
+    else if(g_reco_hold || wifi_rfkill_blocked() == 1 || !wpa_ready()) msg = "Starting Wi-Fi...";
+    if(!msg) return 1;
+    if(screen_current() == SCR_WIFI && g_list){
+        list_msg(msg);
+        if(cfg_get_int("wifi_on", 1) && !g_radio_timer)
+            g_radio_timer = lv_timer_create(radio_on_poll_cb, 2500, NULL);
+    } else ui_toast(msg);
+    return 0;
+}
+
 static void scan_fill(void){
-    if(!g_list) return;
+    if(screen_current() != SCR_WIFI || !g_list || !wifi_list_ready()) return;
     scan_stop();
     lv_obj_clean(g_list);
     lv_obj_set_flex_align(g_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);  /* rows top-aligned */
     char cs[64], cip[32];
-    if(!(wifi_radio_on() && wifi_status(cs, sizeof cs, cip, sizeof cip))) cs[0]=0;
+    if(!wifi_status(cs, sizeof cs, cip, sizeof cip)) cs[0]=0;
     snprintf(g_cur_ssid, sizeof g_cur_ssid, "%s", cs);
 
     char *buf = run_cap_all(WCLI "scan_results 2>/dev/null", 1 << 20);
     if(!buf){ list_msg("Couldn't scan Wi-Fi"); return; }
+    if(!wifi_list_ready()){ free(buf); return; }
     struct wnet nets[WNET_MAX];
     int rssi = WNET_NO_RSSI, sec = 0;
     if(g_cur_ssid[0]){
@@ -1239,13 +1288,16 @@ static void scan_fill(void){
 }
 
 static void scan_timer_cb(lv_timer_t *t){
-    (void)t;
-    scan_fill();   /* scan_fill() calls scan_stop() before clearing the list */
-    if(g_scan_timer){ lv_timer_del(g_scan_timer); g_scan_timer = NULL; }
+    if(t != g_scan_timer) return;
+    g_scan_timer = NULL; lv_timer_del(t);
+    if(screen_current() == SCR_WIFI) scan_fill();
 }
 static void start_scan(void){
     wifi_lease_retry_reset();
-    if(!wifi_radio_on()){ list_msg("Wi-Fi is off"); return; }
+    if(screen_current() != SCR_WIFI) return;
+    if(g_scan_timer){ lv_timer_del(g_scan_timer); g_scan_timer = NULL; }
+    if(!wifi_list_ready()) return;
+    if(g_radio_timer){ lv_timer_del(g_radio_timer); g_radio_timer = NULL; }
     /* wpa_cli returns non-zero when it can't reach the control socket / issue the scan; surface
      * that honestly instead of letting scan_fill() report a false "No networks found". */
     if(system("" WCLI "scan >/dev/null 2>&1") != 0){ list_msg("Couldn't scan Wi-Fi"); return; }
@@ -1256,37 +1308,30 @@ static void start_scan(void){
 }
 
 /* ---- radio toggle ------------------------------------------------------- */
-/* wifi_up.sh runs async, so wpa_supplicant isn't up the instant the switch flips.
- * Show "Turning on Wi-Fi..." and poll until the radio is actually up before
- * scanning (otherwise start_scan() would immediately report "Wi-Fi is off"). */
-static lv_timer_t *g_radio_timer;
-static uint32_t    g_radio_start;
+/* The readiness timer belongs only to the Wi-Fi page. Detach before start_scan:
+ * it may schedule a replacement if the service is still unavailable. */
 static void radio_on_poll_cb(lv_timer_t *t){
-    (void)t;
-    if(wifi_radio_on()){
-        lv_timer_del(g_radio_timer); g_radio_timer = NULL;
-        start_scan();
-        return;
-    }
-    if(lv_tick_elaps(g_radio_start) > 8000){
-        lv_timer_del(g_radio_timer); g_radio_timer = NULL;
-        list_msg("Couldn't turn on Wi-Fi");
-    }
+    if(t != g_radio_timer) return;
+    g_radio_timer = NULL; lv_timer_del(t);
+    if(screen_current() == SCR_WIFI) start_scan();
 }
-static void sw_cb(lv_event_t *e){
-    if(lv_event_get_code(e)!=LV_EVENT_VALUE_CHANGED) return;
+/* The one Wi-Fi power path: the page's switch and the Settings > Network row both call it. An explicit choice ends any
+ * radio reconciliation hold; the keepalive enforces the saved intent. */
+int wifi_power_pending(void){ return g_radio_timer != NULL; }   /* a start made here is still waiting for the radio */
+void wifi_power_set(int on){
     wifi_lease_retry_reset();
-    int on = lv_obj_has_state(g_sw, LV_STATE_CHECKED);
     g_intent_epoch++;                            /* an explicit choice: ends any radio reconciliation hold */
     if(on){
         cfg_set_int("wifi_on", 1);               /* persist intent -> keepalive keeps it up */
-        system("/usr/bin/wifi_up.sh >/dev/null 2>&1 &");
-        g_wifi_last_start = lv_tick_get();       /* let the keepalive back off (no duplicate launch) */
+        if(!g_wifi_last_start || lv_tick_elaps(g_wifi_last_start) > 30000){
+            if(system("/usr/bin/wifi_up.sh >/dev/null 2>&1 &") == 0)
+                g_wifi_last_start = lv_tick_get();
+        }
         g_sanitize_pending = 1;                  /* sanitize this instance once it's up */
-        list_msg("Turning on Wi-Fi...");
-        g_radio_start = lv_tick_get();
-        if(g_radio_timer) lv_timer_del(g_radio_timer);
-        g_radio_timer = lv_timer_create(radio_on_poll_cb, 700, NULL);
+        if(screen_current() == SCR_WIFI){
+            list_msg("Starting Wi-Fi...");
+            if(!g_radio_timer) g_radio_timer = lv_timer_create(radio_on_poll_cb, 2500, NULL);
+        }
     } else {
         cfg_set_int("wifi_on", 0);               /* set OFF before down so keepalive won't resurrect */
         if(g_radio_timer){ lv_timer_del(g_radio_timer); g_radio_timer = NULL; }
@@ -1294,19 +1339,28 @@ static void sw_cb(lv_event_t *e){
         if(g_conn_timer){ lv_timer_del(g_conn_timer); g_conn_timer = NULL; }
         wifi_lease_step();
         system("/usr/bin/wifi_down.sh >/dev/null 2>&1");
-        list_msg("Wi-Fi is off");
+        g_wifi_last_start = 0; /* a later explicit ON starts a new attempt */
+        if(screen_current() == SCR_WIFI) list_msg("Wi-Fi is off");
     }
+    /* a choice made on the Settings row also shows on the page's switch */
+    if(g_sw){ if(on) lv_obj_add_state(g_sw, LV_STATE_CHECKED); else lv_obj_clear_state(g_sw, LV_STATE_CHECKED); }
+}
+static void sw_cb(lv_event_t *e){
+    if(lv_event_get_code(e)!=LV_EVENT_VALUE_CHANGED) return;
+    wifi_power_set(lv_obj_has_state(g_sw, LV_STATE_CHECKED));
 }
 
 /* Quick Settings tile short-press: flip the radio + persist intent, no screen-specific UI.
  * Mirrors sw_cb's radio actions (keepalive enforces the intent). Returns the new state. */
 int wifi_toggle(void){
     g_intent_epoch++;                        /* an explicit choice: ends any radio reconciliation hold */
-    int on = !cfg_get_int("wifi_on", 1);
+    int on = !wifi_control_on();
     cfg_set_int("wifi_on", on);
     if(on){
-        system("/usr/bin/wifi_up.sh >/dev/null 2>&1 &");
-        g_wifi_last_start = lv_tick_get();   /* let the keepalive back off (no duplicate launch) */
+        if(!g_wifi_last_start || lv_tick_elaps(g_wifi_last_start) > 30000){
+            if(system("/usr/bin/wifi_up.sh >/dev/null 2>&1 &") == 0)
+                g_wifi_last_start = lv_tick_get();
+        }
         g_sanitize_pending = 1;              /* sanitize this instance once it's up */
     } else {
         if(g_radio_timer){ lv_timer_del(g_radio_timer); g_radio_timer = NULL; }
@@ -1314,9 +1368,16 @@ int wifi_toggle(void){
         if(g_conn_timer){ lv_timer_del(g_conn_timer); g_conn_timer = NULL; }
         wifi_lease_step();
         system("/usr/bin/wifi_down.sh >/dev/null 2>&1");
+        g_wifi_last_start = 0; /* a later explicit ON starts a new attempt */
     }
     /* keep the Wi-Fi screen's switch in sync so it reflects reality when opened later */
     if(g_sw){ if(on) lv_obj_add_state(g_sw, LV_STATE_CHECKED); else lv_obj_clear_state(g_sw, LV_STATE_CHECKED); }
+    if(screen_current() == SCR_WIFI){
+        if(on){
+            list_msg("Starting Wi-Fi...");
+            if(!g_radio_timer) g_radio_timer = lv_timer_create(radio_on_poll_cb, 2500, NULL);
+        } else list_msg("Wi-Fi is off");
+    }
     return on;
 }
 
@@ -1383,7 +1444,7 @@ void wifi_create(lv_obj_t *root){
 void wifi_open(void){
     wifi_lease_retry_reset();
     if(g_sw){
-        if(wifi_radio_on()) lv_obj_add_state(g_sw, LV_STATE_CHECKED);
+        if(wifi_control_on()) lv_obj_add_state(g_sw, LV_STATE_CHECKED);
         else                lv_obj_clear_state(g_sw, LV_STATE_CHECKED);
     }
     screen_show(SCR_WIFI);

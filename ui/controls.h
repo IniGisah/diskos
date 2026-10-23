@@ -60,6 +60,7 @@ int  ctl_frame_rot(char *buf, size_t n, int v);            /* "0646000C000<v>"; 
 int  ctl_frame_key(char *buf, size_t n, int key, int act); /* "082<k>000C000<a>"; 0 ok, -1 bad */
 /* Send through `send` (ipc_send_cmd in the product); 0 = sent, -1 = not sent (bad value, no sender, refused send). */
 int  ctl_apply_rot_via(int (*send)(const char *), int v);
+int  ctl_keys_cast_ok(const int act[CTL_KEY_N]);          /* 1 only if all three gestures are Adjust Volume (Cast admission) */
 int  ctl_apply_key_via(int (*send)(const char *), int key, int act);
 
 /* ---- the player's stored values (read-only SYSCONFIG) ---- */

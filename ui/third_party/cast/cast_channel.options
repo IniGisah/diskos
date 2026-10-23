@@ -1,0 +1,9 @@
+openscreen.cast.proto.CastMessage.source_id max_size:128
+openscreen.cast.proto.CastMessage.destination_id max_size:128
+openscreen.cast.proto.CastMessage.namespace max_size:128
+openscreen.cast.proto.CastMessage.payload_utf8 max_size:16384
+openscreen.cast.proto.CastMessage.payload_binary max_size:16384
+openscreen.cast.proto.AuthChallenge skip_message:true
+openscreen.cast.proto.AuthResponse skip_message:true
+openscreen.cast.proto.AuthError skip_message:true
+openscreen.cast.proto.DeviceAuthMessage skip_message:true

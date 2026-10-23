@@ -48,12 +48,20 @@ typedef enum {
     KIT_TOGGLE, KIT_SLIDER, KIT_ROLLER, KIT_ARC, KIT_BAR, KIT_TEXTAREA, KIT_KEYBOARD, KIT_IMAGE,
     KIT_SCRIM,           /* a full-screen dimmer on the top layer */
     KIT_POPUP,           /* a popup panel on the top layer (dialog, menu, toast) */
+    KIT_SECTION,         /* a non-interactive heading above a group of list rows (kit_section) */
     KIT_OTHER,
 } kit_role_t;
 void kit_pass(lv_obj_t *root);          /* style root and everything under it not yet styled (no-op for Default) */
 void kit_restyle(lv_obj_t *root);       /* style root's tree again (content rebuilt in place) */
-void kit_install(void);                 /* screens_init: start the styling pass (no-op for Default) */
+void kit_install(void);                 /* screens_init: start the per-redraw pass (styling; shared-dialog reflow) */
+#ifdef DISKOS_HOST
+int      kit_host_role(const lv_obj_t *obj);   /* host tests: the kit_role_t the pass gave obj (-1 = none yet) */
+uint32_t kit_host_style_calls(void);           /* host tests: how many times a styler ran */
+#endif
 void kit_keep(lv_obj_t *obj);           /* a layout hook styled obj itself: the pass leaves it (not its children) */
+void kit_isolate(lv_obj_t *obj);        /* reserve obj user_data; both passes leave its whole subtree alone */
+void kit_button(lv_obj_t *obj);         /* explicit action identity: a wide button is never a list row */
+void kit_section(lv_obj_t *label);      /* tag a label as a list section heading: the pass gives it KIT_SECTION (never a row) */
 typedef enum { KIT_ROW_PLAIN, KIT_ROW_ICON, KIT_ROW_SWATCH, KIT_ROW_SYMBOL } kit_row_layout_t;
 void kit_row_layout(lv_obj_t *row, kit_row_layout_t layout); /* tag leading content before the styling pass */
 kit_row_layout_t kit_row_layout_get(const lv_obj_t *row);
@@ -66,6 +74,37 @@ typedef struct {
              *np_title, *np_artist, *pp, *pp_label;
 } home_parts_t;
 
+/* AirPlay receiving (ui.c) hides the local Now Playing and shows its own composition: no seek, no play-order, favourite,
+ * bookmark or queue (ui_receiver_active() describes source ownership, including entry/recovery). A theme without a
+ * `receiver` hook gets Default's composition. With one, the theme is drawn in its own colours and, for the three
+ * states below, places the parts itself (always with guarded setters: this runs every tick). The hook is called once
+ * at creation (first = 1, mode RX_OTHER: static styling, decoration) and each tick. In every state it may rewrite
+ * the label texts and hide the frame/glyph; it must not add a knob, a seek handle or a local action. RX_OTHER
+ * (starting, Wi-Fi lost, failed, returning) keeps Default's placement: the hook only hides its own decoration. */
+typedef struct {
+    lv_obj_t *root, *arc, *text[5], *frame, *art, *note, *icon, *warn, *key[5], *label[5];
+    /* text[0] source tag, [1] title / heading, [2] artist / Disc name, [3] album / hint, [4] "Paused";
+     * key[0..2] previous, play-pause, next; key[3] retry / Wi-Fi settings; key[4] return / cancel */
+    lv_obj_t *bar, *elapsed, *remain;
+    /* Progress parts, display only, all created hidden and unstyled: bar = a plain rectangle (the fill: the theme sets
+     * its position, size, colour and visibility), elapsed / remain = labels ui.c keeps filled with the times. Default
+     * draws its fill on `arc`; a theme that ignores these parts renders exactly as before. */
+} rx_parts_t;
+/* The hook's parts are borrowed LVGL objects and `s` lives on the caller's stack for one call: a hook must not retain
+ * `s` (or its address) after it returns. */
+typedef enum { RX_OTHER, RX_RECEIVING, RX_PAUSED, RX_WAITING } rx_mode_t;
+typedef struct {
+    int first, mode, has_title;
+    int frame, icon;       /* in/out: show the cover frame / the AirPlay glyph */
+    char text[5][96];      /* in/out: what each text label will say */
+    /* in: the progress model (receiver_progress.h): show = 0 means a bar and times are never drawn; otherwise the
+     * position is trusted. fraction in permille. elapsed / remain are "m:ss" (H:MM:SS from an hour) and "-m:ss";
+     * both are empty while show = 0. Paused keeps the frozen position. */
+    int show, fraction;
+    long elapsed_ms, duration_ms;
+    char elapsed[16], remain[16];
+} rx_state_t;
+
 /* Now Playing's parts (ui.c). CORE: prev, pp, next, mode, the seek (ring, or a bar the theme passes to
  * ui_np_seek_line), times. REACHABLE: fav, sleep (they may move, e.g. into the NP menu, only with a replacement path).
  * DECORATIVE: backdrop, cover art, dots, the separator. The cover's tap box follows wherever the cover is. */
@@ -73,6 +112,7 @@ typedef struct {
     lv_obj_t *root, *backdrop, *ring, *cover, *cover_img, *cover_note, *fav, *fav_icon, *sleep, *sleep_icon, *mode,
              *mode_icon, *mode_one, *title, *artist, *album, *prev, *pp, *next, *elapsed, *sep, *remain, *dots[2];
     lv_obj_t *pos;   /* the queue position on its own line: hidden unless a theme shows it (then the album line drops it) */
+    lv_obj_t *beam;  /* the Beam button (CORE, always shown): a theme may move and restyle it but never drop it; glyph = its first child */
 } np_parts_t;
 
 /* The Quick Settings drawer (quicksettings.c), rebuilt on every open. CORE: every tile (short + long press), the
@@ -118,10 +158,12 @@ typedef struct theme_kit {
     void (*saver)(const saver_parts_t *p);    /* screensaver touches (after each relayout) */
     void (*saver_clock)(const char *t);       /* the screensaver's time changed (a theme drawing its own clock) */
     void (*pass_end)(void);                   /* after a styling pass: work that needs the whole of a list at once */
+    void (*receiver)(const rx_parts_t *p, rx_state_t *s);   /* AirPlay receiving composition (see rx_parts_t) */
     void (*np_state)(int playing, int have_track);   /* Now Playing's play state changed (a theme spelling it out) */
     void (*title)(lv_obj_t *label, const char *text);   /* set a screen title, already in the theme's case */
     void (*title_fit)(lv_obj_t *label, const char *text);   /* size a content-sized title for this text, BEFORE it is set
                                                             * (face, tracking, the box's width); the caller then sets it */
+    void (*title_placed)(lv_obj_t *label);      /* final shared header geometry, for attached decoration */
     const char *back_text;                    /* Back as text (e.g. "<"), NULL = the arrow icon */
     int saver_mer_apart;                      /* the saver's AM/PM beside the digits instead of in the clock face: 1 = in a small
                                                * text face (hi-fi: its segment face has no letters), 2 = in the theme's date

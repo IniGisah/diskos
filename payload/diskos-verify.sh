@@ -16,13 +16,23 @@
 # Usage: diskos-verify.sh <rootpub.pem> <MIN_KEY_EPOCH> <MIN_UI_EPOCH> <bundle_dir> <ui_binary>
 #   bundle_dir must contain: keyauthz keyauthz.sig leafpub.pem update.manifest update.manifest.sig
 # Exit 0 iff the whole chain verifies AND ui_binary matches the (leaf-signed) manifest.
-# Prints the verified {component,version,epoch} on success; a single "REJECT: <reason>" on failure.
+# Exit 1 for established invalid content; 2 if verification cannot complete.
+# Prints the verified fields, REJECT: <reason>, or RETRY: <reason>, respectively.
 
 OPENSSL=/usr/bin/openssl
 [ -x "$OPENSSL" ] || OPENSSL=openssl          # dev host fallback; device uses the absolute path
 MAXBYTES=8192                                  # a manifest/authz is tiny; cap to bound parsing
 
 reject() { echo "REJECT: $1" >&2; exit 1; }
+incomplete() { echo "RETRY: $1" >&2; exit 2; }
+for _tool in wc tr grep head sha256sum cut od "$OPENSSL"; do
+    command -v "$_tool" >/dev/null 2>&1 || incomplete "missing verifier tool: $_tool"
+done
+
+# Capture the reader status before formatting; pipelines otherwise hide I/O/exec errors.
+_size() { _v=$(wc -c < "$1") || incomplete "cannot size: $1"; printf '%s' "$_v" | tr -d ' '; }
+_first() { head -n1 "$1" || incomplete "cannot read: $1"; }
+_bytes() { _v=$(od "$@") || incomplete "cannot read ELF"; printf '%s' "$_v" | tr -d ' '; }
 
 # --- generic strict readers -------------------------------------------------
 # _sane_file <path> <maxbytes>: exists, regular, not a symlink, <= maxbytes. For ANY file
@@ -32,8 +42,8 @@ _sane_file() {
     [ -e "$_f" ] || reject "missing file: $_f"
     [ -L "$_f" ] && reject "refuse symlink: $_f"
     [ -f "$_f" ] || reject "not a regular file: $_f"
-    _sz=$(wc -c < "$_f" 2>/dev/null | tr -d ' ')
-    case "$_sz" in ''|*[!0-9]*) reject "unsizable: $_f";; esac
+    _sz=$(_size "$_f") || exit $?
+    case "$_sz" in ''|*[!0-9]*) incomplete "unsizable: $_f";; esac
     [ "$_sz" -le "$_max" ] || reject "oversize ($_sz > $_max): $_f"
     return 0
 }
@@ -43,8 +53,13 @@ _sane_file() {
 # high-bit bytes - robustly, without relying on the shell preserving a CR/NUL through $()/case.
 _sane_text() {
     _sane_file "$1" "$2"
-    _bad=$(LC_ALL=C tr -d '\012\040-\176' < "$1" | wc -c | tr -d ' ')
-    [ "$_bad" = 0 ] || reject "non-ASCII/control byte in $1"
+    _hex=$(od -An -v -tx1 "$1") || incomplete "cannot read text: $1"
+    # Hex preserves NUL bytes which command substitution would otherwise discard.
+    for _byte in $_hex; do
+        case "$_byte" in 0a|[2-6][0-9a-f]|7[0-9a-e]) ;;
+            *) reject "non-ASCII/control byte in $1" ;;
+        esac
+    done
     return 0
 }
 
@@ -52,9 +67,10 @@ _sane_text() {
 # Value must contain no control chars (incl. CR); ^key=value$ anchored; no leading/trailing space.
 _field() {
     _m="$1"; _k="$2"
-    _n=$(grep -c "^$_k=" "$_m" 2>/dev/null || echo 0)
+    _n=$(grep -c "^$_k=" "$_m" 2>/dev/null); _nr=$?
+    [ "$_nr" -le 1 ] || incomplete "cannot read fields: $_m"
     [ "$_n" = 1 ] || reject "field '$_k' count=$_n (want exactly 1)"
-    _line=$(grep "^$_k=" "$_m")
+    _line=$(grep "^$_k=" "$_m") || incomplete "cannot read field: $_m"
     # CR (\r) or other control chars in the line -> reject (CRLF / injection guard)
     case "$_line" in *"$(printf '\r')"*) reject "CR in field '$_k'";; esac
     printf '%s' "${_line#"$_k="}"
@@ -74,7 +90,7 @@ _check_schema() {
         case "$_keys" in *" $_kk "*) ;; *) reject "$_sf: unknown field '$_kk'";; esac
         case "$_seen" in *" $_kk "*) reject "$_sf: duplicate field '$_kk'";; esac
         _seen="$_seen$_kk "
-    done < "$_sf"
+    done < "$_sf" || incomplete "cannot read schema: $_sf"
     for _kk in $2; do
         case "$_seen" in *" $_kk "*) ;; *) reject "$_sf: missing field '$_kk'";; esac
     done
@@ -83,15 +99,22 @@ _check_schema() {
 
 _is_hex64() { case "$1" in *[!0-9a-f]*) return 1;; esac; [ "${#1}" = 64 ]; }
 _is_uint()  { case "$1" in ''|*[!0-9]*) return 1;; esac; [ "${#1}" -le 18 ]; }
-_sha256()   { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
+_sha256() { _v=$(sha256sum "$1" 2>/dev/null) || incomplete "cannot hash: $1"; printf '%s' "${_v%% *}"; }
 
 # _verify_sig <pubkey.pem> <sig> <signed_file>: 0 iff openssl asserts a valid P-256/SHA-256 sig.
-# Gate strictly on exit STATUS; discard stdout. A malformed key/sig/file -> nonzero (fail-closed).
+# Success depends only on exit status; diagnostics classify failures conservatively.
 _verify_sig() {
-    if "$OPENSSL" dgst -sha256 -verify "$1" -signature "$2" "$3" >/dev/null 2>&1; then
+    if _sigout=$("$OPENSSL" dgst -sha256 -verify "$1" -signature "$2" "$3" 2>/dev/null); then
         return 0
+    else
+        _sigrc=$?
     fi
-    return 1
+    # OpenSSL also returns failure for unreadable files and invocation/provider errors.
+    # Only its explicit signature-mismatch result establishes invalid signed content.
+    case "$_sigrc:$_sigout" in
+        '1:Verification failure'|'1:Verification Failure') return 1 ;;
+        *) incomplete "signature check could not complete (status $_sigrc)" ;;
+    esac
 }
 
 # --- args -------------------------------------------------------------------
@@ -107,37 +130,44 @@ MAN="$BDIR/update.manifest"; MAN_SIG="$BDIR/update.manifest.sig"
 
 # --- 1. root authorizes the leaf key ---------------------------------------
 _sane_text "$AUTHZ" "$MAXBYTES"; _sane_file "$AUTHZ_SIG" 4096; _sane_file "$LEAFPUB" 4096
-[ "$(head -n1 "$AUTHZ")" = "diskos-keyauthz-v1" ] || reject "authz: bad magic"
+_magic=$(_first "$AUTHZ") || exit $?
+[ "$_magic" = "diskos-keyauthz-v1" ] || reject "authz: bad magic"
 _verify_sig "$ROOTPUB" "$AUTHZ_SIG" "$AUTHZ" || reject "authz: root signature invalid"
 _check_schema "$AUTHZ" "keyid keyepoch role pubkey_sha256"
-KEYEPOCH=$(_field "$AUTHZ" keyepoch) || exit 1; _is_uint "$KEYEPOCH" || reject "authz: bad keyepoch"
+KEYEPOCH=$(_field "$AUTHZ" keyepoch) || exit $?; _is_uint "$KEYEPOCH" || reject "authz: bad keyepoch"
 [ "$KEYEPOCH" -ge "$MIN_KEY_EPOCH" ] || reject "authz: keyepoch $KEYEPOCH < floor $MIN_KEY_EPOCH (revoked key)"
-ROLE=$(_field "$AUTHZ" role) || exit 1; [ "$ROLE" = "tier-a" ] || reject "authz: role '$ROLE' != tier-a"
+ROLE=$(_field "$AUTHZ" role) || exit $?; [ "$ROLE" = "tier-a" ] || reject "authz: role '$ROLE' != tier-a"
 # The leaf pubkey is bound by hash inside the root-signed authz (no PEM parsing in the signed doc).
-PUBHASH=$(_field "$AUTHZ" pubkey_sha256) || exit 1; _is_hex64 "$PUBHASH" || reject "authz: bad pubkey_sha256"
-[ "$(_sha256 "$LEAFPUB")" = "$PUBHASH" ] || reject "authz: leafpub hash mismatch (substituted key)"
+PUBHASH=$(_field "$AUTHZ" pubkey_sha256) || exit $?; _is_hex64 "$PUBHASH" || reject "authz: bad pubkey_sha256"
+_hash=$(_sha256 "$LEAFPUB") || exit $?
+[ "$_hash" = "$PUBHASH" ] || reject "authz: leafpub hash mismatch (substituted key)"
 
 # --- 2. leaf authorizes the mq_ui binary -----------------------------------
 _sane_text "$MAN" "$MAXBYTES"; _sane_file "$MAN_SIG" 4096
-[ "$(head -n1 "$MAN")" = "diskos-update-v1" ] || reject "manifest: bad magic"
+_magic=$(_first "$MAN") || exit $?
+[ "$_magic" = "diskos-update-v1" ] || reject "manifest: bad magic"
 _verify_sig "$LEAFPUB" "$MAN_SIG" "$MAN" || reject "manifest: leaf signature invalid"
 _check_schema "$MAN" "component epoch version size sha256 channel"
-COMPONENT=$(_field "$MAN" component) || exit 1; [ "$COMPONENT" = "mq_ui" ] || reject "manifest: component '$COMPONENT' != mq_ui"
-UEPOCH=$(_field "$MAN" epoch) || exit 1; _is_uint "$UEPOCH" || reject "manifest: bad epoch"
+COMPONENT=$(_field "$MAN" component) || exit $?; [ "$COMPONENT" = "mq_ui" ] || reject "manifest: component '$COMPONENT' != mq_ui"
+UEPOCH=$(_field "$MAN" epoch) || exit $?; _is_uint "$UEPOCH" || reject "manifest: bad epoch"
 [ "$UEPOCH" -ge "$MIN_UI_EPOCH" ] || reject "manifest: epoch $UEPOCH < baked floor $MIN_UI_EPOCH (downgrade)"
-MSIZE=$(_field "$MAN" size) || exit 1;   _is_uint "$MSIZE"  || reject "manifest: bad size"
-MSHA=$(_field "$MAN" sha256) || exit 1;  _is_hex64 "$MSHA"  || reject "manifest: bad sha256"
-VERSION=$(_field "$MAN" version) || exit 1
+MSIZE=$(_field "$MAN" size) || exit $?;   _is_uint "$MSIZE"  || reject "manifest: bad size"
+MSHA=$(_field "$MAN" sha256) || exit $?;  _is_hex64 "$MSHA"  || reject "manifest: bad sha256"
+VERSION=$(_field "$MAN" version) || exit $?
 
 # --- 3. the binary matches the leaf-signed manifest ------------------------
 _sane_file "$UIBIN" 33554432   # 32 MiB cap; mq_ui is ~3.4 MB
-_usz=$(wc -c < "$UIBIN" | tr -d ' ')
+_usz=$(_size "$UIBIN") || exit $?
 [ "$_usz" = "$MSIZE" ] || reject "binary size $_usz != manifest $MSIZE"
-[ "$(_sha256 "$UIBIN")" = "$MSHA" ] || reject "binary sha256 mismatch"
+_hash=$(_sha256 "$UIBIN") || exit $?
+[ "$_hash" = "$MSHA" ] || reject "binary sha256 mismatch"
 # ELF32-LE MIPS sanity (defence in depth; matches S97's existing checks)
-[ "$(od -An -tx1 -N4 "$UIBIN" | tr -d ' ')" = "7f454c46" ] || reject "binary: not ELF"
-[ "$(od -An -tx1 -j4 -N2 "$UIBIN" | tr -d ' ')" = "0101" ]  || reject "binary: not ELF32-LE"
-[ "$(od -An -tx1 -j18 -N2 "$UIBIN" | tr -d ' ')" = "0800" ] || reject "binary: not MIPS"
+_elf=$(_bytes -An -tx1 -N4 "$UIBIN") || exit $?
+[ "$_elf" = "7f454c46" ] || reject "binary: not ELF"
+_elf=$(_bytes -An -tx1 -j4 -N2 "$UIBIN") || exit $?
+[ "$_elf" = "0101" ]  || reject "binary: not ELF32-LE"
+_elf=$(_bytes -An -tx1 -j18 -N2 "$UIBIN") || exit $?
+[ "$_elf" = "0800" ] || reject "binary: not MIPS"
 
 echo "OK component=$COMPONENT version=$VERSION epoch=$UEPOCH keyepoch=$KEYEPOCH"
 exit 0

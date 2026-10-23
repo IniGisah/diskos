@@ -5,6 +5,7 @@ from contextlib import ExitStack
 import hashlib
 import io
 import json
+import ntpath
 import os
 from pathlib import Path
 import subprocess
@@ -56,13 +57,34 @@ class ChildContractTests(unittest.TestCase):
 
     def test_eof_bad_gate_and_missing_or_forged_capability(self):
         for raw in (b'', b'X', b'G', b'G{}', b'G' + b'x' * 65537):
-            self.assertEqual(self.invoke(gate=raw), (1, 0, 0, 0))
+            self.assertEqual(self.invoke(gate=raw), (flash_child.VALIDATION_REFUSED, 0, 0, 0))
         for field, value in (('nonce', 'b' * 64), ('parent', True), ('parent', 0),
                              ('dev_requested', 1), ('dev_requested', 'true'), ('dev_requested', None)):
             request = capability(); request[field] = value
-            self.assertEqual(self.invoke(request), (1, 0, 0, 0))
-        self.assertEqual(self.invoke(supervision=OSError('forged job')), (1, 1, 0, 0))
+            self.assertEqual(self.invoke(request), (flash_child.VALIDATION_REFUSED, 0, 0, 0))
+        self.assertEqual(self.invoke(supervision=OSError('forged job')), (flash_child.VALIDATION_REFUSED, 1, 0, 0))
         self.assertEqual(self.invoke(), (17, 1, 1, 1))
+
+    def test_validation_status_cannot_escape_native_phase(self):
+        refused = getattr(flash_child, 'VALIDATION_REFUSED', 65)
+        for auth_error, native_result, native_error, expected in (
+                (ValueError('bad path'), 0, None, refused),
+                (RuntimeError('bundle gate'), 0, None, refused),
+                (None, refused, None, 1), (None, 1, None, 1),
+                (None, 0, OSError('could not invoke'), 1),
+                (None, 0, RuntimeError('post-launch failure'), 1)):
+            raw = b'G' + json.dumps(capability()).encode('ascii')
+            child_sys = types.SimpleNamespace(platform='win32', stdin=mock.Mock(buffer=io.BytesIO(raw)),
+                                             stderr=io.StringIO())
+            with self.subTest(auth_error=auth_error, result=native_result, error=native_error), \
+                    mock.patch.object(flash_child, 'sys', child_sys), \
+                    mock.patch.object(flash_child, 'verify_supervision'), \
+                    mock.patch.object(flash_child, 'authorized_command', side_effect=auth_error,
+                                      return_value=(['bundled'], {})), \
+                    mock.patch.object(subprocess, 'call', return_value=native_result,
+                                      side_effect=native_error) as native:
+                self.assertEqual(flash_child.main([flash_child.CHILD_MODE, NONCE]), expected)
+                self.assertEqual(native.call_count, int(auth_error is None))
 
     def test_public_false_development_boolean_reaches_authorization(self):
         request = capability(); request['dev_requested'] = False
@@ -99,8 +121,8 @@ class ChildContractTests(unittest.TestCase):
 
     def test_windowed_dispatch_preserves_binary_gate_and_supervision(self):
         self.assertEqual(gui_entry.CHILD_MODE, flash_child.CHILD_MODE)
-        for gate, supervision, expected in ((b'', None, 1), (b'G{}', None, 1),
-                (b'G' + json.dumps(capability()).encode('ascii'), OSError('wrong parent image'), 1),
+        for gate, supervision, expected in ((b'', None, flash_child.VALIDATION_REFUSED), (b'G{}', None, flash_child.VALIDATION_REFUSED),
+                (b'G' + json.dumps(capability()).encode('ascii'), OSError('wrong parent image'), flash_child.VALIDATION_REFUSED),
                 (b'G' + json.dumps(capability()).encode('ascii'), None, 17)):
             streams = [io.TextIOWrapper(io.BytesIO(gate)), io.StringIO(), io.StringIO()]
             with mock.patch.object(sys, 'platform', 'win32'), \
@@ -263,6 +285,140 @@ class ChildContractTests(unittest.TestCase):
             self.assertIn(mock.call(701), win.CloseHandle.call_args_list)
 
 
+class WindowsPathTests(unittest.TestCase):
+    """Windows spelling semantics without changing the interpreter's platform."""
+    def setUp(self):
+        self.stack = ExitStack(); self.addCleanup(self.stack.close)
+        self.expand = lambda p: p.replace('SHORT~1', 'Long Name\u00e9')
+        self.long_api = mock.Mock(side_effect=self.expand)
+        self.final = mock.Mock(side_effect=lambda p, **kw: self.expand(p))
+        path_api = types.SimpleNamespace(**{n: getattr(ntpath, n) for n in
+            ('abspath', 'isabs', 'basename', 'dirname', 'join', 'normcase', 'commonpath')})
+        path_api.realpath = self.final
+        path_api.lexists = mock.Mock(return_value=False)
+        self.fs = types.SimpleNamespace(name='nt', path=path_api,
+            lstat=mock.Mock(return_value=types.SimpleNamespace(st_mode=0o100600)),
+            scandir=mock.Mock(return_value=mock.MagicMock()))
+        self.stack.enter_context(mock.patch.object(flash_child, 'os', self.fs))
+        # create=True lets the regression exercise the old guard on the baseline.
+        self.stack.enter_context(mock.patch.object(flash_child, '_long_path', self.long_api, create=True))
+
+    def test_short_workspace_bundle_and_image_reach_native(self):
+        for short in ('workspace', 'bundle', 'image'):
+            with self.subTest(short=short), ExitStack() as stack:
+                root = r'C:\bundle\SHORT~1' if short == 'bundle' else self.expand(r'C:\bundle\SHORT~1')
+                work = r'C:\temp\SHORT~1' if short == 'workspace' else self.expand(r'C:\temp\SHORT~1')
+                image = r'C:\images\SHORT~1\image.bin' if short == 'image' else self.expand(r'C:\images\SHORT~1\image.bin')
+                vendor = ntpath.join(root, 'vendor', 'windows-x86_64')
+                tool = ntpath.join(vendor, 'usbboot.exe')
+                native_path = lambda name: ntpath.join(vendor, name)
+                cmd = flasher._flash_command(tool, native_path('disc_spl_lpddr3.bin'),
+                    native_path(flasher.WRITER_NAME), image, ntpath.join(work, 'plan.bin'),
+                    ntpath.join(work, 'poison.bin'), ntpath.join(work, 'dbg.bin'))
+                for obj, name, value in ((bundle, 'resource_root', root), (bundle, 'vendor_dir', vendor),
+                        (bundle, 'native_env', {}), (bundle, 'verify_windows_flash_bundle', None),
+                        (basegate, 'build_plan', b'plan'), (flasher, 'preflight', None),
+                        (flasher, '_writer_descriptor', (768, basegate.BLOB_SCHEMA))):
+                    stack.enter_context(mock.patch.object(obj, name, return_value=value))
+                stack.enter_context(mock.patch.object(bundle, 'native', side_effect=native_path))
+                stack.enter_context(mock.patch.object(flasher, 'windows_dev_flash', return_value=ExitStack()))
+                files = [io.BytesIO(b'plan'), io.BytesIO(b'\xee' * 128)]
+                stack.enter_context(mock.patch('builtins.open', side_effect=files))
+                raw = b'G' + json.dumps(capability(cmd)).encode('ascii')
+                child_sys = types.SimpleNamespace(platform='win32', stdin=mock.Mock(buffer=io.BytesIO(raw)),
+                                                 stdout=io.StringIO(), stderr=io.StringIO())
+                stack.enter_context(mock.patch.object(flash_child, 'sys', child_sys))
+                stack.enter_context(mock.patch.object(flash_child, 'verify_supervision'))
+                native = stack.enter_context(mock.patch.object(subprocess, 'call', return_value=17))
+                self.assertEqual(flash_child.main([flash_child.CHILD_MODE, NONCE]), 17,
+                                 child_sys.stderr.getvalue())
+                self.assertEqual(native.call_args.args[0], cmd)
+                self.assertFalse(any(c.args[0].endswith('dbg.bin') for c in self.long_api.call_args_list))
+
+    def test_alias_containment_and_case(self):
+        for path, root in ((r'C:\SHORT~1\file', 'C:\\Long Name\u00e9'),
+                           ('C:\\Long Name\u00e9\\file', r'C:\SHORT~1'),
+                           (r'c:\bundle\file', r'C:\bundle')):
+            with self.subTest(path=path):
+                self.assertEqual(flash_child.checked_path(path, root), path)
+        for path in (r'C:\bundle-other\file', r'D:\bundle\file'):
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, 'bundle containment'):
+                flash_child.checked_path(path, r'C:\bundle')
+
+    def test_original_leaf_ancestor_and_root_reparse_refused_before_expansion(self):
+        path = r'C:\SHORT~1\file'
+        for bad in (path, ntpath.dirname(path), 'C:\\'):
+            for mode, attrs in ((0o120777, 0), (0o040700, 0x400)):
+                with self.subTest(bad=bad, attrs=attrs):
+                    self.long_api.reset_mock()
+                    self.fs.lstat.side_effect = lambda p: types.SimpleNamespace(
+                        st_mode=mode if p == bad else 0o100600,
+                        st_file_attributes=attrs if p == bad else 0)
+                    with self.assertRaisesRegex(ValueError, 'component inspection') as caught:
+                        flash_child.checked_path(path)
+                    self.assertIn(repr(path), str(caught.exception))
+                    self.long_api.assert_not_called()
+        self.fs.lstat.side_effect = lambda p: types.SimpleNamespace(
+            st_mode=0o100600, st_file_attributes=0x400 if p == r'C:\root-alias' else 0)
+        with self.assertRaisesRegex(ValueError, 'root-alias.*component inspection'):
+            flash_child.checked_path(r'C:\bundle\file', r'C:\root-alias')
+
+    def test_inspection_expansion_and_final_resolution_fail_closed(self):
+        path = r'C:\SHORT~1\file'
+        for target, failure, stage in ((self.fs.lstat, PermissionError('denied'), 'component inspection'),
+                (self.long_api, OSError('lookup failed'), 'long-name expansion'),
+                (self.final, FileNotFoundError('gone'), 'final-path comparison')):
+            with self.subTest(stage=stage):
+                original = target.side_effect
+                target.side_effect = failure
+                with self.assertRaisesRegex(ValueError, stage) as caught:
+                    flash_child.checked_path(path)
+                self.assertIn(repr(path), str(caught.exception))
+                target.side_effect = original
+        self.final.side_effect = lambda p, **kw: r'D:\redirected\file'
+        with self.assertRaisesRegex(ValueError, 'final-path comparison'):
+            flash_child.checked_path(path)
+        self.final.assert_called_with(self.expand(path), strict=True)
+
+    def test_each_spelling_expanded_once_and_root_lookup_is_required(self):
+        path, root = r'C:\SHORT~1\file', r'C:\SHORT~1'
+        self.assertEqual(flash_child.checked_path(path, root), path)
+        self.assertEqual(self.long_api.call_args_list, [mock.call(path), mock.call(root)])
+        self.assertEqual(self.final.call_args_list, [mock.call(self.expand(path), strict=True),
+                                                    mock.call(self.expand(root), strict=True)])
+        def expand(p):
+            if p == root: raise OSError('root denied')
+            return self.expand(p)
+        self.long_api.side_effect = expand
+        with self.assertRaisesRegex(ValueError, 'long-name expansion') as caught:
+            flash_child.checked_path(path, root)
+        self.assertIn(repr(root), str(caught.exception))
+
+    def test_long_name_api_sizing_growth_failure_and_types(self):
+        # Exercise the real adapter separately from the path model above.
+        self.stack.close()
+        from ctypes import wintypes
+        long = 'C:\\Long Name\u00e9\\file'
+        for results, ok in (([len(long) + 1, len(long)], True),
+                ([2, len(long) + 1, len(long)], True), ([0], False),
+                ([30, 0], False), ([2, 40, 50], False)):
+            def lookup(path, output, size):
+                result = values.pop(0)
+                if output is not None and 0 < result < size: output.value = long
+                return result
+            values = list(results)
+            api = types.SimpleNamespace(GetLongPathNameW=mock.Mock(side_effect=lookup))
+            with self.subTest(results=results), mock.patch.object(
+                    ctypes, 'WinDLL', return_value=api, create=True), mock.patch.object(
+                        flash_child, 'os', types.SimpleNamespace(path=ntpath)):
+                if ok: self.assertEqual(flash_child._long_path(r'C:\SHORT~1\file'), long)
+                else:
+                    with self.assertRaises(OSError): flash_child._long_path(r'C:\SHORT~1\file')
+                self.assertEqual(api.GetLongPathNameW.argtypes,
+                                 [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD])
+                self.assertIs(api.GetLongPathNameW.restype, wintypes.DWORD)
+
+
 class BundleAuthorizationTests(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack(); self.addCleanup(self.stack.close)
@@ -312,7 +468,7 @@ class BundleAuthorizationTests(unittest.TestCase):
                     mock.patch.object(sys, 'stderr', io.StringIO()), \
                     mock.patch.object(flash_child, 'verify_supervision') as verified, \
                     mock.patch.object(subprocess, 'call', return_value=17) as native:
-                self.assertEqual(cli.main([flash_child.CHILD_MODE, NONCE]), 17 if valid else 1)
+                self.assertEqual(cli.main([flash_child.CHILD_MODE, NONCE]), 17 if valid else flash_child.VALIDATION_REFUSED)
                 verified.assert_called_once_with(123)
                 if valid:
                     self.assertEqual(native.call_args.args[0][0], str(self.tool))

@@ -78,6 +78,9 @@ void lv_gif_resume(lv_obj_t * obj);
  */
 bool lv_gif_is_loaded(lv_obj_t * obj);
 
+/** 1: active, 0: complete, -1: failed or no source. Failure sends LV_EVENT_CANCEL. */
+int lv_gif_get_status(lv_obj_t * obj);
+
 /**
  * Get the loop count for the GIF.
  * @param obj pointer to a gif obj

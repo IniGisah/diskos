@@ -52,7 +52,7 @@ static void plv_remove_cb(lv_event_t *e){
         ui_toast("Removed from playlist");
         plv_reload();                 /* rebuild so ordinals stay correct */
         library_refresh();            /* playlist row count / Now-Playing add-state */
-    }
+    } else ui_toast("Couldn't remove song - try again");
 }
 static void plv_song_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_SHORT_CLICKED) return;   /* SHORT_CLICKED so a long-press-to-remove never also plays */
@@ -192,7 +192,7 @@ static void plv_fill_cb(lv_timer_t *t){
     g_loading = 0;
     if(g_fill_i >= g_fill_n) plv_fill_stop();
 }
-static void plv_reload(void){
+static void plv_reload_read(void){
     theme_title_text(g_title_lbl, g_name);
     if(!g_song_list) return;
     g_loading = 1;
@@ -230,6 +230,17 @@ static void plv_reload(void){
     else plv_fill_stop();
     { static int hinted = 0; if(!hinted) hinted = ui_toast_hint("Hold a song to remove it"); }
 }
+static void plv_reload(void){
+    static long shown_pid;
+    static char shown_name[sizeof g_name]="Playlist";
+    if(!mdb_ui_read_begin()){
+        g_pid=shown_pid; snprintf(g_name,sizeof g_name,"%s",shown_name);
+        ui_toast("Library busy - reopen to refresh"); return;
+    }
+    plv_reload_read();
+    shown_pid=g_pid; snprintf(shown_name,sizeof shown_name,"%s",g_name);
+    mdb_ui_read_end();
+}
 /* Public: rebuild the list from the DB. Called by the screen manager on EVERY entry
  * to SCR_PLVIEW (incl. back-nav), so tap positions can't go stale after the playlist's
  * membership changes elsewhere (e.g. add-to-playlist from Now Playing). */
@@ -244,14 +255,15 @@ void plview_open(long pid, const char *name){
 /* ---- play / shuffle ----------------------------------------------------- */
 static void play_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
-    if(mdb_playlist_count(g_pid) < 1){ ui_toast("Playlist is empty"); return; }
+    int count=mdb_playlist_count(g_pid);
+    if(count < 1){ ui_toast(count<0 ? "Library busy - try again" : "Playlist is empty"); return; }
     ui_set_workmode(0);
     if(ui_play_playlist(g_pid, 1)) screen_show(SCR_NOWPLAYING);
 }
 static void shuffle_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
     int c = mdb_playlist_count(g_pid);
-    if(c < 1){ ui_toast("Playlist is empty"); return; }
+    if(c < 1){ ui_toast(c<0 ? "Library busy - try again" : "Playlist is empty"); return; }
     srand(lv_tick_get());
     ui_set_workmode(1);                       /* shuffle play-mode */
     if(ui_play_playlist(g_pid, rand()%c + 1)) screen_show(SCR_NOWPLAYING);   /* + random start track */
@@ -334,6 +346,7 @@ static void show_delete_confirm(void){
 /* ---- rename ------------------------------------------------------------- */
 static void rename_done(const char *name){
     if(!name || !name[0]) return;
+    if(strlen(name) >= sizeof g_name){ ui_toast("Name too long"); return; }
     if(mdb_playlist_rename(g_pid, name)){
         snprintf(g_name, sizeof g_name, "%s", name);
         theme_title_text(g_title_lbl, g_name);
@@ -346,7 +359,7 @@ static void rename_done(const char *name){
 static void rename_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
     close_pop(&g_menu);
-    kbinput_open("Playlist name", g_name, rename_done);
+    kbinput_open_limited("Playlist name", g_name, rename_done, sizeof g_name-1);
 }
 
 /* ---- 3-dot menu --------------------------------------------------------- */

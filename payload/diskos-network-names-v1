@@ -1,0 +1,6 @@
+v1
+feature=network-naming
+saved=/usr/data/diskos-network-name
+active=/tmp/diskos-names/active
+environment=DISKOS_NETWORK_NAMES=v1
+receiver-naming=no

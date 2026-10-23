@@ -7,6 +7,7 @@
 #include "anim.h"
 #include "musicdb.h"
 #include "fwcaps.h"
+#include "device_names_ui.h"
 #include "version.h"
 #include "md5.h"
 #include <stdio.h>
@@ -28,6 +29,12 @@
 #include "ota.h"
 #include "controls.h"
 #include "i18n.h"
+#include "ipc.h"
+#include "custom_saver_db.h"
+#include "custom_picker_ui.h"
+#include "custom_saver_overlay.h"
+#include <pthread.h>
+#include <stdatomic.h>
 
 /* Killed children are always collected, so none is left a zombie: kill_and_reap() waits up to 300 ms (a SIGKILLed
  * child normally exits at once), and anything still unreaped (e.g. stuck in kernel I/O) is parked and swept by a
@@ -77,7 +84,8 @@ static void bounded_detached(const char *cmd, int ms){
 typedef enum { ST_TOGGLE, ST_SLIDER, ST_CYCLER, ST_READONLY, ST_ACTION, ST_CHOICE } st_type_t;   /* CHOICE: pick from a list */
 
 typedef struct setting_s {
-    const char *group;
+    const char *group;                     /* the category page it is listed on (GROUPS) */
+    const char *section;                   /* the heading above it on that page, NULL = none */
     const char *label;
     st_type_t   type;
     const char *cfg_key;
@@ -86,8 +94,7 @@ typedef struct setting_s {
     const char *ro_val;                    /* readonly */
     void (*apply)(int v);                  /* optional apply hook / decode seam */
     int  def;
-    const char *desc;                      /* detail-page description */
-    const char *const *opt_descs;          /* per-option descriptions (cyclers) */
+    const char *desc;                      /* one short line, only where the name alone is unclear; else NULL */
 } setting_t;
 
 /* apply hooks (decode seams live in main.c) */
@@ -111,7 +118,7 @@ void ui_set_maxvol(int v);
 void ui_set_balance(int v);
 
 static void apply_open_colorpick(int v){ (void)v; colorpick_open(); }   /* seed sliders from cfg + open */
-static void apply_debug_mode(int v){ (void)v; debug_open(); }           /* Settings -> System -> Debug Mode */
+static void apply_debug_mode(int v){ (void)v; debug_open(); }           /* Settings -> Device -> Debug Mode */
 static void apply_artcache(int v){ ui_set_prewarm_mode(v); }   /* every mode preloads album covers; the mode picks the per-track sweep */
 void ui_sd_quiesce_begin(void); int ui_sd_quiesce_drained(void); void ui_sd_quiesce_end(void);   /* main.c: Restart card drain */
 
@@ -144,9 +151,14 @@ static void apply_np_style(int v){ ui_set_np_style(v); }
  * saved the new value; if the reload is refused (a library scan is running) the old value goes back, and the detail
  * view is rebuilt after this event finishes (it cannot be deleted from inside its own switch/button callback). */
 static int g_set_prev;                                  /* the value set_val replaced */
-static void detail_refresh_async(void *u){ (void)u; setting_detail_refresh(); }
+static void detail_refresh_async(void *u){
+    (void)u;
+    if(screen_current() == SCR_SETLIST) settings_row_values_refresh();
+    else setting_detail_refresh();
+}
 static void theme_reload_or_revert(const char *key){
-    if(ui_theme_reload("settings") == 0) return;        /* not reached on success: the exec replaced us */
+    const char *destination = !strcmp(key, "outdoor") ? "settings:outdoor" : "settings";
+    if(ui_theme_reload(destination) == 0) return;        /* not reached on success: the exec replaced us */
     cfg_set_int(key, g_set_prev);
     lv_async_call(detail_refresh_async, NULL);
 }
@@ -183,6 +195,13 @@ static void apply_rescan(int v){ (void)v;
 }
 
 /* ---- Date & Time (parity with stock: automatic time switch, set by hand, time zone) ---------------------------- */
+static void apply_bt_codec(int v){
+    ui_bt_codec_set(v);  /* the normal IPC failure toast handles a rejected send */
+}
+/* Drop the old diskOS-only preference without touching stock or playback.
+ * Idempotent: after a durable removal there is nothing to migrate again. */
+static int legacy_bt_codec_key(const char *key){ return !strcmp(key, "bt_codec"); }
+static void settings_bt_codec_migrate(void){ cfg_remove_if(legacy_bt_codec_key); }
 static void apply_auto_time(int v){
     if(mdb_sysconfig_set_auto_time(v) != 0){           /* the player may hold its database: put the switch back */
         cfg_set_int("auto_time", g_set_prev);
@@ -224,6 +243,12 @@ static void apply_screen_rot(int v){
         cfg_set_int(CTL_CFG_ROT, g_set_prev);   /* stored only when the user taps Keep (controls.c); the row keeps the old one till then */
 }
 static void key_act_apply(int key, const char *cfg_key, int v){
+    if(v != CTL_ACT_VOLUME && ui_cast_session_active()){   /* 16b: a track action would start local audio behind the receiver */
+        cfg_set_int(cfg_key, g_set_prev);
+        ui_toast("Stop beaming to change this");
+        lv_async_call(detail_refresh_async, NULL);
+        return;
+    }
     if(ui_set_volume_key(key, v) != 0){
         cfg_set_int(cfg_key, g_set_prev);
         ui_toast("Couldn't change it - try again");
@@ -313,12 +338,38 @@ static void apply_timezone(int v){
 static void apply_import_m3u(int v){ (void)v;
     int n = mdb_import_m3u_sd("/tmp/sdcard");   /* every folder on the card (bounded walk), like stock V2.57 */
     char b[48];
-    if(n <= 0) snprintf(b, sizeof b, "No new playlists found");
+    if(n < 0) snprintf(b, sizeof b, "Couldn't import - try again");
+    else if(n == 0) snprintf(b, sizeof b, "No new playlists found");
     else       snprintf(b, sizeof b, "Imported %d playlist%s", n, n==1 ? "" : "s");
     ui_toast(b);
 }
 static void apply_wifi(int v){ (void)v; wifi_open(); }   /* opens SCR_WIFI */
+static void apply_bluetooth_name(int v){ (void)v; dnui_open(1); }
 static void apply_bt(int v){ (void)v; bt_open(); }       /* opens SCR_BT */
+/* Network radio rows (owner 2026-10-22): the Wi-Fi and Bluetooth rows carry the radio's power switch. The row only
+ * calls the page's own power path (wifi.c / bt.c), so saved intent, reconciliation, boot restore and pending states
+ * stay in one place. The row shows what the page's switch shows. */
+typedef struct {
+    void (*open)(int);      /* the row's apply hook: opens the page */
+    int  (*shown)(void);    /* the page switch's state source */
+    int  (*pending)(void);  /* a start from the power path is still settling */
+    void (*power)(int on);  /* the page switch's power path */
+} radio_row_t;
+static const radio_row_t RADIO_ROWS[] = {
+    { apply_wifi, wifi_control_on, wifi_power_pending, wifi_power_set },
+    { apply_bt,   bt_control_on,   bt_power_pending,   bt_power_set },
+};
+static const radio_row_t *radio_row(const void *apply){
+    for(unsigned i = 0; i < sizeof RADIO_ROWS / sizeof RADIO_ROWS[0]; i++)
+        if(apply == (const void *)RADIO_ROWS[i].open) return &RADIO_ROWS[i];
+    return NULL;
+}
+/* Pending shows on (the choice made) and dimmed; taps are ignored until it settles. */
+static void radio_switch_paint(const radio_row_t *r, lv_obj_t *sw){
+    int pending = r->pending();
+    if(pending || r->shown()) lv_obj_add_state(sw, LV_STATE_CHECKED); else lv_obj_remove_state(sw, LV_STATE_CHECKED);
+    if(pending) lv_obj_add_state(sw, LV_STATE_DISABLED); else lv_obj_remove_state(sw, LV_STATE_DISABLED);
+}
 static void apply_workmode(int v){ (void)v; modes_open(); }  /* opens SCR_WORKMODE (source-mode picker) */
 static void apply_eq_custom(int v){ (void)v; screen_show(SCR_EQ); }  /* opens Custom EQ */
 static void apply_qsconfig(int v){ (void)v; screen_show(SCR_QSCONFIG); }  /* opens Quick Settings tile picker */
@@ -589,6 +640,7 @@ static void apply_brightness(int v){ if(v < 1) v = 1; ui_backlight(v); }
 void settings_apply_startup(int restore_brightness){
     scanner_set_old_tags(cfg_get_int("old_tags", OLD_TAGS_AUTO));
     if(restore_brightness) apply_brightness(ui_effective_brightness());
+    settings_bt_codec_migrate();
     { int at = mdb_sysconfig_auto_time();              /* mirror the player's switch (it owns the value) */
       if(at >= 0 && at != cfg_get_int("auto_time", 1)) cfg_set_int("auto_time", at); }
     { int ac = mdb_artist_class_type();                 /* the player's Artist / Album Artist grouping (it owns it) */
@@ -623,7 +675,7 @@ static void apply_brightness_row(int v){ if(!theme_outdoor()) apply_brightness(v
 
 static const char *const OPT_MODE[] = { "Sequential", "Shuffle", "Repeat One", "Repeat All", "Single" };
 /* 0..10 = built-in presets; 11..20 = the ten user PEQ slots (USER1..USER10), edited in Custom EQ.
- * Index here maps 1:1 to STYLE_PRESET, so the cycler value is exactly what ui_apply_eq() selects. */
+ * Index here maps 1:1 to STYLE_PRESET, so the chosen row is exactly what ui_apply_eq() selects. */
 static const char *const OPT_EQ[]   = { "Off","Jazz","Rock","R&B","Hip-Hop","Pop","Dance","Classical","Retro","Sibilance 1","Sibilance 2",
                                         "USER1","USER2","USER3","USER4","USER5","USER6","USER7","USER8","USER9","USER10" };
 static const char *const OPT_SLEEP[] = { "Off","15 min","30 min","45 min","60 min","90 min" };
@@ -634,7 +686,7 @@ static const char *const OPT_NPSTYLE[] = { "Cover", "Vinyl" };
 static const char *const OPT_APPEARANCE[] = { "Dark", "Light" };
 static const char *const OPT_FONTSIZE[] = { "Small", "Medium", "Large" };
 static const char *const OPT_ALBUMVIEW[] = { "List", "Cover Flow" };
-static const char *const OPT_SAVERSTYLE[] = { "Cover", "Analog", "Minimal", "Digital", "Vinyl" };
+static const char *const OPT_SAVERSTYLE[] = { "Cover", "Analog", "Minimal", "Digital", "Vinyl", "Custom" };
 static const char *const OPT_OLDTAGS[] = { "Auto", "Western", "Cyrillic" };
 static const char *const OPT_BOOTDEF[] = { "diskOS", "Stock" };
 static const char *const OPT_ARTCACHE[] = { "Covers only","When Idle","Idle & Charging" };
@@ -650,170 +702,110 @@ static const char *const OPT_MEMORY[] = { "Off", "Position", "Song" };
 static const char *const OPT_ARTISTCLASS[] = { "By Artist", "By Album Artist" };
 static const char *const OPT_ROTATION[] = { "Normal", "Turn 90", "Turn 180", "Turn 270" };   /* stock values 0..3 */
 static const char *const OPT_VOLKEY[] = { "Switch Track", "Adjust Volume" };
-static const char *const D_ARTCACHE[] = {
-    "Album covers preload in the background so browsing stays smooth. Per-track art is decoded only as you play it (default).",
-    "Covers preload, plus every track's art is pre-decoded while idle. Decoding can warm the player; it pauses automatically if it gets hot.",
-    "Covers preload, plus every track's art is pre-decoded while idle AND charging. Decoding can warm the player; it pauses automatically if it gets hot.",
-};
-
-/* per-option descriptions for the cyclers (parallel to the OPT_ arrays) */
-static const char *const D_MODE[] = {
-    "Play through the list in order, then stop.",
-    "Play tracks in a random order.",
-    "Repeat the current track over and over.",
-    "Loop the whole list when it ends.",
-    "Play the current track once, then stop.",
-};
-static const char *const D_NPSTYLE[] = {
-    "Album cover shown as a rounded square.",
-    "Spinning vinyl record while a track plays.",
-};
 
 static const setting_t TABLE[] = {
-    { "Playback", "Play Mode",   ST_CYCLER, "work_mode", 0,0,0, OPT_MODE, 5, NULL, apply_mode, 0,
-      "How the player advances through tracks.", D_MODE },
-    { "Playback", "Equalizer",   ST_CYCLER, "eq_preset", 0,0,0, OPT_EQ,  21, NULL, apply_eq,   0,
-      "Tone preset sent to the player; audible effect is still being verified.", NULL },
-    { "Playback", "Custom EQ",    ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_eq_custom, 0,
-      "Adjust the 10-band custom EQ. Applies live and saves on the device.", NULL },
-    { "Playback", "DSD Output",  ST_READONLY, NULL, 0,0,0, NULL,0, "Auto", NULL, 0,
-      "The player auto-selects the DSD mode; this control isn't user-adjustable yet.", NULL },
-    { "Playback", "Resume Playback", ST_CYCLER, "memory_play", 0,0,0, OPT_MEMORY, 3, NULL, apply_memory, 0,
-      "On power-on: Off = start fresh, Position = resume the exact spot, Song = reopen the last track.", NULL },
-    { "Playback", "Artists",     ST_CYCLER, "artist_class", 0,0,0, OPT_ARTISTCLASS, 2, NULL, apply_artist_class, 0,
-      "Group the Artists list by each song's artist, or by its album artist - the same choice as the stock player.", NULL },
-    { "Playback", "Play Through Folders", ST_TOGGLE, "folder_jump", 0,1,1, NULL, 0, NULL, apply_folder_jump, 0,
-      "When an album, artist, genre or folder finishes, keep playing the next one. Works with Sequential, Shuffle and Loop All.", NULL },
-    /* Audio/DAC cluster - cyclers with min=-1 so they can read "System default" (unmanaged):
-     * until you pick a value diskOS sends nothing + the player keeps its own setting. */
-    { "Audio",    "Working Mode", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_workmode, 0,
-      "Switch the audio source: local playback, USB DAC, Bluetooth receiving, or USB storage.", NULL },
-    { "Audio",    "Gain",        ST_CYCLER, "audio_gain",   0,0,0, OPT_GAIN, 2, NULL, apply_gain, 0,
-      "Headphone output gain. High drives demanding headphones louder.", NULL },
-    { "Audio",    "DAC Filter",  ST_CYCLER, "audio_filter", 0,0,0, OPT_DFILTER, 6, NULL, apply_dac_filter, 1,
-      "CS43131 digital filter roll-off. A subtle tone/transient tradeoff.", NULL },
-    { "Audio",    "ReplayGain",  ST_CYCLER, "replay_gain",  0,0,0, OPT_REPLAYGAIN, 3, NULL, apply_replay_gain, 0,
-      "Level the volume across tracks. Track uses each song's gain; Album keeps an album's relative dynamics.", NULL },
-    { "Audio",    "DRE",         ST_CYCLER, "audio_dre",    0,0,0, OPT_DRE, 2, NULL, apply_dre, 1,
-      "Dynamic Range Enhancement (CS43131) for quieter listening.", NULL },
-    { "Audio",    "Gapless",     ST_CYCLER, "gapless",      0,0,0, OPT_DRE, 2, NULL, apply_gapless, 0,
-      "Play tracks with no silent gap between them.", NULL },
-    { "Audio",    "Max Volume",  ST_SLIDER, "max_vol",      10,120,5, NULL,0, NULL, apply_maxvol, 120,
-      "Cap the maximum volume level (protects your ears / headphones).", NULL },
-    { "Audio",    "Balance",     ST_SLIDER, "balance",      -10,10,1, NULL,0, NULL, apply_balance, 0,
-      "Left/right channel balance. 0 = centred; negative = left, positive = right.", NULL },
+    /* Display order: a category page lists its rows in this order, and a heading appears wherever "section" changes
+     * (NULL = no heading). The rows of one section are contiguous (tests/host/test_settings_reorg.py). */
+    /* ---- Playback ---- */
+    { "Playback", "Playing music", "Play Mode",   ST_CYCLER, "work_mode", 0,0,0, OPT_MODE, 5, NULL, apply_mode, 0 },
+    { "Playback", "Playing music", "Resume Playback", ST_CYCLER, "memory_play", 0,0,0, OPT_MEMORY, 3, NULL, apply_memory, 0 },
+    { "Playback", "Playing music", "Play Through Folders", ST_TOGGLE, "folder_jump", 0,1,1, NULL, 0, NULL, apply_folder_jump, 0 },
+    { "Playback", "Bedtime", "Sleep Timer", ST_CYCLER, "sleep_idx", 0,0,0, OPT_SLEEP, 6, NULL, apply_sleep, 0 },
+    { "Playback", "Bedtime", "When Sleep Ends", ST_CYCLER, "sleep_action", 0,0,0, OPT_SLEEP_ACT, 2, NULL, NULL, POWER_SLEEP_PAUSE },
+    /* ---- Audio ---- */
+    { "Audio", "Equalizer", "Equalizer",   ST_CHOICE, "eq_preset", 0,0,0, OPT_EQ,  21, NULL, apply_eq,   0 },
+    { "Audio", "Equalizer", "Custom EQ",    ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_eq_custom, 0 },
+    { "Audio", "Sound", "Gain",        ST_TOGGLE, "audio_gain",   0,0,0, OPT_GAIN, 2, NULL, apply_gain, 0,
+      "For demanding headphones" },
+    { "Audio", "Sound", "DAC Filter",  ST_CYCLER, "audio_filter", 0,0,0, OPT_DFILTER, 6, NULL, apply_dac_filter, 1,
+      "Digital filter shape" },
+    { "Audio", "Sound", "ReplayGain",  ST_CYCLER, "replay_gain",  0,0,0, OPT_REPLAYGAIN, 3, NULL, apply_replay_gain, 0,
+      "Evens out track volume" },
+    { "Audio", "Sound", "DRE",         ST_TOGGLE, "audio_dre",    0,0,0, OPT_DRE, 2, NULL, apply_dre, 1,
+      "Dynamic Range Enhancement" },
+    { "Audio", "Sound", "Gapless",     ST_TOGGLE, "gapless",      0,0,0, OPT_DRE, 2, NULL, apply_gapless, 0 },
 #ifdef DISKOS_TEST_OUTPUTS   /* device-unverified: test builds only */
-    { "Audio",    "SPDIF Output", ST_TOGGLE, "spdif",   0,1,1, NULL,0, NULL, apply_spdif, 0,
-      "Send audio to the digital SPDIF output instead of the internal DAC. Playback pauses for a moment while it switches.", NULL },
+    { "Audio", "Sound", "SPDIF Output", ST_TOGGLE, "spdif",   0,1,1, NULL,0, NULL, apply_spdif, 0 },
 #endif
-    { "Display",  "Brightness",  ST_SLIDER, "brightness", 4,40,2, NULL,0, NULL, apply_brightness_row, 16,
-      "Screen backlight level. While Outdoor Mode is on the screen stays at full brightness.", NULL },
-    { "Display",  "Theme",       ST_CHOICE, "theme_preset", 0,0,0, theme_preset_names, THEME_PRESET_COUNT, NULL, apply_theme_preset, 0,
-      "Colour theme for the whole interface. Each has dark and light screens (see Appearance).", NULL },
-    { "Display",  "Appearance",  ST_CYCLER, "theme_variant", 0,0,0, OPT_APPEARANCE, 2, NULL, apply_appearance, 0,
-      "Dark or light screens. Changing it redraws the screen in a moment; music keeps playing.", NULL },
-    { "Display",  "Font Size",   ST_CYCLER, "font_size", 0,0,0, OPT_FONTSIZE, 3, NULL, apply_font_size, 1,
-      "Size of list and body text: Small, Medium or Large. Titles and clocks keep their size. The screen redraws in a moment.", NULL },
-    { "Display",  "Screen Rotation", ST_CYCLER, CTL_CFG_ROT, 0,0,0, OPT_ROTATION, CTL_ROT_N, NULL, apply_screen_rot, 0,
-      "Turn the picture and touch clockwise: Normal, 90, 180 or 270 degrees. Stored by the player, as in the stock menu.", NULL },
-    { "Display",  "Outdoor Mode", ST_TOGGLE, "outdoor",  0,1,1, NULL, 0, NULL, apply_outdoor, 0,
-      "Light screens at full brightness, easier to read in sunlight. Uses more battery. Turning it off returns your own brightness.", NULL },
-    { "Display",  "Track Numbers", ST_TOGGLE, "track_numbers", 0,1,1, NULL, 0, NULL, apply_track_numbers, 0,
-      "Show each song's track number in album lists.", NULL },
-    { "Display",  "Online Album Art", ST_TOGGLE, "online_art", 0,1,1, NULL, 0, NULL, apply_online_art, 0,
-      "Songs with no cover of their own get one from the internet (Wi-Fi). Each album is looked up once; playback is never touched.", NULL },
-    { "Display",  "Online Lyrics", ST_TOGGLE, "online_lyrics", 0,1,1, NULL, 0, NULL, NULL, 1,
-      "Songs with no lyrics of their own (no .lrc file, none in the song's tags) are looked up on lrclib.net (Wi-Fi). Off stops diskOS's own lookup; lyrics from the SD card or the song's tags still show.", NULL },
-    { "Display",  "Quick Settings", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_qsconfig, 0,
-      "Choose which tiles appear in the pull-down Quick Settings drawer.", NULL },
-    { "Display",  "Now Playing", ST_CYCLER, "np_style",   0,0,0, OPT_NPSTYLE, 2, NULL, apply_np_style, 0,
-      "Album art style on the Now Playing screen.", D_NPSTYLE },
-    { "Display",  "Album View",  ST_CYCLER, "album_view", 0,0,0, OPT_ALBUMVIEW, 2, NULL, NULL, 0,
-      "How the Albums list looks: a text list, or a cover flow you flick through.", NULL },
-    { "Display",  "Accent Colour", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_open_colorpick, 0,
-      "Now Playing accent: derived from album art, or any fixed colour you pick.", NULL },
-    { "Display",  "Album Art Cache", ST_CYCLER, "artcache", 0,0,0, OPT_ARTCACHE, 3, NULL, apply_artcache, 0,
-      "Pre-decode album art so covers load instantly. Background decoding can warm the player; it throttles on heat.", D_ARTCACHE },
-    { "Display",  "Screensaver", ST_CYCLER, "saver_idx",  0,0,0, OPT_POWER, 5, NULL, NULL, 2,
-      "Idle time before the clock screensaver appears and the screen dims.", NULL },
-    { "Display",  "Saver Style", ST_CYCLER, "saver_style", 0,0,0, OPT_SAVERSTYLE, 5, NULL, NULL, 0,
-      "Screensaver look: Cover art, Analog clock, Minimal, Digital, or spinning Vinyl.", NULL },
-    { "Display",  "Screen Off",  ST_CYCLER, "screenoff_idx", 0,0,0, OPT_POWER, 5, NULL, NULL, 3,
-      "How long after the screensaver the screen turns fully off.", NULL },
-    { "Display",  "24-Hour Time", ST_TOGGLE, "time_24h",  0,1,1, NULL, 0, NULL, apply_time, 1,
-      "Use a 24-hour clock instead of AM/PM.", NULL },
-    { "Display",  "Animations",  ST_TOGGLE, "anim",      0,1,1, NULL, 0, NULL, apply_anim, 1,
-      "Slide animations between screens.", NULL },
-    { "Display",  "Weather on Home", ST_TOGGLE, "weather_on", 0,1,1, NULL, 0, NULL, apply_weather, 1,
-      "Show the weather glance on the home screen and screensaver (tap it to open the full forecast). Off skips the background fetch to save battery.", NULL },
-    { "Display",  "Back-swipe",  ST_SLIDER, "swipe_thresh", 30,120,5, NULL,0, NULL, apply_swipe, 60,
-      "Swipe distance needed to go back. Lower is more sensitive.", NULL },
-    { "Network",  "Wi-Fi",       ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_wifi, 0,
-      "Scan for and connect to Wi-Fi networks.", NULL },
-    { "Network",  "Bluetooth", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_bt, 0,
-      "Pair Bluetooth devices. Audio routes to connected headphones or speakers (SBC, beta).", NULL },
-    { "Network",  "Bluetooth Codec", ST_CYCLER, "bt_codec", 0,0,0, BT_CODEC_LABEL, BT_CODEC_N, NULL, NULL, 0,
-      "Codec for Bluetooth headphones, as in the stock player. Applies the next time the headphones connect. If they lack the codec, SBC is used. AAC and LDAC are heavier for this player and may stutter.", NULL },
-    { "System",   "Language",    ST_CHOICE, "language", 0,0,0, i18n_lang_names, LANG_COUNT, NULL, apply_language, LANG_EN,
-      "Interface language. Song, artist and album names are always shown as they are tagged.", NULL },
-    { "System",   "Sleep Timer", ST_CYCLER, "sleep_idx", 0,0,0, OPT_SLEEP, 6, NULL, apply_sleep, 0,
-      "Pause playback, or shut the device down (see When Sleep Ends), after this long. Resets on restart.", NULL },
-    { "System",   "When Sleep Ends", ST_CYCLER, "sleep_action", 0,0,0, OPT_SLEEP_ACT, 2, NULL, NULL, POWER_SLEEP_PAUSE,
-      "What the Sleep Timer does. Shut down closes the card safely first, then powers the device off.", NULL },
-    { "System",   "Idle Power-off", ST_CYCLER, "idle_off_idx", 0,0,0, OPT_IDLE_OFF, POWER_IDLE_N, NULL, NULL, 0,
-      "Power the device off after this long with nothing playing and no touch or key press. Closes the card safely first.", NULL },
-    { "System",   "Charging Limit", ST_TOGGLE, "charge_protect", 0,1,1, NULL, 0, NULL, apply_charge_protect, 0,
-      "The player's Charging optimization: stops charging at about 80% to slow battery wear.", NULL },
-    { "System",   "Vol Keys: Press", ST_CYCLER, "key_single", 0,0,0, OPT_VOLKEY, 2, NULL, apply_key_single, CTL_ACT_VOLUME,
-      "What the volume keys do on a single press: adjust the volume or switch track. Stored by the player, as in the stock menu.", NULL },
-    { "System",   "Vol Keys: Double Press", ST_CYCLER, "key_double", 0,0,0, OPT_VOLKEY, 2, NULL, apply_key_double, CTL_ACT_VOLUME,
-      "What the volume keys do on a double press: adjust the volume or switch track.", NULL },
-    { "System",   "Vol Keys: Long Press", ST_CYCLER, "key_long", 0,0,0, OPT_VOLKEY, 2, NULL, apply_key_long, CTL_ACT_VOLUME,
-      "What the volume keys do when held: adjust the volume or switch track.", NULL },
-    { "System",   "Old tags", ST_CYCLER, "old_tags", 0,0,0, OPT_OLDTAGS, 3, NULL, apply_old_tags, OLD_TAGS_AUTO,
-      "Legacy text: guess, Latin-1 or CP1251. Rescan Library to apply.", NULL },
-    { "System",   "Rescan Library", ST_ACTION, NULL, 0,0,0, NULL,0, "Scan", apply_rescan, 0,
-      "Re-scan the SD card for new or removed music.", NULL },
-    { "System",   "Import Playlists", ST_ACTION, NULL, 0,0,0, NULL,0, "Import", apply_import_m3u, 0,
-      "Import .m3u / .m3u8 playlists found on the SD card.", NULL },
-    { "System",   "Default UI",  ST_CYCLER, "boot_default", 0,0,0, OPT_BOOTDEF, 2, NULL, apply_boot_default, 0,
-      "Which UI boots by default. To boot the other one, hold Vol-Up from power-on until it appears.", NULL },
-    { "System",   "Automatic Time", ST_TOGGLE, "auto_time", 0,1,1, NULL, 0, NULL, apply_auto_time, 1,
-      "Set the time and time zone from the internet whenever Wi-Fi connects. A change applies after the next restart.", NULL },
-    { "System",   "Set Date & Time", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_open_datetime, 0,
-      "Set the clock by hand. With Automatic Time on, Wi-Fi may correct it later.", NULL },
-    { "System",   "Time Zone",   ST_CHOICE, "tz_idx", 0,0,0, TZ_LABEL, TZ_COUNT, NULL, apply_timezone, 0,
-      "Automatic follows your location when Wi-Fi connects (with Automatic Time on). Pick a zone to set it yourself.", NULL },
-    { "System",   "Restart",     ST_ACTION, NULL, 0,0,0, NULL,0, "Restart", apply_restart, 0,
-      "Restart the device. Boots your default UI; hold Vol-Up for the other one.", NULL },
-    { "System",   "Device Info", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, system_about_open, 0,
-      "Model, stock firmware, diskOS build, MAC addresses, storage and battery.", NULL },
-    { "System",   "Update from SD Card", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, system_update_sd_open, 0,
-      "Look for a file on the SD card named like a stock update and show how it is used. Information only: diskOS never runs it.", NULL },
-    { "System",   "Allow diskOS Updates", ST_TOGGLE, "ota_allow", 0,1,1, NULL, 0, NULL, system_ota_allow_changed, 1,
-      "diskOS only updates when you tap Update diskOS, and only with signed releases.", NULL },
-    { "System",   "Update diskOS", ST_ACTION, NULL, 0,0,0, NULL,0, "Check", system_check_update_open, 0,
-      "Look up the newest diskOS release on GitHub (needs Wi-Fi). If it carries a signed update, download and verify it, then restart to finish. Nothing changes until you confirm.", NULL },
-    { "System",   "Reset diskOS Settings", ST_ACTION, NULL, 0,0,0, NULL,0, "Reset", system_reset_open, 0,
-      "Put diskOS's look and behaviour settings back to defaults. Music, Wi-Fi, Bluetooth, Last.fm, EQ and audio settings are kept.", NULL },
-    { "System",   "Debug Mode",  ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_debug_mode, 0,
-      "Enable temporary SSH over Wi-Fi (fresh random password) for debugging. Off by default.", NULL },
-    { "System",   "Temperature", ST_READONLY, NULL, 0,0,0, NULL,0, "@temp", NULL, 0,
-      "Battery/board temperature from the fuel gauge (this SoC exposes no core sensor).", NULL },
-    { "System",   "About",       ST_READONLY, NULL, 0,0,0, NULL,0, "@about", NULL, 0,
-      "diskOS - a custom music player UI. The code in brackets identifies this exact build.", NULL },
+    { "Audio", "Output limits", "Max Volume",  ST_SLIDER, "max_vol",      10,120,5, NULL,0, NULL, apply_maxvol, 120 },
+    { "Audio", "Output limits", "Balance",     ST_SLIDER, "balance",      -10,10,1, NULL,0, NULL, apply_balance, 0 },
+    /* ---- Network ---- */
+    { "Network", NULL, "Wi-Fi",       ST_ACTION, NULL, 0,0,0, NULL,0, NULL, apply_wifi, 0 },   /* radio row: inline power switch */
+    { "Network", NULL, "Bluetooth", ST_ACTION, NULL, 0,0,0, NULL,0, NULL, apply_bt, 0 },          /* radio row: inline power switch */
+    { "Network", NULL, "Bluetooth Codec", ST_CYCLER, "bt_codec", 0,0,0, BT_CODEC_LABEL, BT_CODEC_N, NULL, apply_bt_codec, 0 },
+    { "Network", NULL, "Device name", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, dnui_open, 0 },
+    { "Network", NULL, "Bluetooth name", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_bluetooth_name, 0 },
+    { "Network", NULL, "Audio Source", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_workmode, 0 },
+    /* ---- Display ---- */
+    { "Display", "Screen", "Brightness",  ST_SLIDER, "brightness", 4,40,2, NULL,0, NULL, apply_brightness_row, 16 },
+    { "Display", "Screen", "Font Size",   ST_CYCLER, "font_size", 0,0,0, OPT_FONTSIZE, 3, NULL, apply_font_size, 1 },
+    { "Display", "Screen", "Screen Rotation", ST_CYCLER, CTL_CFG_ROT, 0,0,0, OPT_ROTATION, CTL_ROT_N, NULL, apply_screen_rot, 0 },
+    { "Display", "Screen", "Outdoor Mode", ST_TOGGLE, "outdoor",  0,1,1, NULL, 0, NULL, apply_outdoor, 0 },
+    { "Display", "Appearance", "Theme",       ST_CHOICE, "theme_preset", 0,0,0, theme_preset_names, THEME_PRESET_COUNT, NULL, apply_theme_preset, 0 },
+    { "Display", "Appearance", "Appearance",  ST_CYCLER, "theme_variant", 0,0,0, OPT_APPEARANCE, 2, NULL, apply_appearance, 0 },
+    { "Display", "Appearance", "Accent Colour", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_open_colorpick, 0 },
+    { "Display", "Appearance", "Animations",  ST_TOGGLE, "anim",      0,1,1, NULL, 0, NULL, apply_anim, 1 },
+    { "Display", "Music and Home", "Now Playing", ST_CYCLER, "np_style",   0,0,0, OPT_NPSTYLE, 2, NULL, apply_np_style, 0 },
+    { "Display", "Music and Home", "Weather on Home", ST_TOGGLE, "weather_on", 0,1,1, NULL, 0, NULL, apply_weather, 1 },
+    { "Display", "Screensaver", "Screensaver", ST_CYCLER, "saver_idx",  0,0,0, OPT_POWER, 5, NULL, NULL, 2 },
+    { "Display", "Screensaver", "Saver Style", ST_CHOICE, "saver_style", 0,0,0, OPT_SAVERSTYLE, 6, NULL, NULL, 0 },
+    { "Display", "Screensaver", "Screen Off",  ST_CYCLER, "screenoff_idx", 0,0,0, OPT_POWER, 5, NULL, NULL, 3 },
+    /* ---- Library ---- */
+    { "Library", "Browsing", "Artists",     ST_CYCLER, "artist_class", 0,0,0, OPT_ARTISTCLASS, 2, NULL, apply_artist_class, 0 },
+    { "Library", "Browsing", "Track Numbers", ST_TOGGLE, "track_numbers", 0,1,1, NULL, 0, NULL, apply_track_numbers, 0 },
+    { "Library", "Browsing", "Album View",  ST_CYCLER, "album_view", 0,0,0, OPT_ALBUMVIEW, 2, NULL, NULL, 0 },
+    { "Library", "Artwork and lyrics", "Online Album Art", ST_TOGGLE, "online_art", 0,1,1, NULL, 0, NULL, apply_online_art, 0 },
+    { "Library", "Artwork and lyrics", "Album Art Cache", ST_CYCLER, "artcache", 0,0,0, OPT_ARTCACHE, 3, NULL, apply_artcache, 0,
+      "Loads covers in advance" },
+    { "Library", "Artwork and lyrics", "Online Lyrics", ST_TOGGLE, "online_lyrics", 0,1,1, NULL, 0, NULL, NULL, 1 },
+    { "Library", "Maintenance", "Tag Encoding", ST_CYCLER, "old_tags", 0,0,0, OPT_OLDTAGS, 3, NULL, apply_old_tags, OLD_TAGS_AUTO,
+      "Text encoding of old tags" },
+    { "Library", "Maintenance", "Rescan Library", ST_ACTION, NULL, 0,0,0, NULL,0, "Scan", apply_rescan, 0 },
+    { "Library", "Maintenance", "Import Playlists", ST_ACTION, NULL, 0,0,0, NULL,0, "Import", apply_import_m3u, 0 },
+    /* ---- Controls ---- */
+    { "Controls", NULL, "Quick Settings", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_qsconfig, 0 },
+    { "Controls", NULL, "Vol Keys: Press", ST_CYCLER, "key_single", 0,0,0, OPT_VOLKEY, 2, NULL, apply_key_single, CTL_ACT_VOLUME },
+    { "Controls", NULL, "Vol Keys: Double Press", ST_CYCLER, "key_double", 0,0,0, OPT_VOLKEY, 2, NULL, apply_key_double, CTL_ACT_VOLUME },
+    { "Controls", NULL, "Vol Keys: Long Press", ST_CYCLER, "key_long", 0,0,0, OPT_VOLKEY, 2, NULL, apply_key_long, CTL_ACT_VOLUME },
+    { "Controls", NULL, "Back-swipe",  ST_SLIDER, "swipe_thresh", 30,120,5, NULL,0, NULL, apply_swipe, 60 },
+    /* ---- Battery & Power ---- */
+    { "Battery & Power", NULL, "Charging Limit", ST_TOGGLE, "charge_protect", 0,1,1, NULL, 0, NULL, apply_charge_protect, 0 },
+    { "Battery & Power", NULL, "Idle Power-off", ST_CYCLER, "idle_off_idx", 0,0,0, OPT_IDLE_OFF, POWER_IDLE_N, NULL, NULL, 0 },
+    /* ---- Device ---- */
+    { "Device", "Language and clock", "Language",    ST_CHOICE, "language", 0,0,0, i18n_lang_names, LANG_COUNT, NULL, apply_language, LANG_EN },
+    { "Device", "Language and clock", "Automatic Time", ST_TOGGLE, "auto_time", 0,1,1, NULL, 0, NULL, apply_auto_time, 1 },
+    { "Device", "Language and clock", "Set Date & Time", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_open_datetime, 0 },
+    { "Device", "Language and clock", "Time Zone",   ST_CHOICE, "tz_idx", 0,0,0, TZ_LABEL, TZ_COUNT, NULL, apply_timezone, 0 },
+    { "Device", "Language and clock", "24-Hour Time", ST_TOGGLE, "time_24h",  0,1,1, NULL, 0, NULL, apply_time, 1 },
+    { "Device", "Startup", "Default UI",  ST_CYCLER, "boot_default", 0,0,0, OPT_BOOTDEF, 2, NULL, apply_boot_default, 0 },
+    { "Device", "Information", "Device Info", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, system_about_open, 0 },
+    { "Device", "Updates", "Allow diskOS Updates", ST_TOGGLE, "ota_allow", 0,1,1, NULL, 0, NULL, system_ota_allow_changed, 1 },
+    { "Device", "Updates", "Automatic Update Checks", ST_TOGGLE, "ota_auto", 0,1,1, NULL, 0, NULL, system_ota_auto_changed, 0 },
+    { "Device", "Updates", "Update diskOS", ST_ACTION, NULL, 0,0,0, NULL,0, "Check", system_check_update_open, 0 },
+    { "Device", "Updates", "Stock Update Guide", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, system_update_sd_open, 0 },
+    { "Device", "Maintenance", "Restart",     ST_ACTION, NULL, 0,0,0, NULL,0, "Restart", apply_restart, 0 },
+    { "Device", "Maintenance", "Reset diskOS Settings", ST_ACTION, NULL, 0,0,0, NULL,0, "Reset", system_reset_open, 0 },
+    { "Device", "Maintenance", "Debug Mode",  ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_debug_mode, 0 },
 };
 #define N_SETTINGS ((int)(sizeof(TABLE)/sizeof(TABLE[0])))
 
-static int  get_val(const setting_t *s){ return s->cfg_key ? cfg_get_int(s->cfg_key, s->def) : 0; }
+static int get_val(const setting_t *s){
+    if(s->cfg_key && !strcmp(s->cfg_key, "bt_codec")) return mdb_sysconfig_bt_codec();
+    if(s->cfg_key && !strcmp(s->cfg_key, "ota_auto"))
+        return !strcmp(cfg_get_str(s->cfg_key, "0"), "1");
+    return s->cfg_key ? cfg_get_int(s->cfg_key, s->def) : 0;
+}
 static void set_val(const setting_t *s, int v){
-    /* EQ persists itself only on a successful send (apply_eq -> ui_eq_select), so a failed send never
-     * leaves a stale eq_preset; every other setting persists up front here. */
+    if(s->cfg_key && !strcmp(s->cfg_key, "work_mode") && ui_receiver_in_use()){
+        ui_toast("Return to Local first");
+        return;
+    }
+    /* EQ and automatic checks persist after success; stock owns codec storage. */
     g_set_prev = get_val(s);
-    if(s->cfg_key && strcmp(s->cfg_key, "eq_preset")) cfg_set_int(s->cfg_key, v);
+    if(s->cfg_key && strcmp(s->cfg_key, "eq_preset") && strcmp(s->cfg_key, "bt_codec") &&
+       strcmp(s->cfg_key, "ota_auto")) cfg_set_int(s->cfg_key, v);
     if(s->apply) s->apply(v);
 }
-/* battery/board temp from the fuel gauge; power-supply ABI = tenths of a degree C */
 /* "1.2.0 (8c29ecbf)": the release plus the first 8 hex of the RUNNING binary's md5 - the build id used in every
  * test record, and true even for a hand-deployed build. Hashed once (the binary is ~2.5 MB), then cached. */
 static void read_about(char *buf, int n){
@@ -838,16 +830,8 @@ static void read_about(char *buf, int n){
     }
     snprintf(buf, n, "%s (%s)", DISKOS_VERSION, id);
 }
-void settings_diskos_id(char *buf, int n){ read_about(buf, n); }   /* system.c About */
+void settings_diskos_id(char *buf, int n){ read_about(buf, n); }   /* system.c Device Info */
 void settings_restart_prompt(const char *note){ g_restart_note = note; apply_restart(0); }
-static void read_batt_temp(char *buf, int n){
-    FILE *f = fopen("/sys/class/power_supply/cw221X-bat/temp", "r");
-    int t;
-    if(f && fscanf(f, "%d", &t) == 1){ fclose(f);
-        unsigned at = t<0 ? 0u-(unsigned)t : (unsigned)t;   /* unsigned negate: INT_MIN-safe; sign explicit */
-        snprintf(buf, n, "%s%u.%u\xC2\xB0""C", t<0?"-":"", at/10, at%10);   /* 305->"30.5 degrees C", -5->"-0.5 degrees C" */
-    } else { if(f) fclose(f); snprintf(buf, n, "--"); }
-}
 /* Format a slider value WITH its unit - shared by val_text (committed value) and the live drag
  * callback (uncommitted value) so brightness shows "%" and swipe-thresh "px" while dragging too. */
 static void fmt_slider(const setting_t *s, int v, char *buf, int n){
@@ -864,13 +848,14 @@ static int setting_unavailable(const setting_t *s){
                        || (!strcmp(s->cfg_key, "folder_jump") && !fw_folder_jump_settable())
                        || (!strcmp(s->cfg_key, "bt_codec") && fw_os_ver() != 257)
                        || (!strcmp(s->cfg_key, "ota_allow") && !ota_supported(&OTA_DEV))
+                       || (!strcmp(s->cfg_key, "ota_auto") && !ota_supported(&OTA_DEV))
                        || ((!strcmp(s->cfg_key, "idle_off_idx") || !strcmp(s->cfg_key, "charge_protect")
                             || !strcmp(s->cfg_key, "sleep_action")) && !power_supported())
                        || ((!strcmp(s->cfg_key, CTL_CFG_ROT) || !strcmp(s->cfg_key, "key_single")
                             || !strcmp(s->cfg_key, "key_double") || !strcmp(s->cfg_key, "key_long")) && !ctl_supported()));
 }
 static const char *val_text(const setting_t *s, char *buf, int n){
-    if(setting_unavailable(s)) return tr(s->cfg_key && !strcmp(s->cfg_key, "ota_allow") ? "Not supported on this install" : "Not on this firmware");
+    if(setting_unavailable(s)) return tr(s->cfg_key && (!strcmp(s->cfg_key, "ota_allow") || !strcmp(s->cfg_key, "ota_auto")) ? "Not supported on this install" : "Not on this firmware");
     /* Outdoor Mode overrides these two while it is on: show what is really in effect, not the saved choice (which
      * stays untouched and comes back when Outdoor Mode is turned off) */
     if(theme_outdoor() && s->cfg_key && !strcmp(s->cfg_key, "theme_variant")) return "Light (Outdoor)";
@@ -880,11 +865,7 @@ static const char *val_text(const setting_t *s, char *buf, int n){
         case ST_TOGGLE:   return tr(v?"On":"Off");
         case ST_SLIDER:   fmt_slider(s, v, buf, n); break;
         case ST_CYCLER: case ST_CHOICE: return (v>=0&&v<s->nopts)?tr(s->opts[v]):"?";
-        case ST_READONLY:
-            if(s->ro_val && !strcmp(s->ro_val, "@temp")) read_batt_temp(buf, n);
-            else if(s->ro_val && !strcmp(s->ro_val, "@about")) read_about(buf, n);
-            else return tr(s->ro_val?s->ro_val:"");
-            break;
+        case ST_READONLY: return tr(s->ro_val?s->ro_val:"");
         case ST_ACTION:   return tr((s->apply==apply_rescan && scanner_active()) ? "Stop" : (s->ro_val?s->ro_val:""));
     }
     return buf;
@@ -892,7 +873,22 @@ static const char *val_text(const setting_t *s, char *buf, int n){
 
 /* ---- shared widgets ----------------------------------------------------- */
 
-static lv_obj_t *g_list_rows[N_SETTINGS];   /* value labels, to refresh in place */
+static lv_obj_t *g_list_rows[N_SETTINGS];   /* value labels, or inline switches */
+
+static void setting_value_deleted(lv_event_t *e){
+    int idx = (int)(uintptr_t)lv_event_get_user_data(e);
+    if(idx >= 0 && idx < N_SETTINGS && g_list_rows[idx] == lv_event_get_target(e))
+        g_list_rows[idx] = NULL;
+}
+
+/* Only the Update diskOS row owns this dot; deletion clears its observer. */
+static lv_obj_t *g_ota_dot;
+static void ota_dot_deleted(lv_event_t *e){ (void)e; g_ota_dot = NULL; }
+static void ota_dot_refresh(void){
+    if(!g_ota_dot) return;
+    if(system_ota_available()) lv_obj_clear_flag(g_ota_dot, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(g_ota_dot, LV_OBJ_FLAG_HIDDEN);
+}
 
 /* Rescan Library row: title shows "Scanning... N songs" and the action word reads "Stop" ("Cancel" is cut off in the 96 px box) while the scanner thread
  * runs. The timer lives and dies with the row, so leaving the screen and coming back rebuilds it from the counter. */
@@ -919,10 +915,28 @@ static void rescan_row_del_cb(lv_event_t *e){
 static const setting_t *g_active;           /* setting shown in the detail screen */
 static lv_obj_t *g_detail_root;
 static lv_obj_t *g_setlist_root;            /* SCR_SETLIST root: one category's rows, rebuilt per entry */
+static lv_obj_t *g_setlist_list;            /* current column; old-list delete events must not reset its offset */
 static const char *g_active_group;          /* which category SCR_SETLIST is currently showing */
 /* Category order for the top-level Settings screen (must match the group strings used in TABLE). */
-static const char *const GROUPS[] = { "Playback", "Audio", "Display", "Network", "System" };
+static const char *const GROUPS[] = { "Playback", "Audio", "Network", "Display", "Library", "Controls", "Battery & Power", "Device" };
 #define N_GROUPS ((int)(sizeof(GROUPS)/sizeof(GROUPS[0])))
+static int32_t g_group_scroll[N_GROUPS];     /* returning from a detail keeps each category's place */
+
+static int active_group_index(void){
+    for(int i = 0; i < N_GROUPS; i++) if(g_active_group == GROUPS[i]) return i;
+    return -1;
+}
+
+static void setlist_scroll_cb(lv_event_t *e){
+    int gi = active_group_index();
+    if(gi >= 0 && lv_event_get_target(e) == g_setlist_list)
+        g_group_scroll[gi] = lv_obj_get_scroll_y(g_setlist_list);
+}
+
+static void setlist_scroll_remember(void){
+    int gi = active_group_index();
+    if(gi >= 0 && g_setlist_list) g_group_scroll[gi] = lv_obj_get_scroll_y(g_setlist_list);
+}
 
 
 
@@ -946,6 +960,15 @@ static void detail_slider_release_cb(lv_event_t *e){
     if(g_active->apply == apply_brightness_row) ui_set_brightness(lv_slider_get_value(sl));
     else if(g_active->cfg_key) cfg_set_int(g_active->cfg_key, lv_slider_get_value(sl));
 }
+static void bt_codec_saved_tick(lv_timer_t *t){
+    if(screen_current() != SCR_SETTING_DETAIL) return;
+    lv_obj_t *label = lv_timer_get_user_data(t);
+    int v = mdb_sysconfig_bt_codec();
+    if(v >= 0 && v < BT_CODEC_N) lv_label_set_text(label, tr(BT_CODEC_LABEL[v]));   /* busy: keep the last read */
+}
+static void bt_codec_saved_del(lv_event_t *e){
+    lv_timer_delete(lv_event_get_user_data(e));
+}
 static void detail_cycle_cb(lv_event_t *e){
     if(theme_outdoor() && g_active->cfg_key && !strcmp(g_active->cfg_key, "theme_variant")){
         ui_toast("Outdoor Mode keeps Light on");   /* a Dark/Light change could not show until Outdoor Mode is off */
@@ -959,15 +982,79 @@ static void detail_cycle_cb(lv_event_t *e){
     /* rebuild detail body to reflect new value */
     void setting_detail_refresh(void); setting_detail_refresh();
 }
-static void detail_toggle_cb(lv_event_t *e){
-    lv_obj_t *sw = lv_event_get_target(e);
-    set_val(g_active, lv_obj_has_state(sw, LV_STATE_CHECKED) ? 1 : 0);
-}
 static lv_obj_t *make_list(lv_obj_t *root);
 static lv_obj_t *setting_card(lv_obj_t *list);
 static void detail_choice_async(void *u){ (void)u; setting_detail_refresh(); }
+/* ---- Saver Style page (slice 17a): six choices, the sixth is Custom (saver.c SAVER_STYLE_CUSTOM) ---- */
+#define SS_CUSTOM 5
+static int is_saver_row(const setting_t *s){ return s && s->cfg_key && !strcmp(s->cfg_key, "saver_style"); }
+/* The one writer of the Custom selection: this page, and a successful Use Image (decision 80). */
+int settings_saver_select_custom(void){ return cfg_set_int("saver_style", SS_CUSTOM); }
+
+/* Leaving Custom for a built-in style (decision 35) selects stock's Clock theme row, the order of mq_ui@0x47c6fc: 0810
+ * value 0, then USE on POS_ID 0. The custom files stay. The database write blocks up to 3 s, so a detached worker does
+ * it and the UI thread polls; apply_reserve keeps it out of a running image apply. A failure puts the player back to
+ * Custom and leaves saver_style unchanged. */
+static int bg_start(void *(*fn)(void *)){   /* a detached 256 KiB worker for a blocking player/database step */
+    pthread_t th; pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setstacksize(&at, 256 * 1024);
+    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+    int bad = pthread_create(&th, &at, fn, NULL);
+    pthread_attr_destroy(&at);
+    return bad;
+}
+static struct { int busy, style; atomic_int fin, rc; } g_ss;
+static struct { int busy; atomic_int fin, rc; } g_cu;
+static void *ss_worker(void *u){
+    (void)u;
+    int rc = -1;
+    if(!ipc_apply_reserve()){
+        if(!ipc_saver_reselect(0)){
+            rc = (int)custom_saver_db_select(NULL, 0, 1, NULL);
+            if(rc) ipc_saver_reselect(SS_CUSTOM);
+        }
+        ipc_apply_release();
+    }
+    atomic_store(&g_ss.rc, rc);
+    atomic_store(&g_ss.fin, 1);
+    return NULL;
+}
+static void ss_tick(lv_timer_t *t){
+    if(!atomic_load(&g_ss.fin)) return;
+    lv_timer_delete(t);
+    g_ss.busy = 0;
+    if(atomic_load(&g_ss.rc)) ui_toast("Could not change style - Custom kept");
+    else cfg_set_int("saver_style", g_ss.style);
+    if(is_saver_row(g_active)) setting_detail_refresh();
+}
+static void ss_leave_custom(int style){
+    if(g_ss.busy) return;
+    g_ss.busy = 1; g_ss.style = style; atomic_store(&g_ss.fin, 0);
+    if(bg_start(ss_worker)){ g_ss.busy = 0; ui_toast("Could not change style - Custom kept"); return; }
+    lv_timer_create(ss_tick, 50, NULL);
+}
+/* Custom always enters its page (selected already or not: it is the only way in). It is SELECTED here only when stock's
+ * database already has a custom image active, i.e. the saver would show it; otherwise nothing is written: Use Saved Image
+ * or a successful Choose Image (decision 80) selects it, so the check never sits on a Minimal fallback. */
+static void saver_style_tap(int i){
+    if(g_ss.busy || g_cu.busy){
+        ui_toast("Player busy - try again");
+        return;
+    }
+    int cur = get_val(g_active);
+    if(i == SS_CUSTOM){
+        custom_saver_asset a;
+        if(cur != SS_CUSTOM && custom_saver_db_read(NULL, &a) == CUSTOM_SAVER_OK){ settings_saver_select_custom(); lv_async_call(detail_choice_async, NULL); }
+        settings_custom_open();
+    } else if(i != cur){
+        if(cur == SS_CUSTOM) ss_leave_custom(i);
+        else { set_val(g_active, i); lv_async_call(detail_choice_async, NULL); }
+    }
+}
 static void detail_choice_cb(lv_event_t *e){
     int i = (int)(intptr_t)lv_event_get_user_data(e);
+    if(g_active && is_saver_row(g_active)){ saver_style_tap(i); return; }
     if(!g_active || i == get_val(g_active)) return;
     set_val(g_active, i);                               /* a theme re-launches the UI from here */
     lv_async_call(detail_choice_async, NULL);           /* the tick moves after this event (rows can't delete themselves) */
@@ -986,7 +1073,7 @@ void setting_detail_refresh(void){
     if(s->type == ST_SLIDER){
         lv_obj_t *sl = lv_slider_create(g_detail_root);
         lv_obj_set_size(sl, 220, 12);
-        lv_obj_set_ext_click_area(sl, 14);
+        lv_obj_set_ext_click_area(sl, 16);             /* 12 px rail + 16 above/below = 44 px touch height */
         lv_obj_align(sl, LV_ALIGN_CENTER, 0, -6);
         lv_slider_set_range(sl, s->min, s->max);
         if(outdoor_holds(s)){ v = ui_effective_brightness(); lv_obj_add_state(sl, LV_STATE_DISABLED); }
@@ -1003,18 +1090,14 @@ void setting_detail_refresh(void){
         ui_on(sl, detail_slider_cb, LV_EVENT_VALUE_CHANGED, vl, "settings.detail_slider.value", UI_CORE);
         lv_obj_add_event_cb(sl, detail_slider_release_cb, LV_EVENT_RELEASED, NULL);
         lv_obj_add_event_cb(sl, detail_slider_release_cb, LV_EVENT_PRESS_LOST, NULL);
-    } else if(s->type == ST_TOGGLE){
-        lv_obj_t *sw = lv_switch_create(g_detail_root);
-        lv_obj_align(sw, LV_ALIGN_CENTER, 0, 0);
-        lv_obj_set_style_bg_color(sw, ui_current_accent(), LV_PART_INDICATOR | LV_STATE_CHECKED);
-        if(v) lv_obj_add_state(sw, LV_STATE_CHECKED);
-        ui_on(sw, detail_toggle_cb, LV_EVENT_VALUE_CHANGED, NULL, "settings.detail_toggle.value", UI_CORE);
     } else if(s->type == ST_CHOICE){
         /* every option as a row; the current one ticked. Themes also show three colour dots (background, surface,
          * accent) in the current Dark/Light variant, so each can be judged before picking. */
         lv_obj_t *list = make_list(g_detail_root);
         if(s->opts == i18n_lang_names) lv_obj_set_height(list, 215);
         int is_theme = !strcmp(s->cfg_key, "theme_preset");
+        int is_saver = is_saver_row(s);
+        lv_obj_t *sel = NULL;
         for(int i = 0; i < s->nopts; i++){
             lv_obj_t *row = setting_card(list);
             int cur = (i == v);
@@ -1043,18 +1126,31 @@ void setting_detail_refresh(void){
             lv_obj_align(lbl, LV_ALIGN_LEFT_MID, x, 0);
             lv_obj_set_style_text_font(lbl, s->opts == i18n_lang_names ? TF(USER_16) : TF(UI_16), 0);   /* native names: any script */
             lv_obj_set_style_text_color(lbl, TC(TEXT_PRIMARY), 0);
+            int custom = is_saver && i == SS_CUSTOM;   /* Custom: check + chevron (it opens the Custom page) */
             if(cur){
                 lv_obj_t *ck = lv_label_create(row);
                 lv_label_set_text(ck, LV_SYMBOL_OK);
-                lv_obj_align(ck, LV_ALIGN_RIGHT_MID, -16, 0);
+                lv_obj_align(ck, LV_ALIGN_RIGHT_MID, custom ? -40 : -16, 0);
                 lv_obj_set_style_text_color(ck, ui_current_accent(), 0);
+                sel = row;
+            }
+            if(custom){
+                lv_obj_t *ch = lv_label_create(row);
+                lv_label_set_text(ch, LV_SYMBOL_RIGHT);
+                lv_obj_align(ch, LV_ALIGN_RIGHT_MID, -16, 0);
+                lv_obj_set_style_text_color(ch, TC(TEXT_SECONDARY), 0);
             }
             theme_list_row(row);
         }
+        if(sel) lv_obj_scroll_to_view(sel, LV_ANIM_OFF);   /* every picker opens with its current choice in view */
     } else if(s->type == ST_CYCLER){
         /* < value > stepper */
         lv_obj_t *vl = lv_label_create(g_detail_root);
         char b[24]; lv_label_set_text(vl, val_text(s,b,sizeof b));
+        if(s->apply == apply_bt_codec){
+            lv_timer_t *poll = lv_timer_create(bt_codec_saved_tick, 1000, vl);
+            if(poll) lv_obj_add_event_cb(vl, bt_codec_saved_del, LV_EVENT_DELETE, poll);
+        }
         lv_obj_set_size(vl, 220, 32); lv_label_set_long_mode(vl, LV_LABEL_LONG_DOT);
         lv_obj_align(vl, LV_ALIGN_CENTER, 0, s->apply == apply_old_tags ? -20 : 0);
         lv_obj_set_style_text_align(vl, LV_TEXT_ALIGN_CENTER, 0);
@@ -1084,26 +1180,31 @@ void setting_detail_refresh(void){
     /* Offer the existing scan action here; choosing a decoder never starts or cancels a scan. */
     if(s->apply == apply_old_tags){
         lv_obj_t *bt = lv_button_create(g_detail_root);
-        lv_obj_set_size(bt, 240, 36);
+        lv_obj_remove_style_all(bt);
+        lv_obj_set_size(bt, 240, 44);
+        lv_obj_set_style_radius(bt, 12, 0);
+        lv_obj_set_style_bg_opa(bt, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(bt, TC(SURFACE), 0);
+        lv_obj_set_style_bg_color(bt, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
+        lv_obj_set_style_opa(bt, LV_OPA_40, LV_STATE_DISABLED);
+        lv_obj_clear_flag(bt, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_align(bt, LV_ALIGN_CENTER, 0, 28);
         old_tags_rescan_watch(bt);
         lv_obj_t *l = lv_label_create(bt);
         lv_label_set_text(l, tr("Rescan Library"));
-        lv_obj_set_style_text_font(l, TF(UI_14), 0);
+        lv_obj_set_style_text_font(l, TF(UI_16), 0);
+        lv_obj_set_style_text_color(l, TC(TEXT_PRIMARY), 0);
         lv_obj_center(l);
         ui_on(bt, old_tags_rescan_cb, LV_EVENT_CLICKED, NULL, "settings.old_tags_rescan", UI_CORE);
     }
 
-    /* description at the bottom - per-option for cyclers (refreshes on change) */
+    /* one short line at the bottom, only for the few settings whose name alone is unclear */
     const char *desc = s->desc;
-    if(s->type==ST_CYCLER && s->opt_descs && v>=0 && v<s->nopts) desc = s->opt_descs[v];
-    if(s->type == ST_CHOICE) desc = (s->opts == i18n_lang_names) ? "Screen redraws after selection." : NULL;
     if(desc && desc[0]){
         lv_obj_t *d = lv_label_create(g_detail_root);
         lv_label_set_text(d, tr(desc));
-        lv_label_set_long_mode(d, s->type == ST_CHOICE ? LV_LABEL_LONG_DOT : LV_LABEL_LONG_WRAP);
-        lv_obj_set_width(d, 240);
-        if(s->type == ST_CHOICE) lv_obj_set_height(d, 22);
+        lv_label_set_long_mode(d, LV_LABEL_LONG_DOT);   /* never wraps: a long translation ends in "..." */
+        lv_obj_set_size(d, 240, 22);
         lv_obj_align(d, LV_ALIGN_BOTTOM_MID, 0, -40);
         lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_font(d, TF(UI_14), 0);
@@ -1113,9 +1214,12 @@ void setting_detail_refresh(void){
 
 void setting_detail_create(lv_obj_t *root){ g_detail_root = root; }
 
-/* open a specific setting's detail page directly (verification / deep-link) */
+static void settings_reveal_row(int idx);
+
+/* Deep links to toggles reveal their row; other controls keep their detail page. */
 void settings_open_detail(int idx){
     if(idx<0 || idx>=N_SETTINGS) return;
+    if(TABLE[idx].type == ST_TOGGLE){ settings_reveal_row(idx); return; }
     g_active = &TABLE[idx];
     screen_show(SCR_SETTING_DETAIL);
     setting_detail_refresh();
@@ -1126,7 +1230,7 @@ void settings_open_key(const char *key){
     if(!key) return;
     for(int i=0;i<N_SETTINGS;i++)
         if(TABLE[i].cfg_key && !strcmp(TABLE[i].cfg_key, key)){
-            if(setting_unavailable(&TABLE[i])){ ui_toast("Not supported on this firmware yet"); return; }
+            if(TABLE[i].type != ST_TOGGLE && setting_unavailable(&TABLE[i])){ ui_toast("Not supported on this firmware yet"); return; }
             settings_open_detail(i); return;
         }
 }
@@ -1136,13 +1240,13 @@ static void list_back_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICK
 
 static void row_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+    setlist_scroll_remember();
     int idx = (int)(uintptr_t)lv_event_get_user_data(e);
     const setting_t *s = &TABLE[idx];
     if(s->type == ST_TOGGLE){
-        if(setting_unavailable(s)){ ui_toast(tr("Not supported on this install")); return; }   /* only Allow diskOS Updates is a toggle that can be unavailable */
-        int nv = !get_val(s); set_val(s, nv);
-        char b[16];
-        if(g_list_rows[idx]) lv_label_set_text(g_list_rows[idx], val_text(s,b,sizeof b));
+        if(setting_unavailable(s)){ ui_toast(tr("Not supported on this install")); return; }
+        set_val(s, !get_val(s));
+        settings_row_values_refresh();   /* read back AFTER the apply hook, including a refusal */
         return;
     }
     if(s->type == ST_ACTION){
@@ -1189,7 +1293,272 @@ static lv_obj_t *setting_card(lv_obj_t *list){
     return row;
 }
 
-/* ---- top-level category list (SCR_SETTINGS): Playback / Audio / Display / Network / System ---- */
+/* ---- Custom page (slice 17b): SCR_CUSTOM_PAGE, one level below Saver Style. Rows: Use Saved Image, Choose Image, Position
+ * (inline), Save. Overlays, Font and Preview (17c/17d) get no placeholder rows: a row that does nothing is worse than none.
+ * Position edits a draft (custom_ov_draft_*): Save commits it, Back discards it, neither touches the image. Use Saved Image
+ * reselects the saved custom row on a worker, the leave-Custom pattern mirrored (reserve, player, database, compensate). ---- */
+static lv_obj_t *g_cp_root, *g_cp_seg[CUSTOM_OV_POS_COUNT];
+#define CO_N 5   /* the overlay switches, in the order of the Overlays page */
+static const unsigned CO_BIT[CO_N] = { CUSTOM_OV_TIME, CUSTOM_OV_DATE, CUSTOM_OV_BATTERY, CUSTOM_OV_TRACK, CUSTOM_OV_WEATHER };
+static const char *const CO_NAME[CO_N] = { "Time", "Date", "Battery", "Now Playing", "Weather" };
+#define CU_FAILED "Could not use the saved image - previous kept"
+static int cu_saved(custom_saver_asset *a){   /* the read waits for nothing (saver.c reads the same way on the UI thread) */
+    struct stat sb;
+    return custom_saver_db_saved(NULL, a) == CUSTOM_SAVER_OK && !stat(a->path, &sb) && S_ISREG(sb.st_mode);
+}
+static void *cu_worker(void *u){
+    (void)u;
+    int rc = -1; unsigned prev; custom_saver_asset a; struct stat sb;
+    if(!ipc_apply_reserve()){
+        if(!custom_saver_db_previous(CUSTOM_SAVER_DB_PATH, &prev) && !custom_saver_db_saved(NULL, &a) && !stat(a.path, &sb) && S_ISREG(sb.st_mode) &&
+           !ipc_saver_reselect(SS_CUSTOM)){   /* the file may have gone since the page was built: check before the player is asked */
+            rc = (int)custom_saver_db_select(NULL, 0, 0, a.path);   /* the custom row (0, 0) with the asset it already holds */
+            if(rc) ipc_saver_reselect(prev);
+        }
+        ipc_apply_release();
+    }
+    atomic_store(&g_cu.rc, rc);
+    atomic_store(&g_cu.fin, 1);
+    return NULL;
+}
+static void cu_tick(lv_timer_t *t){
+    if(!atomic_load(&g_cu.fin)) return;
+    lv_timer_delete(t);
+    g_cu.busy = 0;
+    if(atomic_load(&g_cu.rc)) ui_toast(CU_FAILED);
+    else { settings_saver_select_custom(); ui_toast("Image set"); }
+    if(is_saver_row(g_active)) setting_detail_refresh();   /* the Saver Style page below shows the new check, visible or stacked */
+    if(screen_current() == SCR_CUSTOM_PAGE) settings_custom_refresh();
+}
+static void cu_use_cb(lv_event_t *e){
+    (void)e;
+    if(g_ss.busy || g_cu.busy){
+        ui_toast("Player busy - try again");
+        return;
+    }
+    g_cu.busy = 1; atomic_store(&g_cu.fin, 0);
+    if(bg_start(cu_worker)){ g_cu.busy = 0; ui_toast(CU_FAILED); return; }
+    lv_timer_create(cu_tick, 50, NULL);
+}
+static void cp_choose_cb(lv_event_t *e){ (void)e; custom_picker_open(); }
+static void cp_overlays_cb(lv_event_t *e){ (void)e; screen_show(SCR_CUSTOM_OVERLAYS); }
+static void cp_font_cb(lv_event_t *e){ (void)e; screen_show(SCR_CUSTOM_FONT); }
+static void cp_preview_cb(lv_event_t *e){ (void)e; screen_show(SCR_CUSTOM_PREVIEW); }
+static void cp_back_cb(lv_event_t *e){ if(lv_event_get_code(e) == LV_EVENT_CLICKED) screen_back(); }   /* every Custom header: screenmgr.c drops the draft when the Custom area is left */
+static void cp_save_cb(lv_event_t *e){
+    (void)e;
+    int rc = custom_ov_draft_save();
+    ui_toast(rc == 0 ? "Saved" : rc == -2 ? "Saved - not confirmed yet" : "Could not save");
+}
+static void cp_seg_paint(void){   /* in place: a rebuild would reset the scroll */
+    int pos = custom_ov_draft_get().pos;
+    for(int k = 0; k < CUSTOM_OV_POS_COUNT; k++){
+        if(!g_cp_seg[k]) continue;
+        lv_obj_set_style_bg_color(g_cp_seg[k], k == pos ? ui_current_accent() : TC(SURFACE_RAISED), 0);
+        lv_obj_set_style_text_color(lv_obj_get_child(g_cp_seg[k], 0), k == pos ? theme_on_color(ui_current_accent()) : TC(TEXT_PRIMARY), 0);
+    }
+}
+static void cp_pos_cb(lv_event_t *e){ custom_ov_draft_set_pos((int)(intptr_t)lv_event_get_user_data(e)); cp_seg_paint(); }
+static lv_obj_t *cp_label(lv_obj_t *row, const char *text, int y, int w, const lv_font_t *f, lv_color_t c){
+    lv_obj_t *l = lv_label_create(row);
+    lv_label_set_text(l, text);
+    lv_obj_set_pos(l, 18, y); lv_obj_set_size(l, w, y == 6 ? 20 : 18);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(l, f, 0);
+    lv_obj_set_style_text_color(l, c, 0);
+    return l;
+}
+/* title + subtitle row; cb NULL = disabled (muted text, not clickable); chevron for rows that open a screen */
+static lv_obj_t *cp_row(lv_obj_t *list, const char *title, const char *sub, lv_event_cb_t cb, const char *id, int chevron){
+    lv_obj_t *row = setting_card(list);
+    if(cb) ui_on(row, cb, LV_EVENT_CLICKED, NULL, id, UI_CORE); else lv_obj_remove_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    int w = chevron ? 214 : 190;   /* clear of the chevron, or of the format chip */
+    cp_label(row, tr(title), 6, w, TF(UI_16), cb ? TC(TEXT_PRIMARY) : TC(TEXT_MUTED));
+    cp_label(row, tr(sub), 27, w, TF(UI_14), cb ? TC(TEXT_SECONDARY) : TC(TEXT_MUTED));
+    if(chevron){
+        lv_obj_t *ch = lv_label_create(row);
+        lv_label_set_text(ch, LV_SYMBOL_RIGHT);
+        lv_obj_align(ch, LV_ALIGN_RIGHT_MID, -14, 0);
+        lv_obj_set_style_text_color(ch, TC(TEXT_SECONDARY), 0);
+    }
+    theme_list_row(row);
+    return row;
+}
+void settings_custom_create(lv_obj_t *root){ g_cp_root = root; }
+void settings_custom_open(void){ custom_ov_draft_begin(); screen_show(SCR_CUSTOM_PAGE); }
+void settings_custom_refresh(void){
+    if(!g_cp_root) return;
+    lv_obj_clean(g_cp_root);
+    memset(g_cp_seg, 0, sizeof g_cp_seg);
+    lv_obj_set_style_bg_color(g_cp_root, TC(CANVAS), 0);
+    lv_obj_set_style_bg_opa(g_cp_root, LV_OPA_COVER, 0);
+    ui_header_cb(g_cp_root, "Custom", cp_back_cb);
+    lv_obj_t *list = make_list(g_cp_root);
+    custom_saver_asset a;
+    int have = cu_saved(&a);
+    lv_obj_t *use = cp_row(list, "Use Saved Image", have ? "Last image set" : "No saved image yet", have ? cu_use_cb : NULL, "settings.custom.use", 0);
+    if(have && (a.type == 204 || a.type == 200)){   /* GIF, or a converted still (always a PNG) */
+        lv_obj_t *chip = lv_obj_create(use);
+        lv_obj_remove_style_all(chip);
+        lv_obj_clear_flag(chip, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_size(chip, 48, 24);
+        lv_obj_align(chip, LV_ALIGN_RIGHT_MID, -12, 0);
+        lv_obj_set_style_radius(chip, 12, 0);
+        lv_obj_set_style_bg_color(chip, ui_current_accent(), 0);
+        lv_obj_set_style_bg_opa(chip, LV_OPA_20, 0);
+        lv_obj_t *t = lv_label_create(chip);
+        lv_label_set_text(t, a.type == 204 ? "GIF" : "PNG");
+        lv_obj_set_style_text_font(t, TF(UI_14), 0);
+        lv_obj_set_style_text_color(t, ui_current_accent(), 0);
+        lv_obj_center(t);
+    }
+    cp_row(list, "Choose Image", "From CustomCover on SD card", cp_choose_cb, "settings.custom.choose", 1);
+    char ov[96] = "";   /* the DRAFT's values, so a change made on a sub-page shows at once */
+    for(int i = 0; i < CO_N; i++)
+        if(custom_ov_draft_get().mask & CO_BIT[i]) snprintf(ov + strlen(ov), sizeof ov - strlen(ov), "%s%s", ov[0] ? ", " : "", tr(CO_NAME[i]));
+    cp_row(list, "Overlays", ov[0] ? ov : tr("None"), cp_overlays_cb, "settings.custom.overlays", 1);
+    cp_row(list, "Font", custom_ov_font_name(custom_ov_draft_get().font), cp_font_cb, "settings.custom.font", 1);
+    lv_obj_t *pc = setting_card(list);   /* Position: label over three 80 x 44 segments, inline (decision 78) */
+    lv_obj_remove_flag(pc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_height(pc, 86);
+    cp_label(pc, tr("Position"), 6, 232, TF(UI_16), TC(TEXT_PRIMARY));
+    for(int k = 0; k < CUSTOM_OV_POS_COUNT; k++){
+        lv_obj_t *b = lv_button_create(pc);
+        lv_obj_remove_style_all(b);
+        lv_obj_set_size(b, 80, 44);
+        lv_obj_set_pos(b, 10 + k * 84, 32);
+        lv_obj_set_style_radius(b, 10, 0);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+        ui_on(b, cp_pos_cb, LV_EVENT_CLICKED, (void*)(intptr_t)k, "settings.custom.pos", UI_CORE);
+        lv_obj_t *t = lv_label_create(b);
+        lv_label_set_text(t, tr(custom_ov_pos_name(k)));
+        lv_obj_set_style_text_font(t, TF(UI_16), 0);
+        lv_obj_center(t);
+        g_cp_seg[k] = b;
+    }
+    cp_seg_paint();
+    cp_row(list, "Preview", have ? "Shows the full result" : "Save an image first", have ? cp_preview_cb : NULL, "settings.custom.preview", have);   /* decision 83: disabled without a saved image */
+    lv_obj_t *sv = lv_button_create(list);
+    lv_obj_remove_style_all(sv);
+    kit_button(sv);
+    lv_obj_set_size(sv, 268, 50);
+    lv_obj_set_style_radius(sv, 25, 0);
+    lv_obj_set_style_bg_color(sv, ui_current_accent(), 0);
+    lv_obj_set_style_bg_opa(sv, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(sv, TC(RAISED_PRESSED), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(sv, TC(SURFACE_RAISED), LV_STATE_DISABLED);
+    lv_obj_set_style_bg_opa(sv, LV_OPA_COVER, LV_STATE_DISABLED);
+    lv_obj_set_style_text_color(sv, theme_on_color(ui_current_accent()), 0);
+    lv_obj_set_style_text_color(sv, TC(TEXT_PRIMARY), LV_STATE_DISABLED);
+    lv_obj_set_style_text_color(sv, TC(TEXT_PRIMARY), LV_STATE_PRESSED);
+    ui_on(sv, cp_save_cb, LV_EVENT_CLICKED, NULL, "settings.custom.save", UI_CORE);
+    lv_obj_t *st = lv_label_create(sv);
+    lv_label_set_text(st, tr("Save"));
+    lv_obj_set_style_text_font(st, TF(UI_16), 0);
+    /* Inherit the button's state-dependent foreground. */
+    lv_obj_center(st);
+}
+
+/* ---- Overlays and Font pages (slice 17c): SCR_CUSTOM_OVERLAYS and SCR_CUSTOM_FONT, one level below the Custom page. Both edit
+ * only the draft the Custom page began; their Back keeps it, the Custom page's Save commits it, and screenmgr.c discards it on
+ * any exit from the Custom area. ---- */
+static lv_obj_t *g_co_root, *g_cf_root, *g_cf_row[CUSTOM_OV_FONT_COUNT], *g_cf_ck[CUSTOM_OV_FONT_COUNT];
+static void co_toggle_cb(lv_event_t *e){   /* the whole row is the tap target; the switch only shows the state */
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    lv_obj_t *sw = lv_obj_get_child(lv_event_get_target(e), 1);
+    int on = !lv_obj_has_state(sw, LV_STATE_CHECKED);
+    if(on) lv_obj_add_state(sw, LV_STATE_CHECKED); else lv_obj_remove_state(sw, LV_STATE_CHECKED);
+    custom_ov_draft_set_bit(CO_BIT[i], on);
+    if(CO_BIT[i] == CUSTOM_OV_WEATHER) custom_ov_feed_tick();   /* a visible group re-reads weather now, not on the next 10 s clock tick */
+}
+static lv_obj_t *cc_page(lv_obj_t *root, const char *title){
+    lv_obj_clean(root);
+    lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
+    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
+    ui_header_cb(root, title, cp_back_cb);
+    return make_list(root);
+}
+static lv_obj_t *cc_label(lv_obj_t *row, const char *text){   /* the row's name, centred vertically on the left */
+    lv_obj_t *l = lv_label_create(row);
+    lv_label_set_text(l, tr(text));
+    lv_obj_align(l, LV_ALIGN_LEFT_MID, 18, 0);
+    lv_obj_set_style_text_font(l, TF(UI_16), 0);
+    lv_obj_set_style_text_color(l, TC(TEXT_PRIMARY), 0);
+    return l;
+}
+void settings_overlays_create(lv_obj_t *root){ g_co_root = root; }
+void settings_overlays_refresh(void){
+    if(!g_co_root) return;
+    lv_obj_t *list = cc_page(g_co_root, "Overlays");
+    for(int i = 0; i < CO_N; i++){
+        lv_obj_t *row = setting_card(list);
+        ui_on(row, co_toggle_cb, LV_EVENT_CLICKED, (void*)(intptr_t)i, "settings.custom.overlay", UI_CORE);
+        cc_label(row, CO_NAME[i]);
+        lv_obj_t *sw = lv_switch_create(row);
+        lv_obj_clear_flag(sw, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_size(sw, 52, 28);
+        lv_obj_align(sw, LV_ALIGN_RIGHT_MID, -14, 0);
+        lv_obj_set_style_bg_color(sw, ui_current_accent(), LV_PART_INDICATOR | LV_STATE_CHECKED);
+        if(custom_ov_draft_get().mask & CO_BIT[i]) lv_obj_add_state(sw, LV_STATE_CHECKED);
+        theme_list_row(row);
+    }
+}
+static void cf_paint(void){   /* in place: a row cannot delete itself inside its own event */
+    int f = custom_ov_draft_get().font;
+    for(int k = 0; k < CUSTOM_OV_FONT_COUNT; k++){
+        if(!g_cf_row[k]) continue;
+        lv_obj_set_style_bg_color(g_cf_row[k], k == f ? TC(SURFACE_SELECTED) : TC(SURFACE), 0);
+        lv_obj_set_style_bg_opa(g_cf_row[k], k == f || !theme_trait(THEME_TRAIT_FLAT_LISTS) ? LV_OPA_COVER : LV_OPA_TRANSP, 0);   /* selected rows and all non-flat rows use COVER; unselected flat-list rows stay transparent */
+        if(k == f) lv_obj_remove_flag(g_cf_ck[k], LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(g_cf_ck[k], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+static void cf_pick_cb(lv_event_t *e){ custom_ov_draft_set_font((int)(intptr_t)lv_event_get_user_data(e)); cf_paint(); }
+void settings_font_create(lv_obj_t *root){ g_cf_root = root; }
+void settings_font_refresh(void){
+    if(!g_cf_root) return;
+    lv_obj_t *list = cc_page(g_cf_root, "Font");
+    for(int k = 0; k < CUSTOM_OV_FONT_COUNT; k++){
+        lv_obj_t *row = setting_card(list);
+        lv_obj_set_height(row, 56);   /* room for the sample */
+        ui_on(row, cf_pick_cb, LV_EVENT_CLICKED, (void*)(intptr_t)k, "settings.custom.font_pick", UI_CORE);
+        cc_label(row, custom_ov_font_name(k));
+        lv_obj_t *box = lv_obj_create(row);   /* the sample time in the choice's REAL clock face, scaled to a 26 px digit height */
+        lv_obj_remove_style_all(box);
+        lv_obj_clear_flag(box, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_size(box, 96, 56);
+        lv_obj_align(box, LV_ALIGN_RIGHT_MID, -44, 0);
+        const lv_font_t *f = custom_ov_faces(k, CUSTOM_OV_SIZE_NORMAL).clock;
+        lv_font_glyph_dsc_t g;
+        if(f){
+            lv_obj_t *s = lv_label_create(box);
+            kit_keep(s);   /* keep the specimen in its chosen face through theme styling */
+            lv_label_set_text(s, "11:33");
+            lv_obj_set_style_text_font(s, f, 0);
+            lv_obj_set_style_text_color(s, TC(TEXT_PRIMARY), 0);
+            lv_obj_update_layout(s);
+            lv_obj_center(s);
+            int sc = 256;   /* 26 px digit height, and never wider than the 96 px box (a wide theme clock face was cut at both ends there) */
+            if(lv_font_get_glyph_dsc(f, &g, '8', 0) && g.box_h > 26) sc = 26 * 256 / g.box_h;
+            if(lv_obj_get_width(s) * sc / 256 > 92) sc = 92 * 256 / lv_obj_get_width(s);
+            if(sc < 256){
+                lv_obj_set_style_transform_pivot_x(s, lv_obj_get_width(s) / 2, 0);
+                lv_obj_set_style_transform_pivot_y(s, lv_obj_get_height(s) / 2, 0);
+                lv_obj_set_style_transform_scale(s, sc, 0);
+            }
+        }
+        g_cf_ck[k] = lv_label_create(row);
+        lv_label_set_text(g_cf_ck[k], LV_SYMBOL_OK);
+        lv_obj_align(g_cf_ck[k], LV_ALIGN_RIGHT_MID, -16, 0);
+        lv_obj_set_style_text_color(g_cf_ck[k], ui_current_accent(), 0);
+        g_cf_row[k] = row;
+        theme_list_row(row);
+    }
+    kit_pass(g_cf_root);   /* style new rows before restoring the draft selection */
+    cf_paint();
+}
+
+/* ---- top-level category list (SCR_SETTINGS): Playback / Audio / Network / Display / Library / Controls / Battery & Power / Device ---- */
 static void cat_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
     int gi = (int)(uintptr_t)lv_event_get_user_data(e);
@@ -1217,6 +1586,8 @@ void settings_create(lv_obj_t *root){
         lv_obj_t *lbl = lv_label_create(row);
         lv_label_set_text(lbl, tr(GROUPS[g]));
         lv_obj_set_pos(lbl, 18, 15);
+        lv_obj_set_width(lbl, 210);
+        lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_font(lbl, TF(UI_16), 0);
         lv_obj_set_style_text_color(lbl, TC(TEXT_PRIMARY), 0);
 
@@ -1227,6 +1598,7 @@ void settings_create(lv_obj_t *root){
         lv_obj_set_style_text_font(ch, TF(UI_16), 0);
         lv_obj_set_style_text_color(ch, TC(TEXT_MUTED), 0);
         if(theme_trait(THEME_TRAIT_FLAT_LISTS)) lv_obj_set_style_text_font(lbl, TF(UI_20), 0);   /* big mono rows */
+        lv_obj_set_height(lbl, lv_font_get_line_height(lv_obj_get_style_text_font(lbl, 0)));
         theme_list_row(row);
     }
 }
@@ -1234,27 +1606,121 @@ void settings_create(lv_obj_t *root){
 /* Category list is static; nothing to re-sync when SCR_SETTINGS is (re)shown. */
 void settings_refresh_list(void){ }
 void settings_row_values_refresh(void){
+    ota_dot_refresh();
     char b[40];
-    for(int i=0;i<N_SETTINGS;i++) if(g_list_rows[i] && lv_obj_is_valid(g_list_rows[i])) lv_label_set_text(g_list_rows[i], val_text(&TABLE[i],b,sizeof b));
+    for(int i=0;i<N_SETTINGS;i++) if(g_list_rows[i] && lv_obj_is_valid(g_list_rows[i])){
+        lv_obj_t *o = g_list_rows[i];
+        const radio_row_t *rr = radio_row((const void *)TABLE[i].apply);
+        if(rr) radio_switch_paint(rr, o);
+        else if(TABLE[i].type == ST_TOGGLE){
+            if(get_val(&TABLE[i])) lv_obj_add_state(o, LV_STATE_CHECKED);
+            else lv_obj_remove_state(o, LV_STATE_CHECKED);
+            if(setting_unavailable(&TABLE[i])) lv_obj_add_state(o, LV_STATE_DISABLED);
+            else lv_obj_remove_state(o, LV_STATE_DISABLED);
+        } else lv_label_set_text(o, val_text(&TABLE[i],b,sizeof b));
+    }
 }
 
 /* ---- one category's rows (SCR_SETLIST), rebuilt on every entry so values are always live ---- */
 void setlist_create(lv_obj_t *root){ g_setlist_root = root; }
 
+/* A radio row's body: with the radio on it opens the page; with it off it turns it on here, so a page holding only
+ * its switch is never opened. While a start is pending the tap is ignored: the change under way decides. */
+static void radio_row_cb(lv_event_t *e){
+    int idx = (int)(uintptr_t)lv_event_get_user_data(e);
+    const radio_row_t *rr = idx >= 0 && idx < N_SETTINGS ? radio_row((const void *)TABLE[idx].apply) : NULL;
+    if(!rr || rr->pending()) return;
+    setlist_scroll_remember();
+    if(rr->shown()){ TABLE[idx].apply(0); return; }
+    rr->power(1);
+    settings_row_values_refresh();
+}
+/* A radio row's switch is its own target: it turns the radio on or off and never opens the page. It cannot flip
+ * itself (not checkable): the power path decides, then the switch is repainted from the state source. */
+static void radio_switch_cb(lv_event_t *e){
+    int idx = (int)(uintptr_t)lv_event_get_user_data(e);
+    const radio_row_t *rr = idx >= 0 && idx < N_SETTINGS ? radio_row((const void *)TABLE[idx].apply) : NULL;
+    if(!rr || rr->pending()) return;
+    setlist_scroll_remember();
+    rr->power(!rr->shown());
+    settings_row_values_refresh();
+}
+/* Visible radio rows follow outside changes (Quick Settings, stock, reconciliation, a start settling) once a second.
+ * The reads are rfkill files and saved settings only; nothing runs while the screen is dark or Settings is covered. */
+static void radio_rows_tick(lv_timer_t *t){
+    (void)t;
+    if(screen_current() != SCR_SETLIST || !ui_screen_backlight_on()) return;
+    for(int i = 0; i < N_SETTINGS; i++){
+        const radio_row_t *rr = radio_row((const void *)TABLE[i].apply);
+        if(rr && g_list_rows[i] && lv_obj_is_valid(g_list_rows[i])) radio_switch_paint(rr, g_list_rows[i]);
+    }
+}
+static void radio_rows_del_cb(lv_event_t *e){ lv_timer_delete(lv_event_get_user_data(e)); }
+
+/* A section heading on a category page: a small label in the list, not a row (it has no action, no background and no
+ * switch). The theme kit styles it as KIT_SECTION; 13 px of space above separates it from the section before. */
+static void setlist_heading(lv_obj_t *list, const char *text, int first){
+    lv_obj_t *h = lv_label_create(list);
+    kit_section(h);
+    lv_obj_clear_flag(h, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_label_set_text(h, tr(text));
+    lv_label_set_long_mode(h, LV_LABEL_LONG_DOT);               /* one line; a long translation ends in "..." */
+    lv_obj_set_style_text_font(h, TF(UI_12), 0);
+    lv_obj_set_style_text_color(h, TC(TEXT_SECONDARY), 0);
+    lv_obj_set_style_pad_left(h, 18, 0);
+    lv_obj_set_style_pad_top(h, first ? 0 : 13, 0);
+    lv_obj_set_size(h, 268, (first ? 0 : 13) + lv_font_get_line_height(TF(UI_12)));
+}
+/* Battery & Power opens with a summary of the fuel gauge (percent, health, cycles, temperature). It is
+ * information, not a row: nothing in it is tappable. Read when the page is built. */
+static void setlist_battery_summary(lv_obj_t *list){
+    char b[96], t[128];
+    sys_battery_text(NULL, 1, b, sizeof b);
+    /* Each comma-separated gauge item gets its own line. LVGL must never
+     * split a number to squeeze the last item onto a preceding line. */
+    for(char *item = b; (item = strstr(item, ", ")); item++){
+        *item = '\n'; memmove(item + 1, item + 2, strlen(item + 2) + 1);
+    }
+    snprintf(t, sizeof t, "%s %s", tr("Battery"), b);
+    lv_obj_t *l = lv_label_create(list);
+    lv_obj_clear_flag(l, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_label_set_text(l, t);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(l, 268);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(l, TF(UI_14), 0);
+    lv_obj_set_style_text_color(l, TC(TEXT_SECONDARY), 0);
+    lv_obj_set_style_pad_top(l, 4, 0);
+    lv_obj_set_style_pad_bottom(l, 6, 0);
+}
+
 void setlist_refresh(void){
     if(!g_setlist_root || !g_active_group) return;
+    int gi = active_group_index();
+    int32_t saved_scroll = gi >= 0 ? g_group_scroll[gi] : 0;
+    g_setlist_list = NULL;                   /* deletion can emit SCROLL as the old range collapses */
+    memset(g_list_rows, 0, sizeof g_list_rows);
     lv_obj_clean(g_setlist_root);
     lv_obj_set_style_bg_color(g_setlist_root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(g_setlist_root, LV_OPA_COVER, 0);
     ui_header_cb(g_setlist_root, g_active_group, list_back_cb);   /* title = category; back pops to categories */
 
     lv_obj_t *list = make_list(g_setlist_root);
+    g_setlist_list = list;
+    lv_obj_add_event_cb(list, setlist_scroll_cb, LV_EVENT_SCROLL, NULL);
+    int radio_rows = 0;
+    const char *section = NULL;                          /* the heading drawn last on this page */
+    if(!strcmp(g_active_group, "Battery & Power")) setlist_battery_summary(list);
     for(int i=0;i<N_SETTINGS;i++){
         const setting_t *s = &TABLE[i];
         if(strcmp(s->group, g_active_group)) continue;   /* only rows in this category */
+        if(s->section && (!section || strcmp(section, s->section))) setlist_heading(list, s->section, lv_obj_get_child_count(list) == 0);
+        section = s->section;
+        const radio_row_t *rr = radio_row((const void *)s->apply);
+        radio_rows += rr != NULL;
 
         lv_obj_t *row = setting_card(list);
-        ui_on(row, row_cb, LV_EVENT_CLICKED, (void*)(uintptr_t)i, "settings.row", UI_CORE);
+        ui_on(row, rr ? radio_row_cb : row_cb, LV_EVENT_CLICKED, (void*)(uintptr_t)i, "settings.row", UI_CORE);
 
         lv_obj_t *lbl = lv_label_create(row);
         lv_label_set_text(lbl, tr(s->label));
@@ -1273,19 +1739,107 @@ void setlist_refresh(void){
         lv_obj_set_style_text_align(vl, LV_TEXT_ALIGN_LEFT, 0);
         lv_obj_set_style_text_font(vl, s->opts == i18n_lang_names ? TF(USER_14) : TF(UI_14), 0);
         lv_obj_set_style_text_color(vl, (s->type==ST_READONLY || setting_unavailable(s)) ? TC(TEXT_MUTED) : TC(TEXT_SECONDARY), 0);
-        if(s->type == ST_ACTION){
-            /* the action word gets the width it needs (46..96 px, measured in this theme's face: "Import" was cut to
-             * "Imp..." in a fixed 46 px box), right-aligned at x 250; the label takes the rest */
+        if(s->type == ST_ACTION && !rr){
+            /* Measure both captions with their final theme faces; a long name wraps beside the action. */
             lv_point_t sz;
-            lv_text_get_size(&sz, value, TF(UI_14), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-            int32_t vw = sz.x + 4; if(vw < 46) vw = 46; if(vw > 96) vw = 96;
-            lv_obj_set_pos(lbl, 18, 15);
-            lv_obj_set_size(lbl, 250 - vw - 8 - 18, 20);
-            lv_obj_set_pos(vl, 250 - vw, 17);
-            lv_obj_set_size(vl, vw, 18);
+            int32_t vw;
+            if(theme_kit()->style){
+                theme_kit()->style(row, KIT_ROW);
+                theme_kit()->style(lbl, KIT_ROW_TEXT);
+                theme_kit()->style(vl, KIT_ROW_SUB);
+            }
+            kit_isolate(row);
+            lv_text_get_size(&sz, value, lv_obj_get_style_text_font(vl, 0),
+                             lv_obj_get_style_text_letter_space(vl, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+            vw = sz.x + 4; if(vw < 46) vw = 46; if(vw > 116) vw = 116;
+            lv_obj_set_pos(lbl, 18, 10);
+            lv_obj_set_size(lbl, 250 - vw - 8 - 18, LV_SIZE_CONTENT);
+            lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+            lv_obj_set_size(vl, vw, LV_SIZE_CONTENT);
+            lv_label_set_long_mode(vl, LV_LABEL_LONG_WRAP);
             lv_obj_set_style_text_align(vl, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_obj_update_layout(row);
+            int h = lv_obj_get_height(lbl) > lv_obj_get_height(vl) ? lv_obj_get_height(lbl) : lv_obj_get_height(vl);
+            lv_obj_set_y(lbl, 10 + (h - lv_obj_get_height(lbl)) / 2);
+            lv_obj_set_pos(vl, 250 - vw, 10 + (h - lv_obj_get_height(vl)) / 2);
+            lv_obj_set_height(row, h + 20);
+            if(theme_kit()->row_decor) theme_kit()->row_decor(row, lbl);
         }
-        g_list_rows[i] = vl;
+        if(s->apply == system_check_update_open){
+            g_ota_dot = lv_obj_create(row);
+            lv_obj_remove_style_all(g_ota_dot);
+            lv_obj_clear_flag(g_ota_dot, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_set_size(g_ota_dot, 6, 6);
+            lv_obj_set_pos(g_ota_dot, 8, 22);
+            lv_obj_set_style_radius(g_ota_dot, LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_style_bg_opa(g_ota_dot, LV_OPA_COVER, 0);
+            lv_obj_set_style_bg_color(g_ota_dot, TC(ACCENT_EMPHASIS), 0);
+            lv_obj_add_event_cb(g_ota_dot, ota_dot_deleted, LV_EVENT_DELETE, NULL);
+            ota_dot_refresh();
+        }
+        if(s->type == ST_TOGGLE || rr){
+            /* The row owns the tap. A switch cannot toggle itself before an apply hook refuses it.
+             * A row has no help line unless its name alone is unclear (setting_t.desc): then one short line sits
+             * below the label. The row is as tall as its content and the switch is centred on it.
+             * A radio row's switch is its own target (radio_switch_cb); the rest of the row opens or starts it. */
+            if(theme_kit()->style){
+                theme_kit()->style(row, KIT_ROW);
+                theme_kit()->style(lbl, KIT_ROW_TEXT);
+                theme_kit()->style(vl, KIT_ROW_SUB);
+            }
+            kit_isolate(row);  /* preserve the measured height and the real switch through later passes */
+            const int has_help = s->desc && s->desc[0];
+            lv_obj_set_size(lbl, rr ? 170 : 174, LV_SIZE_CONTENT);   /* a radio caption ends before the switch target, also at a theme's x24 */
+            lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+            lv_obj_set_width(vl, 232);
+            lv_label_set_long_mode(vl, LV_LABEL_LONG_DOT);   /* one line; a long translation ends in "..." */
+            lv_label_set_text(vl, has_help ? tr(s->desc) : "");
+            lv_obj_set_height(vl, lv_font_get_line_height(lv_obj_get_style_text_font(vl, 0)));
+            lv_obj_t *reason = NULL;
+            if(setting_unavailable(s)){
+                reason = lv_label_create(row);
+                lv_label_set_text_fmt(reason, "%s.", val_text(s,b,sizeof b));
+                lv_obj_set_style_text_font(reason, TF(UI_12), 0);
+                lv_obj_set_style_text_color(reason, TC(TEXT_MUTED), 0);
+                lv_obj_set_width(reason, 232);
+                lv_label_set_long_mode(reason, LV_LABEL_LONG_WRAP);
+                lv_obj_set_x(reason, lv_obj_get_style_x(vl, 0));
+            }
+            lv_obj_t *sw = lv_switch_create(row);
+            lv_obj_remove_flag(sw, (rr ? LV_OBJ_FLAG_CHECKABLE : LV_OBJ_FLAG_CLICKABLE) | LV_OBJ_FLAG_SCROLLABLE);
+            if(rr){
+                lv_obj_set_ext_click_area(sw, 10);   /* 64 x 44 target, clear of the 170 px caption */
+                ui_on(sw, radio_switch_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)i, "settings.radio_switch", UI_CORE);
+            }
+            theme_settings_switch(sw);
+            lv_obj_set_x(sw, 206);
+            if(rr) radio_switch_paint(rr, sw);
+            else if(get_val(s)) lv_obj_add_state(sw, LV_STATE_CHECKED);
+            if(!rr && setting_unavailable(s)) lv_obj_add_state(sw, LV_STATE_DISABLED);
+            lv_obj_update_layout(row);
+            if(theme_kit()->row_decor) theme_kit()->row_decor(row, lbl);
+            lv_obj_update_layout(row);
+            /* Caption and switch share one line (10 px above, the taller of the two); a reason and a kept help line stack
+             * below it; the row ends 10 px under its last line. No help line: the row is exactly that tall, no gap. */
+            const int lbl_h = lv_obj_get_height(lbl);
+            const int body = lbl_h > 24 ? lbl_h : 24;
+            const int lbl_y = 10 + (body - lbl_h) / 2;
+            int end_y = 10 + body;
+            lv_obj_set_y(lbl, lbl_y);
+            lv_obj_set_y(sw, 10 + (body - 24) / 2);
+            if(reason){
+                lv_obj_set_y(reason, end_y + 2);
+                lv_obj_update_layout(row);
+                end_y += 2 + lv_obj_get_height(reason);
+            }
+            if(has_help){
+                lv_obj_set_y(vl, end_y + 4);
+                end_y += 4 + lv_obj_get_height(vl);
+            } else lv_obj_delete(vl);
+            lv_obj_set_height(row, end_y + 10);
+            g_list_rows[i] = sw;
+        } else g_list_rows[i] = vl;
+        lv_obj_add_event_cb(g_list_rows[i], setting_value_deleted, LV_EVENT_DELETE, (void *)(uintptr_t)i);
         if(s->apply == apply_rescan){                  /* live scan progress on this row while a scan runs */
             rescan_row_t *rr = malloc(sizeof *rr);
             if(rr){
@@ -1297,4 +1851,44 @@ void setlist_refresh(void){
         }
         theme_list_row(row);
     }
+    if(radio_rows){                            /* the list owns the timer; cleaning the page deletes both */
+        lv_timer_t *t = lv_timer_create(radio_rows_tick, 1000, NULL);
+        if(t) lv_obj_add_event_cb(list, radio_rows_del_cb, LV_EVENT_DELETE, t);
+    }
+    if(gi >= 0){
+        lv_obj_update_layout(list);            /* establish the new scroll range before restoring it */
+        lv_obj_scroll_to_y(list, saved_scroll, LV_ANIM_OFF);
+    }
 }
+
+/* A short, static focus mark explains a Quick Settings long press without changing the value. */
+static void reveal_done(lv_timer_t *t){
+    lv_obj_remove_state(lv_timer_get_user_data(t), LV_STATE_FOCUSED);
+    lv_timer_pause(t);
+}
+static void reveal_deleted(lv_event_t *e){ lv_timer_delete(lv_event_get_user_data(e)); }
+static void settings_reveal_row(int idx){
+    setlist_scroll_remember();
+    setlist_open(TABLE[idx].group);
+    lv_obj_t *value = g_list_rows[idx];
+    if(!value) return;
+    lv_obj_t *row = lv_obj_get_parent(value);
+    lv_obj_update_layout(g_setlist_root);
+    lv_obj_scroll_to_view(row, LV_ANIM_OFF);
+    lv_obj_set_style_outline_color(row, ui_current_accent(), LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_width(row, 2, LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_pad(row, 2, LV_STATE_FOCUSED);
+    lv_obj_add_state(row, LV_STATE_FOCUSED);
+    lv_timer_t *t = lv_timer_create(reveal_done, 1500, row);
+    lv_obj_add_event_cb(row, reveal_deleted, LV_EVENT_DELETE, t);
+}
+
+#ifdef DISKOS_HOST
+/* host tests: the table as the page builder reads it (see tests/host/test_settings_reorg.py) */
+int settings_host_row(int i, const char **group, const char **section, const char **label, const char **key){
+    if(i < 0 || i >= N_SETTINGS) return 0;
+    *group = TABLE[i].group; *section = TABLE[i].section; *label = TABLE[i].label; *key = TABLE[i].cfg_key;
+    return 1;
+}
+const char *settings_host_category(int i){ return i >= 0 && i < N_GROUPS ? GROUPS[i] : NULL; }
+#endif

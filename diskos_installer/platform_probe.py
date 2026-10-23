@@ -99,10 +99,38 @@ def distro_name():
     return platform.system()
 
 
+LIBUSB_LOADED = None
+
+
 def _bundled_libusb_backend():
     """A pyusb libusb1 backend pointed at OUR bundled libusb, so USB enumeration
     works in the frozen app even when the system has no libusb. Returns a backend
     or None (caller falls back to pyusb's default search)."""
+    global LIBUSB_LOADED
+    if host()[0] == "macos":
+        import os
+        import usb.backend.libusb1 as libusb1
+        from . import bundle
+        from .macos_runtime import prepare_tools
+        prepare_tools(bundle.vendor_dir())
+        path = os.path.join(bundle.vendor_dir(), "lib", "libusb-1.0.0.dylib")
+        # A frozen release must never silently fall back to a host library.
+        if not os.path.isfile(path):
+            if getattr(sys, "frozen", False):
+                raise RuntimeError('Missing bundled libusb: ' + path)
+            import ctypes.util
+            path = ctypes.util.find_library('usb-1.0')
+            if not path:
+                for prefix in ('/opt/homebrew/lib', '/usr/local/lib'):
+                    candidate = os.path.join(prefix, 'libusb-1.0.dylib')
+                    if os.path.isfile(candidate):
+                        path = candidate
+                        break
+        backend = libusb1.get_backend(find_library=lambda _name: path) if path else None
+        if backend is None:
+            raise RuntimeError('Cannot load macOS libusb: ' + str(path))
+        LIBUSB_LOADED = str(getattr(getattr(backend, 'lib', None), '_name', path))
+        return backend
     try:
         import glob
         import os

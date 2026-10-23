@@ -75,8 +75,10 @@ static const mdb_song_t **g_buf = NULL;
 static int g_fill_i, g_fill_n;
 static lv_timer_t *g_fill_timer;
 static int g_jump_idx = -1;
+static int g_jump_dy, g_jump_rest;   /* the pending jump keeps its row dy px below the list top; rest = it is a Back restore */
 
 static void library_reload(void);
+static void place_forget(void);
 
 static char first_letter(const char *s){
     while(*s==' ') s++;
@@ -154,7 +156,9 @@ static void fav_modal_close(void){
 static void fav_cancel_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) fav_modal_close(); }
 static void fav_confirm_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
-    mdb_unfavorite(g_fav_pending_id);
+    if(!mdb_unfavorite(g_fav_pending_id)){
+        ui_toast("Couldn't remove favourite - try again"); return;
+    }
     fav_modal_close();
     lv_async_call(reload_async, NULL);
 }
@@ -229,12 +233,20 @@ static void playlist_cb(lv_event_t *e){
     int i=(int)(intptr_t)lv_event_get_user_data(e);
     plview_open(g_plids[i], g_plnames[i]);   /* open the playlist (don't auto-play) */
 }
-static void pl_new_done(const char *name){   /* keyboard finished */
-    if(name && name[0] && mdb_playlist_create(name) > 0) library_reload();
+static const char *pl_new_save(const char *name){
+    if(!name || !name[0]) return "Enter a name";
+    if(mdb_playlist_create(name)<=0){
+        ui_toast("Couldn't create playlist - try again");
+        return "Try saving again";
+    }
+    return NULL;
+}
+static void pl_new_done(const char *name){   /* persistence succeeded before closing the keyboard */
+    if(name && name[0]) library_reload();
 }
 static void pl_new_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
-    kbinput_open("Playlist name", "", pl_new_done);   /* create an empty playlist */
+    kbinput_open_validated("Playlist name", "", pl_new_done, pl_new_save);   /* create an empty playlist */
 }
 static void group_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_SHORT_CLICKED) return;
@@ -282,13 +294,13 @@ int library_back(void){
         if(g_drill_kind!=1 && g_scope_lvl==2){ g_scope_lvl=1; library_reload(); return 1; }   /* album songs -> that scope's albums */
         if(g_drill_kind!=1 && g_scope_lvl==0 && g_scope_from_albums){ g_scope_from_albums=0; g_scope_lvl=1; library_reload(); return 1; }   /* All Songs -> albums */
         if(g_deeplink){  /* opened from the hub -> leave Library entirely (back to hub) */
-            g_deeplink=0; g_view=VIEW_MENU; g_drill_kind=0; library_reload(); return 0;
+            g_deeplink=0; g_view=VIEW_MENU; g_drill_kind=0; place_forget(); library_reload(); return 0;
         }
         g_view=(g_drill_kind==1)?VIEW_ALBUMS:(g_drill_kind==3)?VIEW_GENRES:VIEW_ARTISTS;
         g_drill_kind=0; library_reload(); return 1;
     }
     if(g_deeplink && g_view==VIEW_ARTISTS){   /* a deep-linked artist drill moved to Artists by the Artist setting: Back still leaves to the hub */
-        g_deeplink=0; g_view=VIEW_MENU; g_drill_kind=0; library_reload(); return 0;
+        g_deeplink=0; g_view=VIEW_MENU; g_drill_kind=0; place_forget(); library_reload(); return 0;
     }
     if(g_view==VIEW_MOSTPLAYED || g_view==VIEW_RECENT){ g_view=VIEW_HISTORY; library_reload(); return 1; }  /* stats -> History */
     if(g_view!=VIEW_MENU){ g_view=VIEW_MENU; library_reload(); return 1; }
@@ -421,16 +433,17 @@ static void jump_finish(void){
     /* Leave a screenful below the target so streaming does not clamp it short. */
     int need = g_jump_idx + 1 + (LIST_H + ROW_H + 3)/(ROW_H+4);
     if(g_fill_i < need && g_fill_i < g_fill_n) return;
-    int idx = g_jump_idx;
+    int idx = g_jump_idx, dy = g_jump_dy;
     g_jump_idx = -1;              /* first: this scroll emits SCROLL_BEGIN too */
-    lv_obj_scroll_to_y(g_list, (idx + g_has_header)*(ROW_H+4), LV_ANIM_OFF);
+    g_jump_dy = 0; g_jump_rest = 0;
+    lv_obj_scroll_to_y(g_list, (idx + g_has_header)*(ROW_H+4) - dy, LV_ANIM_OFF);
 }
 /* A newer scroll (touch drag, rim) replaces a pending A-Z target. */
 void library_jump_cancel(void){ g_jump_idx = -1; }
 static void list_scroll_cb(lv_event_t *e){ (void)e; library_jump_cancel(); }
 static void fill_cb(lv_timer_t *t){
     if(screen_current() != SCR_LIBRARY){
-        g_jump_idx = -1;
+        if(!g_jump_rest) g_jump_idx = -1;   /* pause a restore; only an A-Z request expires off-screen */
         lv_timer_pause(t);
         return;
     }
@@ -461,7 +474,7 @@ static void jump_to_letter(char L){
     if(idx<0) idx=g_count-1;
     /* row pitch = ROW_H + the list's 4px flex pad_row, so idx*ROW_H alone lands
      * progressively short for later letters. */
-    g_jump_idx = idx;
+    g_jump_idx = idx; g_jump_dy = 0; g_jump_rest = 0;
     jump_finish();
 }
 static void letter_cb(lv_event_t *e){
@@ -552,13 +565,13 @@ static int current_list_context(int *lt, char *name, int cap){
  * Play-mode = 0102 (ground-truth captured 2026-06-25); ui_set_workmode applies it. */
 static void play_list_mode(int mode){
     if(g_view==VIEW_GROUP && g_drill_kind!=1 && g_scope_lvl==2){     /* one album of an artist / genre: its own stock queue */
-        cfg_set_int("work_mode", mode); ui_set_workmode(mode);
+        ui_set_workmode(mode);
         if(scope_play_album(g_scope_album, mode == 1 ? -2 : -1)) screen_show(SCR_NOWPLAYING);
         return;
     }
     int lt; char nm[160];
     if(!current_list_context(&lt, nm, sizeof nm)) return;
-    cfg_set_int("work_mode", mode); ui_set_workmode(mode);
+    ui_set_workmode(mode);
     int pos = 1;
     /* shuffle: start on a random track (not always the first). Skip artist lists (lt==2):
      * the UI's split-artist count can exceed the player's exact ARTIST=? list -> out-of-range pos. */
@@ -618,7 +631,7 @@ static void add_album_cover_header(const char *album, const char *artist){
     for(int i=0;i<n;i++){
         char track[512]; track[0]=0;
         char tmp[48]; snprintf(tmp, sizeof tmp, "/tmp/album_hdr%d.bmp", g_hdr_cover_ctr & 3);
-        if(mdb_song_path(ids[i], track, sizeof track) && track[0] && artcache_get_cover(track, tmp)==0){
+        if(mdb_song_path(ids[i], track, sizeof track)>0 && track[0] && artcache_get_cover(track, tmp)==0){
             snprintf(src, sizeof src, "A:%s", tmp); g_hdr_cover_ctr++;
             break;
         }
@@ -698,10 +711,11 @@ static const char *VIEW_TITLE[] = { "Library","Songs","Albums","Artists","Playli
 /* keep VIEW_TITLE[] in lockstep with the view enum so VIEW_TITLE[g_view] can't read out of bounds */
 _Static_assert(sizeof(VIEW_TITLE)/sizeof(VIEW_TITLE[0]) == VIEW_COUNT, "VIEW_TITLE must have one entry per view");
 
-static void library_reload(void){
+static void library_reload_read(void){
     if(!g_list) return;
     if(g_lhint){ lv_obj_add_flag(g_lhint, LV_OBJ_FLAG_HIDDEN); g_lhint_ch = 0; if(g_lhint_timer) lv_timer_pause(g_lhint_timer); }  /* don't leave a stale A-Z hint across views */
     fill_stop();              /* cancel any in-flight stream before wiping rows */
+    g_fill_i = g_fill_n = 0;  /* views that build their rows at once stream nothing: a restore must not wait on the last list's count */
     lv_obj_clean(g_list);
     g_count = 0;
     g_has_header = 0;
@@ -863,24 +877,194 @@ static void library_reload(void){
         }
     }
 }
+/* ---- Back returns to where the level was -------------------------------------------------------------------------
+ * A reload that goes one level deeper remembers the list it leaves (its first visible row: a name where rows have one,
+ * else the row number, plus how far that row sits above/below the list top). A reload that comes back up to a level
+ * restores that place through the pending jump (jump_finish), which waits until the streamed fill has built enough
+ * rows. A reload of the same level (refresh, return from a screen) keeps its own place the same way. A newer scroll
+ * or A-Z jump cancels a pending restore (library_jump_cancel); a fresh start, a deep link and the Artist setting forget
+ * every place. A row that is gone falls back to the nearest valid row. */
+#define PLACE_DEPTH 4
+typedef struct { int view, kind, lvl, from; char drill[MDB_STR], album[MDB_STR]; } lib_ctx_t;
+typedef struct { int valid, named, idx, off, y; lib_ctx_t ctx; char a[2*MDB_STR + 2]; } lib_place_t;
+static lib_place_t g_keep[PLACE_DEPTH];   /* [d] = where depth d was when the user drilled below it */
+static lib_place_t g_rest;                 /* the place the pending restore jump is heading for */
+static int g_keep_skip;                   /* the next reload neither keeps nor restores a place */
+
+static void ctx_make(lib_ctx_t *c, int view, int kind, int lvl, int from, const char *drill, const char *album){
+    memset(c, 0, sizeof *c);
+    c->view = view;
+    if(view != VIEW_GROUP) return;           /* the drill fields are stale outside a drill */
+    c->kind = kind;
+    if(kind != 1){ c->lvl = lvl; c->from = lvl == 0 ? from : 0; }
+    snprintf(c->drill, sizeof c->drill, "%s", drill);
+    if(kind != 1 && lvl == 2) snprintf(c->album, sizeof c->album, "%s", album);
+}
+static int ctx_same(const lib_ctx_t *a, const lib_ctx_t *b){
+    return a->view == b->view && a->kind == b->kind && a->lvl == b->lvl && a->from == b->from &&
+           !strcmp(a->drill, b->drill) && !strcmp(a->album, b->album);
+}
+static int ctx_depth(const lib_ctx_t *c){
+    switch(c->view){
+        case VIEW_MENU: return 0;
+        case VIEW_MOSTPLAYED: case VIEW_RECENT: return 2;
+        case VIEW_GROUP:
+            if(c->kind == 1) return 2;
+            if(c->lvl == 2) return 3;
+            if(c->lvl == 1) return 2;
+            return c->from ? 3 : 2;
+        default: return 1;
+    }
+}
+static int place_rows(const lib_ctx_t *c){
+    if(c->view == VIEW_MENU || c->view == VIEW_HISTORY || c->view == VIEW_PLAYLISTS)
+        return g_list ? (int)lv_obj_get_child_count(g_list) : 0;     /* built at once, every child is a row */
+    return g_count;
+}
+/* The name of row i where rows have one (a list of names), so a changed list still finds it. Returns 0 for rows known by number only. */
+static int place_key(const lib_ctx_t *c, int i, char *a, size_t cap){
+    a[0] = 0;
+    if(i < 0) return 0;
+    if(c->view == VIEW_ARTISTS || c->view == VIEW_GENRES || c->view == VIEW_ALBUMS){
+        if(!g_gnames || i >= g_grp_cap) return 0;
+        snprintf(a, cap, "%s", g_gnames[i]);
+        /* The album name is the key; its representative artist only breaks ties between copied names. */
+        if(c->view == VIEW_ALBUMS && cap > MDB_STR)
+            snprintf(a + MDB_STR, cap - MDB_STR, "%s", g_gartists ? g_gartists[i] : "");
+        return 1;
+    }
+    if(c->view == VIEW_GROUP && c->kind != 1 && c->lvl == 1){
+        if(i == 0){ snprintf(a, cap, "%c", 1); return 1; }             /* the All Songs row */
+        if(!g_gnames || i - 1 >= g_grp_cap) return 0;
+        snprintf(a, cap, "%s", g_gnames[i - 1]);
+        return 1;
+    }
+    if(c->view == VIEW_PLAYLISTS){
+        if(i == 0){ snprintf(a, cap, "%c", 1); return 1; }             /* the New Playlist row */
+        if(!g_plids || i - 1 >= g_plcap) return 0;
+        snprintf(a, cap, "%ld", g_plids[i - 1]);
+        return 1;
+    }
+    return 0;
+}
+static void place_forget(void){
+    memset(g_keep, 0, sizeof g_keep);
+    g_keep_skip = 1;
+}
+/* Note where the list shown for c is scrolled to. Call before the rows are rebuilt. */
+static void place_capture(const lib_ctx_t *c, lib_place_t *p){
+    memset(p, 0, sizeof *p);
+    if(!g_list) return;
+    if(g_jump_idx >= 0 && g_jump_rest){ *p = g_rest; return; }       /* a restore still on its way is where the user is going */
+    int n = place_rows(c);
+    if(n <= 0) return;
+    const int pitch = ROW_H + 4;
+    int y = lv_obj_get_scroll_y(g_list), pos = y - g_hdr_extra_px, k = -1;
+    p->ctx = *c; p->valid = 1; p->y = y; p->idx = -1;
+    if(pos >= 0) k = pos / pitch - g_has_header;
+    if(k < 0) return;                                              /* still in the cover / Play All area: keep the offset */
+    if(k >= n) k = n - 1;
+    p->idx = k;
+    p->off = g_hdr_extra_px + (k + g_has_header) * pitch - y;      /* where that row's top sits against the list top */
+    p->named = place_key(c, k, p->a, sizeof p->a);
+}
+/* Scroll the rebuilt list (context c, already built) back to p. */
+static void place_apply(const lib_place_t *p, const lib_ctx_t *c){
+    if(!p->valid || !g_list || !ctx_same(&p->ctx, c)) return;
+    int n = place_rows(c);
+    if(n <= 0) return;
+    lv_obj_update_layout(g_list);
+    if(p->idx < 0){ lv_obj_scroll_to_y(g_list, p->y, LV_ANIM_OFF); return; }
+    int j = p->idx < n ? p->idx : n - 1;
+    if(p->named){
+        char a[2*MDB_STR + 2];
+        int found = -1, names = 0, exact = -1, matches = 0;
+        for(int i = 0; i < n; i++){
+            if(!place_key(c, i, a, sizeof a) || strcmp(a, p->a)) continue;
+            found = i; names++;
+            if(c->view != VIEW_ALBUMS || !strcmp(a + MDB_STR, p->a + MDB_STR)){
+                exact = i; matches++;
+            }
+        }
+        if(names == 1) j = found;             /* the same album can acquire a different representative artist */
+        else if(matches == 1) j = exact;      /* use the artist only when it disambiguates copied album names */
+        /* Missing or ambiguous keys keep the bounded row index instead of choosing an arbitrary first match. */
+    }
+    g_rest = *p;
+    g_jump_idx = j; g_jump_dy = p->off - g_hdr_extra_px; g_jump_rest = 1;
+    jump_finish();
+}
+/* What the reload from context was to context now should remember / restore. Returns 1 when out is a place to restore. */
+static int place_plan(const lib_ctx_t *was, const lib_ctx_t *now, lib_place_t *out){
+    if(g_keep_skip){ g_keep_skip = 0; return 0; }
+    if(ctx_same(was, now)){ place_capture(was, out); return out->valid; }
+    int dw = ctx_depth(was), dn = ctx_depth(now);
+    if(dn > dw){
+        for(int d = dn; d < PLACE_DEPTH; d++) g_keep[d].valid = 0;   /* levels below the new one are stale */
+        if(dw < PLACE_DEPTH) place_capture(was, &g_keep[dw]);
+    } else if(dn < dw && dn < PLACE_DEPTH){
+        lib_place_t *s = &g_keep[dn];
+        if(s->valid && ctx_same(&s->ctx, now)){ *out = *s; s->valid = 0; return 1; }
+    }
+    return 0;
+}
+static void library_reload(void){
+    static int view=VIEW_MENU, kind, level, from, deep;
+    static char drill[MDB_STR], album[MDB_STR];
+    int needs_db=g_view==VIEW_GROUP || g_view==VIEW_FAVS || g_view==VIEW_PLAYLISTS ||
+                 g_view==VIEW_MOSTPLAYED || g_view==VIEW_RECENT;
+    if(needs_db && !mdb_ui_read_begin()){
+        /* Old row callbacks must keep the context of the rows still on screen. */
+        g_view=view; g_drill_kind=kind; g_scope_lvl=level; g_scope_from_albums=from; g_deeplink=deep;
+        snprintf(g_drill,sizeof g_drill,"%s",drill); snprintf(g_scope_album,sizeof g_scope_album,"%s",album);
+        ui_toast("Library busy - reopen to refresh"); return;
+    }
+    lib_ctx_t was, now, rest_ctx; lib_place_t rest;
+    ctx_make(&was, view, kind, level, from, drill, album);
+    ctx_make(&now, g_view, g_drill_kind, g_scope_lvl, g_scope_from_albums, g_drill, g_scope_album);
+    int restore = g_list ? place_plan(&was, &now, &rest) : 0;   /* before the rows are rebuilt */
+    library_reload_read();
+    view=g_view; kind=g_drill_kind; level=g_scope_lvl; from=g_scope_from_albums; deep=g_deeplink;
+    snprintf(drill,sizeof drill,"%s",g_drill); snprintf(album,sizeof album,"%s",g_scope_album);
+    if(restore){   /* the drill may have fallen back to the flat list: compare with what was built */
+        ctx_make(&rest_ctx, g_view, g_drill_kind, g_scope_lvl, g_scope_from_albums, g_drill, g_scope_album);
+        place_apply(&rest, &rest_ctx);
+    }
+    if(needs_db) mdb_ui_read_end();
+}
 
 void library_set_song_click_cb(library_song_click_cb_t cb){ g_song_cb=cb; }
 
 /* Rebuild the current Library view from the DB - used after an external change
  * (e.g. a playlist deleted from the playlist view) so the list isn't stale. */
 void library_refresh(void){ if(g_list) library_reload(); }
+/* Home swipe: Library reopens at its top-level menu next time, as a fresh start leaves it. Applied on the next
+ * entry, not now: when Library itself is the screen leaving, its rows stay as they were while it slides away. A deep
+ * link (library_open_album / _artist) sets its own view and drops the pending reset. */
+static int g_reset_top = 0;
+void library_reset_top(void){ g_reset_top = 1; }
 /* Catalog rows change only on an explicit refresh (scan/settings) or a new drill.
  * Keep the rows and any in-flight fill on back navigation.
  * DB-backed views can change elsewhere while hidden; drills also re-resolve their
  * album cover after NP has populated the artwork cache. */
 void library_enter(void){
-    g_jump_idx = -1;
+    extern void ui_library_check(void) __attribute__((weak));
+    if(ui_library_check) ui_library_check();
+    if(!g_jump_rest) g_jump_idx = -1;       /* a return must keep a restore waiting on the streamed fill */
+    if(g_reset_top){
+        g_reset_top = 0;
+        g_view = VIEW_MENU; g_drill_kind = 0; g_scope_lvl = 0; g_scope_from_albums = 0; g_deeplink = 0;
+        g_drill[0] = 0; g_scope_album[0] = 0;
+        place_forget();                      /* a fresh start: no level remembers where it was */
+        if(g_list) library_reload();         /* the menu needs no database read; it stops any fill, scrolls to the top */
+        return;
+    }
     if(g_view == VIEW_GROUP || g_view == VIEW_PLAYLISTS || g_view == VIEW_FAVS ||
        g_view == VIEW_MOSTPLAYED || g_view == VIEW_RECENT) library_refresh();
     else {
-        /* Preserve entry's reset to the top and dismissal of the rim-scroll hint. */
+        /* The rows are kept, so the list stays where it was left (Songs -> Now Playing -> Back); a fresh start from Home
+         * took the reset_top branch above. Keep the dismissal of the rim-scroll hint. */
         if(g_lhint){ lv_obj_add_flag(g_lhint, LV_OBJ_FLAG_HIDDEN); g_lhint_ch = 0; if(g_lhint_timer) lv_timer_pause(g_lhint_timer); }
-        if(g_list) lv_obj_scroll_to_y(g_list, 0, LV_ANIM_OFF);
     }
     if(g_fill_timer) lv_timer_resume(g_fill_timer);
 }
@@ -888,6 +1072,7 @@ void library_enter(void){
  * to the Artists list; whatever Library shows is rebuilt from the new keys. */
 void library_artist_mode_changed(void){
     if(g_view == VIEW_GROUP && g_drill_kind == 2){ g_view = VIEW_ARTISTS; g_drill_kind = 0; }
+    place_forget();                          /* the keys changed: start at the top */
     if(g_list) library_reload();
 }
 lv_obj_t *library_scroller(void){ return g_list; }
@@ -906,10 +1091,10 @@ int library_drill_context(int *list_type, char *name, int cap){
 
 /* deep-link from the Now Playing 3-dot menu: jump straight to an album/artist */
 void library_open_album(const char *name){
-    g_view=VIEW_GROUP; g_drill_kind=1; g_scope_lvl=0; g_scope_from_albums=0; g_deeplink=1; snprintf(g_drill, MDB_STR, "%s", name); library_reload();
+    g_reset_top=0; g_view=VIEW_GROUP; g_drill_kind=1; g_scope_lvl=0; g_scope_from_albums=0; g_deeplink=1; snprintf(g_drill, MDB_STR, "%s", name); place_forget(); library_reload();
 }
 void library_open_artist(const char *name){
-    g_view=VIEW_GROUP; g_drill_kind=2; g_scope_lvl=0; g_scope_from_albums=0; g_deeplink=1; snprintf(g_drill, MDB_STR, "%s", name); library_reload();
+    g_reset_top=0; g_view=VIEW_GROUP; g_drill_kind=2; g_scope_lvl=0; g_scope_from_albums=0; g_deeplink=1; snprintf(g_drill, MDB_STR, "%s", name); place_forget(); library_reload();
 }
 
 /* ---- rim-scroll alphabet hint: a big centred letter shown while flying through

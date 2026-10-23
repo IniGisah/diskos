@@ -40,9 +40,6 @@ static lv_obj_t *g_np_state;
  * (handle 0) and the screensaver's (handle 1); each has its own canvas, buffer and AM/PM label. */
 typedef struct { lv_obj_t *canvas, *ampm, *colon[2]; uint8_t *buf; int y; int drawn; char time[16]; } mclock_t;   /* time: drawn text */
 static mclock_t g_mc[2];
-static lv_timer_t *g_mc_blink;
-static int g_mc_phase = 1;
-static int g_mc_active = -1;
 #define g_mclock (g_mc[0].canvas)
 #define MC_CELL 9      /* 7 px block + 2 px gap */
 #define MC_W   360     /* the full screen width, so the time is centred on the screen itself */
@@ -94,36 +91,19 @@ static void mc_draw(mclock_t *m, const char *t, int ampm_w, int *ampm_x){
     }
     lv_obj_invalidate(m->canvas);
 }
-static void mc_blink_cb(lv_timer_t *timer){
-    int h = screen_current() == SCR_HOME ? 0 : screen_current() == SCR_SAVER ? 1 : -1;
-    if(h != g_mc_active || h < 0 || !g_mc[h].canvas || lv_obj_has_flag(g_mc[h].canvas, LV_OBJ_FLAG_HIDDEN)){
-        lv_timer_pause(timer);
-        g_mc_active = -1;
-        return;
-    }
-    g_mc_phase = !g_mc_phase;
-    for(int k = 0; k < 2; k++){
-        if(g_mc_phase) lv_obj_remove_flag(g_mc[h].colon[k], LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(g_mc[h].colon[k], LV_OBJ_FLAG_HIDDEN);
-    }
-}
-/* Called after navigation and backlight changes, before the next timer pass. */
+/* The colon is steady: it is shown exactly while its clock's canvas is shown (mclock_place sets both). This only
+ * re-asserts that after navigation and backlight changes, and touches a flag only when it is wrong, so a settled
+ * clock costs no invalidation. */
 void mclock_sync(int backlight_on){
-    int h = screen_current() == SCR_HOME ? 0 : screen_current() == SCR_SAVER ? 1 : -1;
-    if(!backlight_on || h < 0 || !g_mc[h].canvas ||
-       lv_obj_has_flag(g_mc[h].canvas, LV_OBJ_FLAG_HIDDEN)) h = -1;
-    if(h < 0){
-        if(g_mc_blink) lv_timer_pause(g_mc_blink);
-        g_mc_active = -1;
-        return;
-    }
-    if(h == g_mc_active && g_mc_blink && !lv_timer_get_paused(g_mc_blink)) return;
-    g_mc_active = h;
-    g_mc_phase = 1;
-    for(int k = 0; k < 2; k++) lv_obj_remove_flag(g_mc[h].colon[k], LV_OBJ_FLAG_HIDDEN);
-    if(g_mc_blink){
-        lv_timer_reset(g_mc_blink);
-        lv_timer_resume(g_mc_blink);
+    (void)backlight_on;
+    for(int h = 0; h < 2; h++){
+        if(!g_mc[h].canvas) continue;
+        int hide = lv_obj_has_flag(g_mc[h].canvas, LV_OBJ_FLAG_HIDDEN);
+        for(int k = 0; k < 2; k++){
+            if(lv_obj_has_flag(g_mc[h].colon[k], LV_OBJ_FLAG_HIDDEN) == hide) continue;
+            if(hide) lv_obj_add_flag(g_mc[h].colon[k], LV_OBJ_FLAG_HIDDEN);
+            else lv_obj_remove_flag(g_mc[h].colon[k], LV_OBJ_FLAG_HIDDEN);
+        }
     }
 }
 static void mc_colon_new(mclock_t *m, lv_obj_t *parent){
@@ -156,10 +136,6 @@ int mclock_new(int h, lv_obj_t *parent, int y){
     lv_obj_set_pos(m->canvas, 0, y);
     m->y = y;
     mc_colon_new(m, parent);
-    if(!g_mc_blink){
-        g_mc_blink = lv_timer_create(mc_blink_cb, 500, NULL);
-        if(g_mc_blink) lv_timer_pause(g_mc_blink);
-    }
     m->ampm = lv_label_create(parent);
     lv_label_set_text(m->ampm, "");
     lv_obj_set_style_text_font(m->ampm, TF(UI_12), 0);
@@ -191,21 +167,17 @@ void mclock_place(int h, int y, int shown){
     lv_obj_set_y(m->ampm, y + MC_H - lv_obj_get_height(m->ampm) - 2);
     for(int k = 0; k < 2; k++){
         lv_obj_set_y(m->colon[k], lv_obj_get_y(m->colon[k]) + y - old_y);
-        if(!shown || !g_mc_phase) lv_obj_add_flag(m->colon[k], LV_OBJ_FLAG_HIDDEN);
+        if(!shown) lv_obj_add_flag(m->colon[k], LV_OBJ_FLAG_HIDDEN);
         else lv_obj_remove_flag(m->colon[k], LV_OBJ_FLAG_HIDDEN);
     }
     if(shown){ lv_obj_remove_flag(m->canvas, LV_OBJ_FLAG_HIDDEN); lv_obj_remove_flag(m->ampm, LV_OBJ_FLAG_HIDDEN); }
     else     { lv_obj_add_flag(m->canvas, LV_OBJ_FLAG_HIDDEN);    lv_obj_add_flag(m->ampm, LV_OBJ_FLAG_HIDDEN); }
 }
 #ifdef DISKOS_HOST
-int mclock_host_timer_paused(void){ return !g_mc_blink || lv_timer_get_paused(g_mc_blink); }
-int mclock_host_phase_get(void){ return g_mc_phase; }
-void mclock_host_phase(int on){
-    g_mc_phase = !!on;
-    for(int h = 0; h < 2; h++) for(int k = 0; k < 2; k++) if(g_mc[h].colon[k]){
-        if(on && !lv_obj_has_flag(g_mc[h].canvas, LV_OBJ_FLAG_HIDDEN)) lv_obj_remove_flag(g_mc[h].colon[k], LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(g_mc[h].colon[k], LV_OBJ_FLAG_HIDDEN);
-    }
+int mclock_host_colons_shown(int h){
+    int n = 0;
+    if(h >= 0 && h < 2 && g_mc[h].canvas) for(int k = 0; k < 2; k++) n += !lv_obj_has_flag(g_mc[h].colon[k], LV_OBJ_FLAG_HIDDEN);
+    return n;
 }
 #endif
 static void something_home(lv_obj_t *root, lv_obj_t *lib_pill, lv_obj_t *search_btn);
@@ -249,7 +221,7 @@ static void pp_event_cb(lv_event_t *e)
     if (lv_event_get_code(e) == LV_EVENT_CLICKED){
         if(ui_press_travel() > HOME_TAP_SLOP) return;   /* a swipe across the key must not pause the music */
         if(ui_transport_command("0201000C0000") < 0) return;
-        if (g_np_state) ui_pp_glyph(g_np_state, ui_pp_icon_playing(ui_is_playing()));
+        if (g_np_state) ui_pp_glyph(g_np_state, ui_pp_icon_playing(ui_transport_playing()));
     }
 }
 
@@ -450,8 +422,8 @@ static void np_fit(int force){
 }
 static void np_fit_async(void *p){ (void)p; np_fit(1); }
 
-void home_set_now_playing(const char *title, const char *artist,
-                          lv_color_t accent, bool playing)
+static int g_rx_owned;   /* a receiver drives the capsule: main.c's local pushes are ignored until it lets go */
+static void now_playing_apply(const char *title, const char *artist, lv_color_t accent, bool playing)
 {
     g_accent = accent;
 
@@ -464,10 +436,25 @@ void home_set_now_playing(const char *title, const char *artist,
     if (g_status_arc) lv_obj_set_style_arc_color(g_status_arc, accent, LV_PART_INDICATOR);
 }
 
-void home_set_progress(int progress, int have_track){
+void home_set_now_playing(const char *title, const char *artist, lv_color_t accent, bool playing)
+{
+    if (!g_rx_owned) now_playing_apply(title, artist, accent, playing);
+}
+
+static void progress_apply(int progress, int have_track){
     g_progress = progress; g_has_track = have_track;
     theme_kit()->home_progress(g_np_capsule, progress, have_track, g_accent);
 }
+void home_set_progress(int progress, int have_track){ if (!g_rx_owned) progress_apply(progress, have_track); }
+
+/* A receiver's title/artist/state, no ring (the local progress is frozen); home_release_receiver() hands the capsule back. */
+void home_set_receiver(const char *title, const char *artist, lv_color_t accent, bool playing)
+{
+    g_rx_owned = 1;
+    now_playing_apply(title, artist, accent, playing);
+    progress_apply(0, 0);
+}
+void home_release_receiver(void){ g_rx_owned = 0; }
 
 /* repaint the now-playing capsule with the live accent (called from ui.c apply_accent so
  * Home tracks the same colour as Now Playing - static or album-dynamic). */

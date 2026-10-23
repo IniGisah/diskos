@@ -12,3 +12,19 @@
 홍화후휴旧标签
 # Old tags setting (2026-10-09)
 、。いにはキグスタャリルン以再判动動古套字定尔庫或描文新本樂標欧歐测測爾猜用籤自舊西適里重音감또럽려릴문키태텍：
+# AirPlay receiver and source picker labels (2026-10-17)
+储儲卡发态択择确脑过낸명불선신열운의카컴택폰퓨결备裝
+# Cast handoff messages (slice 13)
+备确裝결신확
+# Short date line of the custom lock-screen overlay (Korean month and weekday names).
+금월토
+# GIF lock-screen pages (Saver Style, Custom, Overlays, Font, Choose Image, Preview): glyphs of their new strings
+丸储儲卡叠圆圓宽寬将択择挿据插旋检洁満满潔略疊确稍覽览讀该读过頂顶预개거건결계공과너넣데되된둥득뜀막못무배불샘선었여운은의읽접참카큼택폭했확회
+# Update/download progress strings (Downloading..., Verifying..., Saving...): zh-Hans/zh-Hant/ja/ko.
+证証證载验운확儲
+# Automatic Update Checks setting (2026-10-16)
+偶检版确终过醒데알업줍합
+# Bluetooth connection-stage messages (Korean, Simplified Chinese "Pairing failed").
+对败결뢰링신실알패페확환
+# Rename (2026-10-23)
+름

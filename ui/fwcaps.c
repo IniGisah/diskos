@@ -69,8 +69,8 @@ int fw_needs_direct_sd_mount(void){  int v = fw_os_ver(); return v == 240 || v =
 int fw_custom_peq_writable(void){ int v = fw_os_ver(); return v == 209 || v == 228 || v == 240; }
 
 /* V2.57's player arbitrates the radios at boot: with both Wi-Fi and Bluetooth saved on it keeps Bluetooth, turns
- * Wi-Fi off and saves WIFI_STATUS=0 (P257@0x4ecf94..0x4ed030; absent from V2.40). diskOS must accept that decision
- * instead of its keepalive restarting Wi-Fi straight away (wifi.c radio reconciliation). */
+ * Wi-Fi off and saves WIFI_STATUS=0 (P257@0x4ecf94..0x4ed030; absent from V2.40). diskOS waits for startup
+ * arbitration before restoring its own saved Wi-Fi intent (wifi.c radio reconciliation). */
 int fw_has_radio_boot_arbitration(void){ return fw_os_ver() == 257; }
 int fw_fav_play_by_love_id(void){ return fw_os_ver() == 257; }
 int fw_power_key_driveable(void){ return fw_os_ver() == 257; }
@@ -91,3 +91,7 @@ const char *fw_gain_tag(void){
         if(GAIN_MAP[i].ver == v) return GAIN_MAP[i].tag;
     return NULL;   /* unverified/unreadable firmware -> caller must not send a gain command */
 }
+
+/* V2.40/V2.57 report source changes to /ui. V2.09/V2.28 use the socket only
+ * (P240 0x4e8078; P209 0x496f0c; P228 0x4d9b10). Backend presence is insufficient. */
+int fw_airplay_receiver(void){ int v = fw_os_ver(); return v == 240 || v == 257; }

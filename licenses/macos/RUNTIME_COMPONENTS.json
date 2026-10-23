@@ -1,0 +1,230 @@
+{
+  "CPython": {
+    "version": "3.12.10",
+    "license": "PSF-2.0 and historical Python terms; incorporated permissive terms",
+    "notices": [
+      "licenses/macos/CPython-LICENSE.txt",
+      "licenses/macos/CPython-Incorporated-NOTICES.txt"
+    ],
+    "sources": [],
+    "collection": "Bundled Python framework and selected standard-library modules.",
+    "corresponding_source_duty": "None for the distributed component.",
+    "evidence": "versions.txt:1; otool.txt:11-18; supplied Mac LICENSE.txt has 279 lines, with no incorporated-software appendix. Shared release-level terms are supplemental; see README.md."
+  },
+  "Tcl": {
+    "version": "8.6.16",
+    "license": "Tcl permissive terms; BSD/public-domain incorporated code; Bison parser exception",
+    "notices": [
+      "licenses/macos/Tcl-license.terms.txt",
+      "licenses/macos/Tcl-Incorporated-NOTICES.txt"
+    ],
+    "sources": [],
+    "collection": "Bundled libtcl8.6.dylib and Tcl runtime scripts. Extra installed Tcl packages are covered conservatively by the source notices; final collection must be checked.",
+    "corresponding_source_duty": "None for the distributed component.",
+    "evidence": "otool.txt:32-40; build-installer-3.12.10.py:267-293; libdirs.txt lists extra Tcl packages."
+  },
+  "Tk": {
+    "version": "8.6.16",
+    "license": "Tk permissive terms and incorporated terms; CC-BY-SA-3.0 Tango icons",
+    "notices": [
+      "licenses/macos/Tk-license.terms.txt",
+      "licenses/macos/Tk-Incorporated-NOTICES.txt",
+      "licenses/macos/Tk-demos-license.terms.txt",
+      "licenses/CC-BY-SA-3.0-Tango.txt"
+    ],
+    "sources": [],
+    "collection": "Bundled libtk8.6.dylib, runtime scripts and assets; Mac data is not subject to the Windows-only exclusions.",
+    "corresponding_source_duty": "No GPL/LGPL corresponding-source duty. Preserve Tango attribution, licence and unmodified icons. Per-file script and asset terms remain applicable.",
+    "evidence": "versions.txt:5; otool.txt lib/libtk8.6.dylib; Tk source library/icons.tcl and library/images/README; spec filter_windows_tk_data is Windows-only."
+  },
+  "PyCryptodome": {
+    "version": "3.23.0",
+    "license": "BSD-2-Clause and public domain; incorporated source notices",
+    "notices": [
+      "licenses/macos/PyCryptodome-LICENSE.txt",
+      "licenses/macos/PyCryptodome-NOTICES.txt",
+      "licenses/PyCryptodome-3.23.0-libtom-LICENSE.txt",
+      "licenses/CC0-1.0-SipHash.txt"
+    ],
+    "sources": [],
+    "collection": "Bundled Crypto modules and native extensions, excluding SelfTest.",
+    "corresponding_source_duty": "None for the distributed component.",
+    "evidence": "versions.txt pycryptodome; installed Mac dist-info LICENSE.rst; spec collect_submodules; existing native notices are shared 3.23.0 source notices, not Mac wheel file evidence."
+  },
+  "OpenSSL": {
+    "version": "3.0.16",
+    "license": "Apache-2.0",
+    "notices": [
+      "licenses/macos/OpenSSL-LICENSE.txt"
+    ],
+    "sources": [],
+    "collection": "Bundled libssl.3.dylib and libcrypto.3.dylib via _ssl and _hashlib.",
+    "corresponding_source_duty": "None for the distributed component.",
+    "evidence": "versions.txt:2; otool.txt libssl.3.dylib, libcrypto.3.dylib, _ssl and _hashlib; build recipe:249-254."
+  },
+  "libffi": {
+    "version": "Apple system ABI current version 27.0.0; upstream version unverified",
+    "license": "System library; no redistributed libffi binary",
+    "notices": [
+      "licenses/macos/README.md"
+    ],
+    "sources": [],
+    "collection": "External system dependency; NOT shipped. _ctypes loads /usr/lib/libffi.dylib.",
+    "corresponding_source_duty": "None: this runtime uses the operating-system library, which is not redistributed.",
+    "evidence": "otool.txt corresponding extension load commands; versions.txt for zlib runtime. README.md is an inventory explanation, not invented system-library licence text."
+  },
+  "zlib": {
+    "version": "1.2.12 (runtime); Mach-O load reports 1.2.11",
+    "license": "System library; no redistributed zlib binary",
+    "notices": [
+      "licenses/macos/README.md"
+    ],
+    "sources": [],
+    "collection": "External system dependency; NOT shipped. zlib and Tcl/Tk loads /usr/lib/libz.1.dylib.",
+    "corresponding_source_duty": "None: this runtime uses the operating-system library, which is not redistributed.",
+    "evidence": "otool.txt corresponding extension load commands; versions.txt for zlib runtime. README.md is an inventory explanation, not invented system-library licence text."
+  },
+  "bzip2": {
+    "version": "Apple system ABI current version 1.0.8; upstream version unverified",
+    "license": "System library; no redistributed bzip2 binary",
+    "notices": [
+      "licenses/macos/README.md"
+    ],
+    "sources": [],
+    "collection": "External system dependency; NOT shipped. _bz2 loads /usr/lib/libbz2.1.0.dylib.",
+    "corresponding_source_duty": "None: this runtime uses the operating-system library, which is not redistributed.",
+    "evidence": "otool.txt corresponding extension load commands; versions.txt for zlib runtime. README.md is an inventory explanation, not invented system-library licence text."
+  },
+  "xz": {
+    "version": "5.2.3",
+    "license": "Public domain (liblzma); archive also contains GPL/LGPL tools and build files",
+    "notices": [
+      "licenses/macos/XZ-COPYING.txt",
+      "licenses/macos/liblzma-NOTICE.txt"
+    ],
+    "sources": [
+      "corresponding-source/macos-runtime/xz-5.2.3.tar.gz",
+      "corresponding-source/macos-runtime/build-installer-3.12.10.py"
+    ],
+    "collection": "Static liblzma inside _lzma.so; no liblzma dylib load. Separate from native-tool xz 5.8.4.",
+    "corresponding_source_duty": "None for public-domain liblzma. Exact source archive is included because the freeze checker requires it. GPL/LGPL utility and build-system files in that archive are not linked into liblzma.",
+    "evidence": "otool.txt _lzma loads only libSystem; recipe:317-324; xz COPYING and src/liblzma/common/common.h. Archive SHA256: 71928b357d0a09a12a4b4c5fafca8c31c19b0e7d3b8ebb19622e96f26dbf28cb.",
+    "source_sha256": {
+      "corresponding-source/macos-runtime/xz-5.2.3.tar.gz": "71928b357d0a09a12a4b4c5fafca8c31c19b0e7d3b8ebb19622e96f26dbf28cb",
+      "corresponding-source/macos-runtime/build-installer-3.12.10.py": "24c49a39a164a2a615f74363c8a357ee08daf018daae09cec9922f55de99f400"
+    }
+  },
+  "NCurses": {
+    "version": "6.5",
+    "license": "MIT-style ncurses terms",
+    "notices": [
+      "licenses/macos/NCurses-COPYING.txt"
+    ],
+    "sources": [],
+    "collection": "Bundled if _curses/_curses_panel is collected: libncurses.6.dylib and libpanel.6.dylib. libform/libmenu have the same terms if collected.",
+    "corresponding_source_duty": "None for the distributed component.",
+    "evidence": "otool.txt _curses and _curses_panel; recipe:328-360. Framework presence alone does not prove final collection."
+  },
+  "SQLite": {
+    "version": "3.49.1",
+    "license": "Public domain",
+    "notices": [
+      "licenses/macos/SQLite-NOTICE.txt"
+    ],
+    "sources": [],
+    "collection": "Static inside _sqlite3.so if collected; no SQLite dylib load. Tcl package sqlite3.47.2 is separate and its terms are retained in Tcl incorporated notices.",
+    "corresponding_source_duty": "None for the distributed component.",
+    "evidence": "versions.txt:3; otool.txt _sqlite3; recipe:362-380; sqlite3.c sqliteInt.h notice."
+  },
+  "pyusb": {
+    "version": "1.3.1",
+    "license": "BSD-3-Clause",
+    "notices": [
+      "licenses/BSD-3-Clause-pyusb.txt"
+    ],
+    "sources": [],
+    "collection": "Bundled usb modules.",
+    "corresponding_source_duty": "None.",
+    "evidence": "Provided Mac dist-info licence is byte-identical to the named existing notice. Locked version: requirements.txt or macos_inputs.py."
+  },
+  "certifi": {
+    "version": "2026.2.25",
+    "license": "MPL-2.0",
+    "notices": [
+      "licenses/MPL-2.0-certifi.txt",
+      "licenses/MPL-2.0.txt"
+    ],
+    "sources": [],
+    "collection": "Bundled certifi modules and unmodified cacert.pem.",
+    "corresponding_source_duty": "MPL source-form availability applies. cacert.pem is already source form and is shipped by the existing spec. For any executable-form covered package files, inform recipients of the matching unmodified source at https://pypi.org/project/certifi/2026.2.25/#files; keep this notice with the app. Modified covered files require their modified source.",
+    "evidence": "Provided Mac dist-info licence is byte-identical to the named existing notice. Locked version: requirements.txt or macos_inputs.py."
+  },
+  "platformdirs": {
+    "version": "4.2.2",
+    "license": "MIT",
+    "notices": [
+      "licenses/MIT-platformdirs.txt"
+    ],
+    "sources": [],
+    "collection": "Bundled platform directory module.",
+    "corresponding_source_duty": "None.",
+    "evidence": "Provided Mac dist-info licence is byte-identical to the named existing notice. Locked version: requirements.txt or macos_inputs.py."
+  },
+  "PyInstaller": {
+    "version": "6.16.0",
+    "license": "GPL-2.0-or-later WITH bootloader exception",
+    "notices": [
+      "licenses/PyInstaller-COPYING.txt"
+    ],
+    "sources": [],
+    "collection": "Compiled bootloader and related runtime support in the combined app.",
+    "corresponding_source_duty": "The bootloader exception permits the combined app without GPL restrictions from those files. Distribution of PyInstaller itself or modified standalone bootloader files remains subject to GPL; retain source separately if that scope changes.",
+    "evidence": "Provided Mac dist-info licence is byte-identical to the named existing notice. Locked version: requirements.txt or macos_inputs.py."
+  },
+  "pyinstaller-hooks-contrib": {
+    "version": "2025.9",
+    "license": "GPL-2.0-or-later with hook exception",
+    "notices": [
+      "licenses/macos/pyinstaller_hooks_contrib-2025.9-LICENSE.txt"
+    ],
+    "sources": [],
+    "collection": "Build hooks are build-only; generated or collected runtime hooks are covered by the hook exception.",
+    "corresponding_source_duty": "No GPL duty for the generated app from excepted hook output. Distributing the hook package itself outside that exception would require its corresponding source.",
+    "evidence": "Provided Mac dist-info licence; macos_inputs.py pinned version."
+  },
+  "altgraph": {
+    "version": "0.17.4",
+    "license": "MIT",
+    "notices": [
+      "licenses/macos/altgraph-0.17.4-LICENSE.txt"
+    ],
+    "sources": [],
+    "collection": "Build-only dependency; notice retained conservatively.",
+    "corresponding_source_duty": "None for the distributed component.",
+    "evidence": "Provided Mac dist-info licence; freeze input versions."
+  },
+  "macholib": {
+    "version": "1.16.3",
+    "license": "MIT",
+    "notices": [
+      "licenses/macos/macholib-1.16.3-LICENSE.txt"
+    ],
+    "sources": [],
+    "collection": "Build-only dependency; notice retained conservatively.",
+    "corresponding_source_duty": "None for the distributed component.",
+    "evidence": "Provided Mac dist-info licence; freeze input versions."
+  },
+  "packaging": {
+    "version": "25.0",
+    "license": "Apache-2.0 OR BSD-2-Clause",
+    "notices": [
+      "licenses/macos/packaging-25.0-LICENSE.txt",
+      "licenses/macos/packaging-25.0-LICENSE.APACHE.txt",
+      "licenses/macos/packaging-25.0-LICENSE.BSD.txt"
+    ],
+    "sources": [],
+    "collection": "Build dependency; notice retained if runtime analysis also collects it.",
+    "corresponding_source_duty": "None for the distributed component.",
+    "evidence": "Provided Mac dist-info licences; freeze input versions."
+  }
+}

@@ -40,11 +40,19 @@ brew list zstd          >/dev/null 2>&1 || brew install zstd
 brew list dylibbundler  >/dev/null 2>&1 || brew install dylibbundler
 
 # Keep bundled binaries aligned with corresponding-source/macos-arm64/.
+# Match the selected keg, including the formula revision, not all Cellar kegs.
 check_brew_version() {
-  local name="$1" version="$2" installed
-  installed="$(brew list --versions "$name")"
-  if [ "$installed" != "$name $version" ]; then
-    echo "ERROR: expected Homebrew $name $version; found '${installed:-not installed}'. Install the pinned version before rebuilding." >&2
+  local name="$1" version="$2" prefix cellar linked expected
+  prefix="$(brew --prefix "$name" 2>/dev/null)" || prefix=""
+  cellar="$(brew --cellar "$name" 2>/dev/null)" || cellar=""
+  linked=""
+  expected=""
+  if [ -n "$prefix" ] && [ -n "$cellar" ]; then
+    linked="$(cd "$prefix" 2>/dev/null && pwd -P)" || linked=""
+    expected="$(cd "$cellar" 2>/dev/null && printf '%s/%s' "$(pwd -P)" "$version")" || expected=""
+  fi
+  if [ -z "$linked" ] || [ "$linked" != "$expected" ]; then
+    echo "ERROR: expected Homebrew $name $version; linked '${linked:-not installed or not linked}'. Install/link the pinned version before rebuilding." >&2
     exit 2
   fi
 }
@@ -61,21 +69,21 @@ if ! command -v cc >/dev/null 2>&1; then
   exit 2
 fi
 # make pkg-config find Homebrew's libusb even on a fresh shell
-export PKG_CONFIG_PATH="$BREW_PREFIX/lib/pkgconfig:$(brew --prefix libusb)/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+export PKG_CONFIG_PATH="$(brew --prefix libusb)/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 pkg-config --exists libusb-1.0 || { echo "ERROR: pkg-config can't find libusb-1.0 (PKG_CONFIG_PATH=$PKG_CONFIG_PATH)" >&2; exit 2; }
 
 # --- compile usbboot from source --------------------------------------------
 echo ">> compiling usbboot (from src/usbboot/usbboot.c)"
 cc -O2 -std=c99 -Wall \
-   $(pkg-config --cflags libusb-1.0) \
+   "-I$(brew --prefix libusb)/include/libusb-1.0" \
    -o "$OUT/usbboot" src/usbboot/usbboot.c \
-   $(pkg-config --libs libusb-1.0)
+   "-L$(brew --prefix libusb)/lib" -lusb-1.0
 echo "   built: $("$OUT/usbboot" --help >/dev/null 2>&1 && echo ok || echo 'runs')"
 
 # --- squashfs-tools (must support -comp lzo, to match the stock image) --------
-MKSQ="$(command -v mksquashfs || true)"
-UNSQ="$(command -v unsquashfs || true)"
-[ -n "$MKSQ" ] && [ -n "$UNSQ" ] || { echo "ERROR: squashfs-tools not found after brew install." >&2; exit 2; }
+MKSQ="$(brew --prefix squashfs)/bin/mksquashfs"
+UNSQ="$(brew --prefix squashfs)/bin/unsquashfs"
+[ -x "$MKSQ" ] && [ -x "$UNSQ" ] || { echo "ERROR: squashfs-tools not found in the pinned keg." >&2; exit 2; }
 # verify lzo works
 tmp="$(mktemp -d)"; echo hi > "$tmp/f"
 if ! "$MKSQ" "$tmp/f" "$tmp/t.sqfs" -comp lzo -noappend >/dev/null 2>&1; then
@@ -91,6 +99,62 @@ echo "   squashfs-tools: lzo OK"
 # --- device blobs (arch-neutral) --------------------------------------------
 cp flash/my_write6_dram.bin  "$OUT/my_write6_dram.bin"
 cp flash/disc_spl_lpddr3.bin "$OUT/disc_spl_lpddr3.bin"
+
+# Resolve both directory and file symlinks before checking dylib provenance.
+physical_file() {
+  local path="$1" target directory hops=0
+  while :; do
+    directory="$(cd "$(dirname "$path")" && pwd -P)" || return 2
+    path="$directory/$(basename "$path")"
+    if [ ! -L "$path" ]; then
+      [ -f "$path" ] || return 2
+      printf '%s\n' "$path"
+      return 0
+    fi
+    hops=$((hops + 1))
+    [ "$hops" -le 40 ] || return 2
+    target="$(readlink "$path")" || return 2
+    case "$target" in
+      /*) path="$target" ;;
+      *) path="$directory/$target" ;;
+    esac
+  done
+}
+
+CHECKED_MACHO=""
+check_pinned_macho() {
+  local file deps dep formula root found
+  file="$(physical_file "$1")" || return 2
+  case "$CHECKED_MACHO" in
+    *$'\n'"$file"$'\n'*) return 0 ;;
+  esac
+  CHECKED_MACHO="$CHECKED_MACHO"$'\n'"$file"$'\n'
+  deps="$(otool -L "$file" | sed -e '1d' -e 's/^[[:space:]]*//' \
+    -e 's/ (compatibility version .*$//')" || return 2
+  while IFS= read -r dep; do
+    case "$dep" in
+      ''|/usr/lib/*|/System/Library/*) continue ;;
+    esac
+    dep="$(physical_file "$dep")" || {
+      echo "ERROR: unresolved dylib in $file; rebuild against the pinned kegs." >&2
+      return 2
+    }
+    found=0
+    for formula in libusb lzo lz4 xz zstd; do
+      root="$(brew --prefix "$formula")/lib" || return 2
+      root="$(cd "$root" && pwd -P)" || return 2
+      case "$dep" in "$root/"*) found=1; break ;; esac
+    done
+    if [ "$found" != 1 ]; then
+      echo "ERROR: $file uses unpinned dylib '$dep'; rebuild against the pinned kegs." >&2
+      return 2
+    fi
+    check_pinned_macho "$dep" || return 2
+  done <<< "$deps"
+}
+for b in usbboot mksquashfs unsquashfs; do
+  check_pinned_macho "$OUT/$b" || exit 2
+done
 
 # --- make every binary self-contained (bundle dylibs, rewrite to @loader_path)
 # dylibbundler copies non-system dylibs into $LIB and rewrites load commands to

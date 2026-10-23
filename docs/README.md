@@ -5,7 +5,7 @@
 ## Install
 
 - [Install, upgrade, restore, and recover](INSTALL.md) - host setup, flashing steps, and error codes.
-- [1.2.1 release notes](RELEASE_NOTES_1.2.1.md) - additions, changes, and fixes.
+- [1.2.2 release notes](RELEASE_NOTES_1.2.2.md) - additions, changes, and fixes.
 - [Release history](../CHANGELOG.md) - changes by version.
 - [Privacy and network use](PRIVACY.md) - device and installer network behavior.
 

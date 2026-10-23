@@ -21,18 +21,14 @@ static lv_obj_t *g_results;
  * pins the field to the top and gives the whole screen to results. */
 static void search_layout(int active){
     if(active){
-        int edge = ui_edge_nav();                              /* the theme's Back is on the left edge */
-        int def = !strcmp(theme_kit()->id, "default");
-        if(g_back){ if(edge) lv_obj_set_pos(g_back, 0, 140); else lv_obj_set_pos(g_back, 72, 24); }   /* the shared header's Back: x72..116 */
-        if(g_back && !edge && !def) lv_obj_set_ext_click_area(g_back, 1);   /* retain a 46 px target clear of the query bar */
-        lv_obj_set_size(g_bar, edge ? 168 : def ? 152 : 164, 40);
-        lv_obj_align(g_bar, LV_ALIGN_TOP_LEFT, edge ? 96 : def ? 128 : 120, 26);   /* clear of Back and the round top edge */
-        lv_obj_set_size(g_bar_lbl, def ? 104 : 116, 18);      /* query text stops before the X */
+        lv_obj_set_size(g_bar, 240, 40);
+        lv_obj_align(g_bar, LV_ALIGN_TOP_LEFT, 60, 76);
+        lv_obj_set_size(g_bar_lbl, 184, 18);
         lv_obj_set_style_text_align(g_bar_lbl, LV_TEXT_ALIGN_LEFT, 0);
         lv_obj_align(g_bar_lbl, LV_ALIGN_LEFT_MID, 14, 0);
-        if(g_clear) lv_obj_set_pos(g_clear, edge ? 228 : 248, 31);   /* at the pill's right edge (bar 120..284; edge themes 96..264) */
+        if(g_clear) lv_obj_set_pos(g_clear, 264, 81);
         if(g_hint) lv_obj_add_flag(g_hint, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_pos(g_results, 40, 74); lv_obj_set_size(g_results, 280, 248);
+        lv_obj_set_pos(g_results, 40, 124); lv_obj_set_size(g_results, 280, 198);
         lv_obj_remove_flag(g_results, LV_OBJ_FLAG_HIDDEN);
     } else {
         if(g_back){ if(ui_edge_nav()) lv_obj_set_pos(g_back, 0, 140); else lv_obj_set_pos(g_back, 72, 24); }   /* shared header position in both empty and result states */
@@ -45,6 +41,7 @@ static void search_layout(int active){
         if(g_hint){ lv_obj_remove_flag(g_hint, LV_OBJ_FLAG_HIDDEN); lv_obj_align(g_hint, LV_ALIGN_CENTER, 0, 40); }
         lv_obj_add_flag(g_results, LV_OBJ_FLAG_HIDDEN);
     }
+    ui_headers_fit(lv_obj_get_parent(g_bar));
     if(g_back && ui_edge_nav()) lv_obj_move_foreground(g_back);   /* above the results list it overlaps */
 }
 static library_song_click_cb_t g_song_cb;
@@ -132,34 +129,15 @@ static void on_query_done(const char *text){
     if(text && text[0]) on_query(text);   /* Cancel or empty Save keeps the results; the X button clears */
 }
 static void bar_cb(lv_event_t *e){
-    if(lv_event_get_code(e)==LV_EVENT_CLICKED) kbinput_open("Search", g_query, on_query_done);
+    if(lv_event_get_code(e)==LV_EVENT_CLICKED) kbinput_open_limited("Search", g_query, on_query_done, sizeof g_query-1);
 }
 
 void search_create(lv_obj_t *root){
     lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
 
-    /* back */
-    g_back = lv_button_create(root);
-    lv_obj_t *back = g_back;
-    lv_obj_remove_style_all(back);
-    lv_obj_set_pos(back, 72, 24);          /* exactly the shared header's Back (kit_default_header): same place on every screen */
-    lv_obj_set_size(back, 44, 40);
-    lv_obj_set_ext_click_area(back, 10);
-    lv_obj_set_style_radius(back, 20, 0);
-    lv_obj_set_style_bg_color(back, TC(LIST_PRESSED), LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(back, LV_OPA_70, LV_STATE_PRESSED);
-    ui_on(back, back_cb, LV_EVENT_CLICKED, NULL, "search.back", UI_CORE);
-    lv_obj_t *bi = lv_label_create(back);
-    lv_label_set_text(bi, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_font(bi, TF(UI_20), 0);   /* match the standard header chevron (was tiny default) */
-    lv_obj_set_style_text_color(bi, TC(TEXT_SECONDARY), 0);
-    lv_obj_align(bi, LV_ALIGN_CENTER, 0, -2);   /* as the shared header's chevron */
-    if(ui_edge_nav()){                        /* the theme's Back: an arrow on the left edge, mid-height */
-        lv_obj_set_pos(back, 0, 140); lv_obj_set_size(back, 30, 80);
-        lv_obj_set_ext_click_area(back, 0);
-        ui_back_glyph(bi);
-    }
+    ui_header_cb(root, "Search", back_cb);
+    g_back = lv_obj_get_child(root, 0);   /* the shared builders create Back first */
 
     /* search field - tap to open the keyboard modal. Position/size is set by search_layout(). */
     g_bar = lv_button_create(root);

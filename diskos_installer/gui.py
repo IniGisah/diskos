@@ -17,7 +17,8 @@ import sys
 import threading
 import time
 
-from diskos_installer import __version__, bundle, errors, gui_theme, imagebuild, platform_probe, readiness, service, state, windows_usb
+from diskos_installer import (__version__, bundle, errors, firmware_catalogue, firmware_download, firmware_resolve,
+                              gui_theme, imagebuild, platform_probe, readiness, service, state, windows_usb)
 from diskos_installer.reporter import QueueReporter
 
 ACCENT, BG, FG, SUBFG = gui_theme.ACCENT, gui_theme.BG, gui_theme.TEXT, gui_theme.SECONDARY
@@ -26,16 +27,22 @@ PANEL, WARN, OKC, ERRC = gui_theme.PANEL, gui_theme.WARN, gui_theme.OK, gui_them
 # operation states
 IDLE, RUNNING, CONFIRM, SUCCESS, FAILED = "idle", "running", "confirm", "success", "failed"
 
+# firmware the Disc may run: (catalogue version, dropdown label); the first is preselected
+FW_CHOICES = (("257", "V2.57 (latest)"), ("240", "V2.40"), ("228", "V2.28"), ("209", "V2.09"))
+FW_HINT = ("On the Disc: Settings > System > Device Info > Firmware (diskOS), or "
+           "Settings > System Settings > About device (stock FiiO).")
+MB = 10 ** 6
+
 # mode -> (title, one-line intro, primary button label)
 MODE_TEXT = {
     "install": ("Install diskOS",
-                "Builds diskOS from your own FiiO firmware .zip and flashes it to the Disc over USB.",
+                "Uses the official FiiO firmware for your Disc, builds diskOS from it and flashes it over USB.",
                 "Install diskOS..."),
     "restore": ("Restore stock firmware",
                 "Reflashes bone-stock firmware and removes diskOS from the Disc.",
                 "Restore stock firmware..."),
     "remove": ("Remove installer data",
-               "Deletes this installer's saved state and logs from this computer. The Disc is not touched.",
+               "Deletes saved firmware, recovery images, installer state and logs from this computer. The Disc is not touched.",
                "Remove installer data"),
 }
 
@@ -62,7 +69,7 @@ SUCCESS_TEXT = {
     "restore": ("Stock firmware restored", "The Disc has FiiO's stock firmware again.",
                 "Turn the Disc off and on again to start the stock firmware."),
     "remove": ("Installer data removed",
-               "The installer's saved state and logs were removed from this computer.",
+               "Saved firmware, recovery images, installer state and logs were removed from this computer.",
                "The installer app itself is kept. Delete it if you no longer need it."),
 }
 FLASH_KEEP_NOTE = "Keep the Disc plugged in and this computer awake until the flash finishes."
@@ -149,8 +156,17 @@ def ota_params(ticked, key_available):
 
 
 class App:
-    def __init__(self, root):
+    # firmware acquisition state (see "firmware: pick, download, verify"); class defaults so a bare App is safe
+    _fw_tok, _fw_ctx, _fw_busy = 0, None, False      # run token: events of older runs are dropped
+    _fw_verified = _fw_filled = _fw_row = _restore_why = None   # verified path, path we filled in, checklist note
+    _fw_setting = False
+    fw_get = fw_browse = fw_entry = fw_combo = fw_state = None
+    _fw_bar = _fw_cap = None
+
+    def __init__(self, root, run_lock=None):
         self.root = root
+        self.run_lock = run_lock           # the held installer run lock (firmware acquisition borrows it)
+        self._fr = firmware_resolve        # seam: resolve / identify / check_downloads / plan_restore / browser
         self.q = queue.Queue()
         self.reporter = QueueReporter(self.q)
         self.worker = None
@@ -448,6 +464,7 @@ class App:
         return None                    # Advanced is open: use Tk's normal radio traversal
 
     def _set_mode(self, m):
+        self._restore_why = None
         self.mode.set(m)
         self._on_mode()
 
@@ -457,6 +474,9 @@ class App:
         ttk = self.ttk
         import tkinter as tk
         m = self.mode.get()
+        self.fw_get = self.fw_browse = self.fw_entry = self.fw_combo = self.fw_state = None   # destroyed above
+        self._fw_stop()
+        self._fw_verified = self._fw_filled = None
         self.ota_cb = None
         self.fw_err = None
         sp, sec = gui_theme.SP, gui_theme.SECTION
@@ -468,16 +488,11 @@ class App:
             gui_theme.kicker(inner, "Your firmware").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, sp["m"]))
             self.fw_var = tk.StringVar()
             self.fw_var.trace_add("write", lambda *a: self._fw_changed())
-            ttk.Entry(inner, textvariable=self.fw_var, width=44).grid(row=1, column=0, sticky="we")
-            ttk.Button(inner, text="Browse...", style="Small.TButton", command=self._pick_firmware).grid(
-                row=1, column=1, padx=(sp["m"], 0))
-            self.fw_err = tk.Label(inner, text="", bg=PANEL, fg=ERRC, font=self.f_sub, justify="left", anchor="w")
-            self.fw_err.grid(row=2, column=0, columnspan=2, sticky="w", pady=(sp["s"], 0))
-            self.fw_err.grid_remove()
+            self._build_fw_section(inner, self.fw_var, 1)
             self.variant = tk.StringVar(value="public")
-            gui_theme.kicker(inner, "Variant").grid(row=3, column=0, columnspan=2, sticky="w", pady=(sec + 2, sp["s"]))
+            gui_theme.kicker(inner, "Variant").grid(row=8, column=0, columnspan=2, sticky="w", pady=(sec + 2, sp["s"]))
             vr = ttk.Frame(inner, style="Panel.TFrame")
-            vr.grid(row=4, column=0, columnspan=2, sticky="w")
+            vr.grid(row=9, column=0, columnspan=2, sticky="w")
             public_radio = ttk.Radiobutton(
                 vr, text="Public (recommended)", value="public", style="Panel.TRadiobutton",
                 variable=self.variant, command=self._variant_warn)
@@ -492,34 +507,39 @@ class App:
                     radio.bind(key, self._variant_arrow)
             self.variant_warn_lbl = tk.Label(
                 inner, text="", bg=PANEL, fg=WARN, font=self.f_sub, justify="left", wraplength=540)
-            self.variant_warn_lbl.grid(row=6, column=0, columnspan=2, sticky="w", pady=(sp["s"], 0), padx=(hang, 0))
+            self.variant_warn_lbl.grid(row=11, column=0, columnspan=2, sticky="w", pady=(sp["s"], 0), padx=(hang, 0))
             self.variant_warn_lbl.grid_remove()          # no empty gap until Dev is picked
             self.ota_key = ota_key_available()
             self.ota_var = tk.BooleanVar(value=self.ota_key)
             self.ota_cb = ota_cb = ttk.Checkbutton(inner, text=OTA_LABEL, variable=self.ota_var,
                                                     style="Panel.TCheckbutton")
-            ota_cb.grid(row=7, column=0, columnspan=2, sticky="w", pady=(sp["m"], 0))
+            ota_cb.grid(row=12, column=0, columnspan=2, sticky="w", pady=(sp["m"], 0))
             if not self.ota_key:
                 ota_cb.state(["disabled"])
             tk.Label(inner, text=(OTA_HELP if self.ota_key else OTA_NO_KEY), bg=PANEL, fg=SUBFG,
                      font=self.f_sub, justify="left", wraplength=500).grid(
-                row=8, column=0, columnspan=2, sticky="w", pady=(0, 0), padx=(hang, 0))
+                row=13, column=0, columnspan=2, sticky="w", pady=(0, 0), padx=(hang, 0))
             inner.columnconfigure(0, weight=1)
         elif m == "restore":
-            have = state.stock_image_exists()   # fast; full verify happens at restore time
+            have = state.stock_image_exists() and self._restore_why is None   # fast; plan_restore decides at click time
             msg = ("A saved bone-stock image is available - restore is one click."
                    if have else
-                   "No saved stock image. Pick your FiiO firmware .zip so I can rebuild it.")
+                   "No saved stock image. The installer rebuilds it from the official FiiO firmware."
+                   if self._restore_why is None else
+                   "The saved stock image cannot be used (%s). The installer rebuilds it from the official FiiO firmware."
+                   % self._restore_why)
             gui_theme.kicker(inner, "Stock firmware").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, sp["m"]))
             ttk.Label(inner, text=msg, style="Panel.TLabel", wraplength=540).grid(
-                row=1, column=0, columnspan=2, sticky="w")
+                row=1, column=0, columnspan=2, sticky="w", pady=(0, sp["m"] if not have else 0))
             self.restore_fw_var = None          # only the no-saved-image field below sets this
             if not have:
                 self.restore_fw_var = tk.StringVar()
                 self.restore_fw_var.trace_add("write", lambda *a: self._fw_changed())
-                ttk.Entry(inner, textvariable=self.restore_fw_var, width=44).grid(row=2, column=0, sticky="we", pady=(sp["m"], 0))
-                ttk.Button(inner, text="Browse...", style="Small.TButton", command=self._pick_firmware).grid(
-                    row=2, column=1, padx=(sp["m"], 0), pady=(sp["m"], 0))
+                self._build_fw_section(inner, self.restore_fw_var, 2)
+            else:
+                self.fw_state = ttk.Frame(inner, style="Panel.TFrame")
+                self.fw_state.grid(row=2, column=0, columnspan=2, sticky="we")
+                self._fw_idle()
             inner.columnconfigure(0, weight=1)
         else:  # remove
             driver_note = (WINDOWS_REMOVE_NOTE + " "
@@ -527,17 +547,353 @@ class App:
                            "Nothing was installed system-wide. ")
             gui_theme.kicker(inner, "This computer").pack(anchor="w", pady=(0, sp["m"]))
             ttk.Label(inner, wraplength=540, style="Panel.TLabel",
-                      text=("Deletes this installer's saved state and owned GUI logs from THIS computer. "
+                      text=("Deletes cached firmware, partial downloads, saved recovery images, installer state and owned GUI logs from THIS computer. "
                             + driver_note + "If diskOS is still on the device, "
                             "use 'Restore stock firmware' first.")).pack(anchor="w")
 
-    # ---- helpers -----------------------------------------------------------
+    # ---- firmware: pick, download, verify -------------------------------------
+    # Workers never touch Tk: they only call _fw_post(), the main thread applies it in _fw_event().
+    # Every run owns a token; _fw_stop() (dropdown/path change, cancel, close) bumps it, so late events are dropped.
+    def _build_fw_section(self, inner, var, row):
+        import tkinter as tk
+        ttk, sp = self.ttk, gui_theme.SP
+        tk.Label(inner, text="Which firmware is on your Disc?", bg=PANEL, fg=FG, font=self.f_b).grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        top = ttk.Frame(inner, style="Panel.TFrame")
+        top.grid(row=row + 1, column=0, columnspan=2, sticky="w", pady=(sp["s"], 0))
+        self.fw_ver_var = tk.StringVar(value=FW_CHOICES[0][1])
+        self.fw_combo = ttk.Combobox(top, textvariable=self.fw_ver_var, state="readonly", width=14,
+                                     values=[label for _, label in FW_CHOICES])
+        self.fw_combo.pack(side="left")
+        self.fw_combo.bind("<<ComboboxSelected>>", lambda e: self._fw_dropdown())
+        self.fw_get = ttk.Button(top, text="Get firmware", style="Small.TButton", command=self._fw_get_click)
+        self.fw_get.pack(side="left", padx=(sp["m"], 0))
+        tk.Label(inner, text=FW_HINT, bg=PANEL, fg=SUBFG, font=self.f_sub, justify="left", wraplength=480).grid(
+            row=row + 2, column=0, columnspan=2, sticky="w", pady=(sp["s"], sp["m"]))
+        self.fw_entry = ttk.Entry(inner, textvariable=var, width=44)
+        self.fw_entry.grid(row=row + 3, column=0, sticky="we")
+        self.fw_browse = ttk.Button(inner, text="Browse...", style="Small.TButton", command=self._pick_firmware)
+        self.fw_browse.grid(row=row + 3, column=1, padx=(sp["m"], 0))
+        self.fw_err = tk.Label(inner, text="", bg=PANEL, fg=ERRC, font=self.f_sub, justify="left", anchor="w")
+        self.fw_err.grid(row=row + 4, column=0, columnspan=2, sticky="w", pady=(sp["s"], 0))
+        self.fw_err.grid_remove()
+        self.fw_state = ttk.Frame(inner, style="Panel.TFrame")
+        self.fw_state.grid(row=row + 5, column=0, columnspan=2, sticky="we")
+        self._fw_idle()
+
+    def _fw_version(self):
+        label = self.fw_ver_var.get() if self.fw_combo is not None else None
+        return next((v for v, text in FW_CHOICES if text == label), FW_CHOICES[0][0])
+
+    def _fw_name(self, ver):
+        return firmware_catalogue.CATALOGUE[ver].name
+
+    def _fw_show(self, lines=(), buttons=(), bar=None, url=None, row=None):
+        """Redraw the state area. lines: (text, "err"|"ok"|"sub"|"text"); bar: None | ("det"|"ind", caption)."""
+        import tkinter as tk
+        ttk, sp = self.ttk, gui_theme.SP
+        f = self.fw_state
+        for w in f.winfo_children():
+            w.destroy()
+        self._fw_bar = self._fw_cap = None
+        self._fw_row = row
+        colours = {"err": ERRC, "ok": OKC, "sub": SUBFG, "text": FG}
+        for text, kind in lines:
+            tk.Label(f, text=text, bg=PANEL, fg=colours[kind], font=self.f_sub, justify="left", anchor="w",
+                     wraplength=540).pack(anchor="w", pady=(sp["s"], 0))
+        if url:
+            e = ttk.Entry(f)
+            e.insert(0, url)
+            e.config(state="readonly")
+            e.pack(fill="x", pady=(sp["s"], 0))
+        if bar:
+            line = ttk.Frame(f, style="Panel.TFrame")
+            line.pack(fill="x", pady=(sp["m"], 0))
+            self._fw_bar = ttk.Progressbar(line, style="diskos.Horizontal.TProgressbar", maximum=100,
+                                           mode="determinate" if bar[0] == "det" else "indeterminate")
+            self._fw_bar.pack(side="left", fill="x", expand=True)
+            ttk.Button(line, text="Cancel", style="Small.TButton", command=self._fw_cancel).pack(
+                side="right", padx=(sp["m"], 0))
+            if bar[0] == "ind":
+                self._fw_bar.start(12)
+            self._fw_cap = tk.Label(f, text=bar[1], bg=PANEL, fg=SUBFG, font=self.f_sub, anchor="w")
+            self._fw_cap.pack(anchor="w", pady=(sp["s"], 0))
+        if buttons:
+            line = ttk.Frame(f, style="Panel.TFrame")
+            line.pack(anchor="w", pady=(sp["m"], 0))
+            for label, cmd in buttons:
+                ttk.Button(line, text=label, style="Small.TButton", command=cmd).pack(side="left", padx=(0, sp["m"]))
+        self._ready_render()
+
+    def _fw_idle(self):
+        if self.fw_get is None:            # restore with a saved image: nothing to choose, nothing to download
+            return self._fw_show([("Nothing is downloaded.", "sub")])
+        ver = self._fw_version()
+        pin = firmware_catalogue.CATALOGUE[ver]
+        self._fw_show([("Get firmware downloads the official %s firmware (%d MB) and checks it. "
+                        "Nothing is sent about your Disc." % (pin.name, round(pin.size / MB)), "sub")])
+
+    def _fw_fallbacks(self):
+        return [("Open FiiO download page", self._fw_open_page), ("Check Downloads", self._fw_scan_click)]
+
+    def _fw_lock(self, busy):
+        if self.fw_get is None:
+            return
+        st = "disabled" if busy else "normal"
+        for w in (self.fw_get, self.fw_browse, self.fw_entry, self.action_btn, *self._action_btns.values()):
+            w.config(state=st)
+        self.fw_combo.config(state="disabled" if busy else "readonly")
+
+    def _fw_stop(self):
+        """Invalidate the current run and any verification; its late events are dropped."""
+        self._fw_tok += 1
+        ctx, self._fw_ctx = self._fw_ctx, None
+        if ctx is not None:
+            ctx["cancel"].set()
+            if ctx["handle"] is not None:
+                ctx["handle"].cancel()
+        self._fw_busy, self._fw_verified = False, None
+        self._fw_install_ticket = None
+        self._fw_lock(False)
+
+    def _fw_begin(self, kind, lines, bar):
+        self._fw_stop()
+        tok = self._fw_tok
+        self._fw_ctx = {"cancel": threading.Event(), "handle": None, "kind": kind}
+        self._fw_busy = True
+        self._fw_lock(True)
+        self._fw_error("")
+        self._fw_show(lines, bar=bar, row=("Getting the firmware...", ""))
+        return tok, self._fw_ctx
+
+    def _fw_post(self, tok, ev, **kw):             # the only call a worker makes into the GUI
+        self.q.put(("fw", dict(kw, tok=tok, ev=ev)))
+
+    def _fw_changed(self):
+        self._fw_error("")
+        if self._fw_setting or self.fw_state is None:
+            return self._ready_render()
+        self._fw_stop()                    # a typed or browsed path invalidates the old verification
+        self._fw_idle()
+
+    def _fw_dropdown(self):
+        if self._fw_filled is not None and self._active_fw_var().get() == self._fw_filled:
+            self._fw_set_path("")                  # the verified file belonged to the old choice
+        self._fw_stop()
+        self._fw_idle()
+
+    def _fw_set_path(self, path):
+        self._fw_setting = True
+        try:
+            self._active_fw_var().set(path)
+            self._fw_filled = path or None
+            if self.fw_entry is not None:
+                self.fw_entry.xview_moveto(1)      # the file name is the end of the path
+        finally:
+            self._fw_setting = False
+
+    def _fw_ready(self):
+        """Checklist override (verified, text, fix) for the screen on show, or None (saved image / no section)."""
+        if self.fw_get is None:
+            return None
+        if self._fw_busy:
+            return (True, "", "")          # a run is under way: no warning row
+        path = self._active_fw_var().get().strip()
+        if self._fw_verified and self._fw_verified == path:
+            return (True, "", "")
+        if self._fw_row is not None:
+            return (False,) + tuple(self._fw_row)
+        if path:
+            return None                    # typed/browsed but not checked yet: Install checks it first
+        return (False, "%s firmware not downloaded yet" % self._fw_name(self._fw_version()), "Press Get firmware.")
+
+    def _fw_get_click(self):
+        if self._fw_busy:
+            return
+        ver = self._fw_version()
+        tok, ctx = self._fw_begin("get", [("Downloading %s firmware from FiiO..." % self._fw_name(ver), "text")],
+                                  ("det", "0 of %d MB - 0%%" % round(firmware_catalogue.CATALOGUE[ver].size / MB)))
+        post = lambda op, kind, done, total: self._fw_post(tok, kind, done=done, total=total)
+
+        def run():
+            try:
+                res = self._fr.resolve_firmware(ver, self.run_lock, post)
+                if res.kind == "cached":
+                    return self._fw_post(tok, "verified", path=res.path, how="cache", ver=ver)
+                ctx["handle"] = res.handle
+                if ctx["cancel"].is_set():
+                    return res.handle.cancel()
+                self._fw_post(tok, "verified", path=res.handle.wait(), how="download", ver=ver)
+            except Exception as exc:
+                kind = ("tls" if isinstance(exc, firmware_download.TlsError)
+                        else "space" if isinstance(exc, (firmware_download.DiskFull, firmware_resolve.InsufficientSpace))
+                        else "cancel" if isinstance(exc, firmware_download.Cancelled) else "other")
+                self._fw_post(tok, "error", kind=kind, ver=ver, exc=exc,
+                              scan=self._fw_scan_now(ver, ctx) if kind == "other" else None)
+        threading.Thread(target=run, daemon=True).start()
+
+    def _fw_scan_now(self, ver, ctx):
+        try:
+            return self._fr.check_downloads(ver, run_lock=self.run_lock, cancel=ctx["cancel"].is_set)
+        except Exception:
+            return None
+
+    def _fw_scan_click(self):
+        if self._fw_busy:
+            return
+        ver = self._fw_version()
+        tok, ctx = self._fw_begin("scan", [("Checking Downloads for %s firmware..." % self._fw_name(ver), "text")],
+                                  ("ind", ""))
+        threading.Thread(target=lambda: self._fw_post(tok, "scan", ver=ver, scan=self._fw_scan_now(ver, ctx)),
+                         daemon=True).start()
+
+    def _fw_manual(self, then_install=False):
+        """Verify the path in the field (typed or from Browse) against the dropdown's version."""
+        ver, path = self._fw_version(), self._active_fw_var().get().strip()
+        tok, ctx = self._fw_begin("manual", [("Checking the file...", "text")], ("ind", ""))
+
+        def run():
+            try:
+                self._fr.identify_zip(path, expected=ver)
+                self._fw_post(tok, "verified", path=path, how="manual", ver=ver, then=then_install)
+            except Exception as exc:
+                self._fw_post(tok, "rejected", ver=ver, exc=exc)
+        threading.Thread(target=run, daemon=True).start()
+
+    def _fw_cancel(self):
+        kind = self._fw_ctx["kind"] if self._fw_ctx else "get"
+        ver = self._fw_version()
+        self._fw_stop()
+        if kind == "get":
+            self._fw_show([("Firmware download cancelled.", "text")], [("Retry", self._fw_get_click)],
+                          row=("%s firmware not downloaded yet" % self._fw_name(ver), "Press Retry or Get firmware."))
+        else:
+            self._fw_show([("Cancelled.", "text")], self._fw_fallbacks(),
+                          row=("%s firmware not downloaded yet" % self._fw_name(ver), "Press Get firmware."))
+
+    def _fw_open_page(self):
+        res = self._fr.open_download_page(self._fw_version())
+        if not res.ok:
+            self._fw_show([("Could not open a browser. Open this address yourself, then press Check Downloads.", "err")],
+                          self._fw_fallbacks(), url=res.url, row=self._fw_row)
+
+    def _fw_found(self, ver, scan, first=()):
+        self._fw_verified = scan.path
+        self._fw_show(list(first) + [("Found and verified %s firmware in Downloads." % self._fw_name(ver), "ok"),
+                                     ("Copied into the installer's own folder; your original file is untouched.", "sub")])
+        self._fw_set_path(scan.path)
+
+    def _fw_no_match(self, ver, first, scan):
+        detail = scan.detail if scan is not None and scan.kind != "none" else None
+        text = detail or "No verified %s firmware found in Downloads." % self._fw_name(ver).split(" ", 1)[1]
+        self._fw_show(list(first) + [(text, "text")], self._fw_fallbacks(),
+                      row=("%s firmware not downloaded yet" % self._fw_name(ver), "Press Get firmware to retry, or Browse for a ZIP."))
+
+    def _fw_event(self, p):
+        if threading.current_thread() is not threading.main_thread():
+            raise RuntimeError("firmware events are applied on the main thread only")
+        if p["tok"] != self._fw_tok:           # a run that was cancelled, replaced or invalidated
+            return
+        ev, ver = p["ev"], p.get("ver")
+        if ev in ("progress", "verifying") and self._fw_bar is not None:
+            done, total = p["done"], p["total"] or 1
+            if ev == "verifying":
+                self._fw_show([("Verifying firmware...", "text")], bar=("det", "Checking the download against the installer's recorded checksum"),
+                              row=self._fw_row)
+                self._fw_bar.config(value=100)
+            else:
+                self._fw_bar.config(value=100 * done / total)
+                self._fw_cap.config(text="%d of %d MB - %d%%" % (done // MB, round(total / MB), round(100 * done / total)))
+            return
+        if ev in ("progress", "verifying"):
+            return
+        self._fw_busy, self._fw_ctx = False, None
+        if self._fw_bar is not None:
+            self._fw_bar.stop()
+        self._fw_lock(False)
+        if ev == "verified":
+            self._fw_verified = p["path"]
+            name = self._fw_name(ver)
+            tail = {"cache": "Saved on this computer from an earlier run - no download needed.",
+                    "download": "Downloaded from FiiO and saved on this computer for next time.",
+                    "manual": "Using the file you chose."}[p["how"]]
+            self._fw_show([("%s firmware verified." % name, "ok"), (tail, "sub")])
+            if p["how"] != "manual":
+                self._fw_set_path(p["path"])
+            else:
+                self._ready_render()
+            if p.get("then"):
+                self._fw_install_ticket = (p["tok"], p["path"])
+                self._on_action()
+        elif ev == "rejected":
+            self._fw_show([("This file does not match the verified %s download. It cannot be used." % self._fw_name(ver), "err")],
+                          self._fw_fallbacks(), row=("The chosen file is not verified FiiO firmware",
+                                                     "Pick another file, or press Get firmware."))
+        elif ev == "scan":
+            scan = p["scan"]
+            if scan is not None and scan.kind == "found":
+                self._fw_found(ver, scan)
+            elif scan is not None and scan.kind == "cancelled":
+                self._fw_cancel_view(ver)
+            else:
+                self._fw_no_match(ver, (), scan)
+        elif ev == "error":
+            self._fw_error_view(ver, p)
+        elif ev == "plan":
+            if p["ok"]:
+                self._launch(service.do_restore, {"firmware": None})
+            else:
+                self._restore_why = p["why"]
+                self._build_config()
+                self._ready_render()
+
+    def _fw_space(self, ver, exc, retry):
+        where = getattr(exc, "where", None) or state._state_base()
+        if isinstance(exc, firmware_resolve.InsufficientSpace):
+            shortfall = -(-max(exc.needed - exc.available, 1) // MB)
+            text = ("Not enough space to save the firmware. "
+                    "Free %d MB in %s, then retry." % (shortfall, where))
+        else:
+            text = ("Not enough space to save the firmware in %s. "
+                    "Free some space, then retry." % where)
+        self._fw_show(
+            [(text, "err")], [("Retry", retry)],
+            row=("%s firmware not downloaded yet" % self._fw_name(ver),
+                 "Free some space, then press Retry."))
+
+    def _fw_cancel_view(self, ver):
+        self._fw_show([("Cancelled.", "text")], self._fw_fallbacks())
+
+    def _fw_error_view(self, ver, p):
+        exc, kind, name = p["exc"], p["kind"], self._fw_name(ver)
+        if kind == "cancel":
+            return self._fw_cancel_view(ver)
+        if kind == "space":
+            return self._fw_space(ver, exc, self._fw_get_click)
+        row = ("%s firmware not downloaded yet" % name, "Press Get firmware to retry, or Browse for a ZIP.")
+        if kind == "tls":
+            return self._fw_show([("Could not verify FiiO's secure connection. Check this computer's date or use the "
+                                   "browser download.", "err")], self._fw_fallbacks(), row=row)
+        msg = str(getattr(exc, "message", exc)).rstrip(".")
+        first = [("Could not download firmware: %s." % (msg[:1].lower() + msg[1:]), "err")]
+        scan = p["scan"]
+        if scan is not None and scan.kind == "found":
+            self._fw_found(ver, scan, first)
+        elif scan is not None and scan.kind == "cancelled":
+            self._fw_cancel_view(ver)
+        else:
+            self._fw_no_match(ver, first, scan)
+
     def _pick_firmware(self):
         from tkinter import filedialog
+        if self._fw_busy:
+            return
         p = filedialog.askopenfilename(title="Select FiiO firmware .zip",
                                        filetypes=[("Firmware zip", "*.zip"), ("All", "*")])
         if p:
             self._active_fw_var().set(p)
+            if self.fw_get is not None:
+                self._fw_manual()
 
     def _active_fw_var(self):
         """The firmware field of the screen on show (Install and Restore never share one)."""
@@ -554,10 +910,6 @@ class App:
         else:
             lbl.grid_remove()
 
-    def _fw_changed(self):
-        self._fw_error("")
-        self._ready_render()
-
     # ---- ready check -------------------------------------------------------
     def _ready_pending(self):
         windows = platform_probe.host()[0] == "windows"
@@ -572,7 +924,7 @@ class App:
         except Exception:
             have = False
         return readiness.evaluate(self._ready_probe or self._ready_pending(), self.mode.get(),
-                                  fw.get() if fw is not None else "", have)
+                                  fw.get() if fw is not None else "", have, self._fw_ready())
 
     def _ready_render(self):
         """Redraw the checklist from the last probe (pure Tk, no USB). Hidden on the Remove screen."""
@@ -769,28 +1121,62 @@ class App:
         self.worker = threading.Thread(target=run, daemon=True)
         self.worker.start()
 
+    def _fw_gate(self, fw):
+        """Install/Restore never runs on an unverified path: verify first (then continue), and check space."""
+        if not fw:
+            self._log("Choose your FiiO firmware .zip first.")
+            self._fw_error("Choose your FiiO firmware .zip first.")
+            return False
+        ticket = getattr(self, "_fw_install_ticket", None)
+        self._fw_install_ticket = None
+        if self._fw_verified != fw or ticket != (self._fw_tok, fw):
+            self._fw_manual(then_install=True)
+            return False
+        ver = self._fw_version()
+        try:
+            self._fr.check_space(ver, fw)
+        except firmware_resolve.InsufficientSpace as exc:
+            self._fw_space(ver, exc, self._on_action)
+            return False
+        return True
+
     def _on_action(self):
-        if self.state == RUNNING:
+        if self.state == RUNNING or self._fw_busy:
             return
         m = self.mode.get()
         params = {}
         if m == "install":
             fw = getattr(self, "fw_var", None) and self.fw_var.get().strip()
-            if not fw:
-                self._log("Choose your FiiO firmware .zip first.")
-                self._fw_error("Choose your FiiO firmware .zip first.")
+            if not self._fw_gate(fw):
                 return
             params = {"firmware": fw, "variant": self.variant.get()}
             params.update(ota_params(self.ota_var.get(), self.ota_key))
             fn = service.do_install
         elif m == "restore":
             fw = getattr(self, "restore_fw_var", None)       # never the Install page's field
-            params = {"firmware": (fw.get().strip() or None if fw else None)}
+            if fw is None:                                   # saved image: plan it off the UI thread
+                tok, _ = self._fw_begin("plan", [("Checking the saved stock image...", "text")], None)
+
+                def plan():
+                    try:
+                        self._fr.plan_restore(None)
+                        self._fw_post(tok, "plan", ok=True)
+                    except Exception as exc:
+                        why = str(getattr(exc, "message", exc))
+                        self._fw_post(tok, "plan", ok=False,
+                                      why=why[len("Cannot restore: "):] if why.startswith("Cannot restore: ") else why)
+                threading.Thread(target=plan, daemon=True).start()
+                return
+            if not self._fw_gate(fw.get().strip()):
+                return
+            params = {"firmware": fw.get().strip()}
             fn = service.do_restore
         else:
             params = {"force": False}
             fn = service.do_remove
+        self._launch(fn, params)
 
+    def _launch(self, fn, params):
         self.state = RUNNING
         self.start_time = time.monotonic()
         self._stage_start, self._flash_start, self._expect_secs, self._progress = self.start_time, None, None, None
@@ -1159,6 +1545,8 @@ class App:
             self.driver_lbl.pack(anchor="w", pady=(6, 2))
         elif kind == "ready":
             self._ready_apply(p)
+        elif kind == "fw":
+            self._fw_event(p)
         elif kind == "driver_done":
             self._driver_running = False
             self.state = IDLE
@@ -1368,12 +1756,13 @@ class App:
                     "An operation is still running. Close anyway?"):
                 return
         self._closing = True
+        self._fw_stop()
         if self._ready_cancel is not None:
             self._ready_cancel.set()
         self.root.destroy()
 
 
-def main():
+def main(run_lock=None):
     try:
         import tkinter as tk
     except Exception as e:
@@ -1382,7 +1771,7 @@ def main():
         return 2
     try:
         root = tk.Tk()
-        App(root)
+        App(root, run_lock)
         root.mainloop()
         return 0
     except Exception as e:

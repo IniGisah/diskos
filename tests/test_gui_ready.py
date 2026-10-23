@@ -453,10 +453,11 @@ class GuiReady(unittest.TestCase):
         self.assertEqual(app.ready_frame.winfo_manager(), "")
         app._set_mode("restore")
         self.assertEqual(app.ready_frame.winfo_manager(), "pack")
-        self.assertIn("No firmware chosen yet", " ".join(self._texts(app.ready_rows)))
+        self.assertIn("firmware not downloaded yet", " ".join(self._texts(app.ready_rows)))
 
     # ---- window height budget -------------------------------------------------
-    BUDGET = 700            # 1366x768 laptop at 100% scaling, minus title bar and taskbar
+    BUDGET = 860            # request height; the window itself caps at gui_theme.MAX_WINDOW_H (700) and scrolls.
+                            # 700 before the firmware picker (F1 slice 8) added the dropdown, hint and state area
 
     def _measure(self, app):
         app.root.update_idletasks()

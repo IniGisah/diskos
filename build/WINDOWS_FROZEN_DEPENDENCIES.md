@@ -26,6 +26,14 @@ Evidence: SHA256 of decoded cached simple-index JSON (no host paths):
 | pyusb | 57edc64b06d9dd8e738094f13dfd7a4b0a9b802cfd4beb404a372f71df823140 |
 | pycryptodome | 0243b3c0d06544c033317edc4e56cf749327eda85a9e03c09334d4f89cc8192a |
 
+No decoded simple-index JSON snapshot was recorded for certifi or platformdirs.
+Their downloaded wheel hashes are recorded separately below and in `windows-build.lock`.
+
+| Wheel | Wheel SHA256 |
+|---|---|
+| certifi-2026.2.25-py3-none-any.whl | 027692e4402ad994f1c42e52a4997a9763c646b73e4096e4d5d6db8af1d6f0fa |
+| platformdirs-4.2.2-py3-none-any.whl | 2d7a1657e36a80ea911db832a8a6ece5ee53d8de21edd5cc5879af6530b1bfee |
+
 ## Frozen notices checklist
 
 | Expected component | Evidence/text to ship and verify |
@@ -35,6 +43,8 @@ Evidence: SHA256 of decoded cached simple-index JSON (no host paths):
 | Tcl/Tk DLLs and resource scripts | Tcl/Tk 8.6.15 base and incorporated notices. Exclude unused images/ and mkpsenc.tcl. Keep startup-required icons.tcl with its attribution header and complete CC BY-SA 3.0 text. |
 | pyusb 1.3.1 | `licenses/BSD-3-Clause-pyusb.txt` is the locked wheel LICENSE. |
 | pycryptodome 3.23.0, including Crypto native modules | Exact CRLF wheel LICENSE, runtime-module notices, native-source notices, LibTomCrypt dedication and CC0 SipHash dedication. |
+| certifi 2026.2.25 (cacert.pem is shipped) | `licenses/MPL-2.0-certifi.txt` preserves the wheel's bundle notice; `licenses/MPL-2.0.txt` contains the complete MPL 2.0 text. |
+| platformdirs 4.2.2 | `licenses/MIT-platformdirs.txt` (MIT; byte-identical to the 4.2.2 wheel LICENSE). |
 | Remaining Python/vendor runtime DLLs | OpenSSL 3.0.16, zlib 1.3.1, VC runtime 14.42.34438.0 and libusb 1.0.27; libffi's exact-install notice is in the Windows LICENSE. See the component table below. |
 | Native helpers and MSYS2 runtime | Preserve `licenses/windows/`, `NOTICE.md` and source/relink/signature sidecars byte for byte. |
 | FreeType 2.13.3 in the UI (new in 1.2.1) | `licenses/FTL-FreeType.txt`, copied verbatim from `ui/third_party/freetype-2.13.3/docs/FTL.TXT`; FreeType Team attribution in `NOTICE.md`. |

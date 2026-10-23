@@ -166,6 +166,14 @@ write_run() {
 # flashed build (every boot of a user who never updated) publishes readiness exactly as v1.1.3 did, and a failure to
 # write the record never gates readiness (the hook then simply takes the v1.1.3 path, which S97 already verified).
 ready() {
+    # A reset cannot use any ordinary fast/final-repair exit to acknowledge partial work.
+    if [ "$RESET_PENDING" = 1 ]; then
+        [ "$installed" = 1 ] || { log "flash: reset incomplete -> stock this boot; retry next boot"; return 1; }
+        TO sync 2>/dev/null || { log "flash: reset/UI sync failed -> stock; retry next boot"; return 1; }
+        TO /opt/diskos/bin/diskos-flashstate complete || { log "flash: completion failed -> stock; retry next boot"; return 1; }
+        RESET_PENDING=0
+        log "flash: reset durable, identity completed"
+    fi
     override_on || return 1
     if [ "${BUILD:-flashed}" = flashed ]; then rm -f /tmp/.diskos_run 2>/dev/null; else write_run; fi
     : > /tmp/.diskos_ready 2>/dev/null
@@ -199,12 +207,33 @@ publish_symlink() {
     return 0
 }
 
+# S96 has already selected diskOS. Read errors must not turn into permission to erase history.
+RESET_PENDING=0
+TO /opt/diskos/bin/diskos-flashstate check
+_flash=$?
+case "$_flash" in
+    0) log "flash: identity matches -> ordinary boot" ;;
+    1) RESET_PENDING=1; log "flash: writable identity missing -> initialize baseline" ;;
+    2) RESET_PENDING=1; log "flash: changed identity -> reset OTA history" ;;
+    3) RESET_PENDING=1; log "flash: damaged writable identity -> reset OTA history" ;;
+    4) log "flash: identity storage/path error -> stock; preserve history, retry next boot"; exit 0 ;;
+    5) log "flash: RO identity missing/malformed -> stock; preserve history"; exit 0 ;;
+    *) log "flash: identity helper failed ($_flash) -> stock; preserve history"; exit 0 ;;
+esac
+
 MAN=/etc/diskos_manifest
-# No/'malformed manifest = we cannot verify anything -> fail closed (quarantine any existing override).
-[ -f "$MAN" ] || { quarantine "no manifest" || exit 1; disarm; exit 0; }
+# A reset must preserve even managed live copies until the embedded UI is verified.
+manifest_unavailable() {
+    if [ "$RESET_PENDING" = 1 ]; then
+        log "flash: $1 -> stock; preserve history"; exit 0
+    fi
+    quarantine "$1" || exit 1
+    disarm; exit 0
+}
+[ -f "$MAN" ] || manifest_unavailable "no manifest"
 MSHA=$(grep '^SHA256=' "$MAN" | cut -d= -f2)
 MSIZE=$(grep '^SIZE=' "$MAN" | cut -d= -f2)
-[ -n "$MSHA" ] && [ -n "$MSIZE" ] || { quarantine "malformed manifest" || exit 1; disarm; exit 0; }
+[ -n "$MSHA" ] && [ -n "$MSIZE" ] || manifest_unavailable "malformed manifest"
 
 # verify_ui <file>: 0 only if it exactly matches the manifest (size, ELF32-LE, MIPS, sha256).
 # Each read is bounded where the firmware provides `timeout` (it does not on V2.09/V2.28/V2.40; the outer
@@ -246,7 +275,9 @@ clean_ver() { printf '%s' "$1" | tr -cd 'A-Za-z0-9._-' | cut -c1-32; }
 ota_enabled() {
     # a boot that never updated has no staging directory: decide that FIRST, before any OTA metadata is read
     [ -d "$UPD" ] && [ ! -L "$UPD" ] || return 1
-    [ -f "$OTA_RO/root.pub.pem" ] && [ -f "$OTA_RO/epochs" ] && [ -f "$OTA_RO/diskos-verify.sh" ] || return 1
+    [ -f "$OTA_RO/root.pub.pem" ] && [ -f "$OTA_RO/epochs" ] && [ -f "$OTA_RO/diskos-verify.sh" ] || {
+        log "ota: verification prerequisites unavailable -> flashed build; preserve bundles, retry next boot"; return 1;
+    }
     OTA_MINKEY=$(kv "$OTA_RO/epochs" MIN_KEY_EPOCH); OTA_MINUI=$(kv "$OTA_RO/epochs" MIN_UI_EPOCH)
     is_uint "$OTA_MINKEY" && is_uint "$OTA_MINUI"
 }
@@ -254,27 +285,35 @@ ota_enabled() {
 # ota_bundle_ok <dir> <ui_epoch_floor>: the RO verifier over a PRIVATE tmpfs copy of the five small signed
 # files (so a /usr/data writer cannot swap them between the check and the read of the values), plus the
 # binary in place (its size + sha256 are checked by the verifier and AGAIN by verify_ui on install).
-# Sets O_SHA O_SIZE O_EPOCH O_VER on success.
+# Returns 0 verified, 1 verified-invalid, 2 incomplete (retain and retry next boot).
+# Sets O_DIR O_SHA O_SIZE O_EPOCH O_VER only on success; failures clear O_DIR.
 ota_bundle_ok() {
-    _od="$1"; _ofl="$2"; _ot=/tmp/.diskos_ota.$$
+    _od="$1"; _ofl="$2"; _ot=/tmp/.diskos_ota.$$; O_DIR=
     rm -rf "$_ot" 2>/dev/null
-    mkdir "$_ot" 2>/dev/null && chmod 700 "$_ot" 2>/dev/null || return 1
+    mkdir "$_ot" 2>/dev/null && chmod 700 "$_ot" 2>/dev/null || {
+        rm -rf "$_ot" 2>/dev/null; log "ota: $_od: verification incomplete (private tmp); retry next boot"; return 2;
+    }
     for _of in keyauthz keyauthz.sig leafpub.pem update.manifest update.manifest.sig mq_ui; do
         if [ -L "$_od/$_of" ] || [ ! -f "$_od/$_of" ]; then rm -rf "$_ot"; log "ota: $_od: $_of missing or a symlink"; return 1; fi
     done
     for _of in keyauthz keyauthz.sig leafpub.pem update.manifest update.manifest.sig; do
-        TO cp "$_od/$_of" "$_ot/$_of" 2>/dev/null || { rm -rf "$_ot"; log "ota: $_od: cannot read $_of"; return 1; }
+        TO cp "$_od/$_of" "$_ot/$_of" 2>/dev/null || { rm -rf "$_ot"; log "ota: $_od: verification incomplete (copy $_of); retry next boot"; return 2; }
     done
     if _oout=$(TO /bin/sh "$OTA_RO/diskos-verify.sh" "$OTA_RO/root.pub.pem" "$OTA_MINKEY" "$_ofl" "$_ot" "$_od/mq_ui" 2>&1); then
-        O_DIR=$_od; O_SHA=$(kv "$_ot/update.manifest" sha256); O_SIZE=$(kv "$_ot/update.manifest" size)
+        O_SHA=$(kv "$_ot/update.manifest" sha256); O_SIZE=$(kv "$_ot/update.manifest" size)
         O_EPOCH=$(kv "$_ot/update.manifest" epoch); O_VER=$(clean_ver "$(kv "$_ot/update.manifest" version)")
         rm -rf "$_ot"
-        [ -n "$O_SHA" ] && is_uint "$O_SIZE" && is_uint "$O_EPOCH" || { log "ota: $_od: verified but unparsable"; return 1; }
-        return 0
+        [ -n "$O_SHA" ] && is_uint "$O_SIZE" && is_uint "$O_EPOCH" || { log "ota: $_od: verification incomplete (manifest readback); retry next boot"; return 2; }
+        O_DIR=$_od; return 0
+    else
+        _orc=$?
     fi
     rm -rf "$_ot"
     log "ota: $_od: $(printf '%s' "$_oout" | tr -cd '\040-\176' | cut -c1-160)"
-    return 1
+    # A bare shell/launcher failure is not a completed content rejection.
+    case "$_orc:$_oout" in '1:REJECT: '*) return 1 ;; esac
+    log "ota: $_od: verification incomplete (verifier status $_orc); retry next boot"
+    return 2
 }
 
 # ota_write_accepted <version> <epoch>: the anti-rollback floor, written DURABLY: tmp + mv + sync, then read back.
@@ -320,10 +359,15 @@ ota_select() {
 
     # 1. a build on trial: promote it, keep it on trial, or roll it back
     if [ -d "$UPD/active" ]; then
-        if [ -e "$UPD/trial.crashed" ]; then
-            # the launcher refused to start the trial again after repeated starts in ONE boot: no more boots for it
-            if ota_bundle_ok "$UPD/active" "$OTA_MINUI"; then ota_rollback crashloop "$O_VER" "$O_SHA"; else ota_rollback crashloop "" ""; fi
-        elif ota_bundle_ok "$UPD/active" "$OTA_MINUI"; then
+        ota_bundle_ok "$UPD/active" "$OTA_MINUI"; _active_rc=$?
+        if [ "$_active_rc" = 2 ]; then
+            # Flashed this boot: launching another OTA would clear trial.launched in the launcher.
+            # Retain every trial proof/count and retry verification on the next boot.
+            return 0
+        elif [ -e "$UPD/trial.crashed" ]; then
+            # the launcher refused repeated starts in ONE boot; completed verification allows rollback
+            if [ "$_active_rc" = 0 ]; then ota_rollback crashloop "$O_VER" "$O_SHA"; else ota_rollback crashloop "" ""; fi
+        elif [ "$_active_rc" = 0 ]; then
             _tsha=$(kv "$UPD/trial" sha256); _tb=$(kv "$UPD/trial" boots)
             _h=; [ -f "$UPD/healthy" ] && [ ! -L "$UPD/healthy" ] && _h=$(head -n 1 "$UPD/healthy" 2>/dev/null)
             # the user's "Go back" (UI-written revert = exactly SHA256=<this trial>) beats everything, healthy included
@@ -382,8 +426,9 @@ ota_select() {
     # 2. a newly staged bundle: verify it again, then start its trial
     if [ -z "$CH_DIR" ] && [ ! -d "$UPD/active" ] && [ -d "$UPD/pending" ]; then
         _fl=$OTA_MINUI; [ "$((_acc + 1))" -gt "$_fl" ] && _fl=$((_acc + 1))
-        if [ -f "$UPD/pending/ready" ] && ota_bundle_ok "$UPD/pending" "$_fl" \
-           && ! { [ -f "$UPD/rejected" ] && grep -qx "$O_SHA" "$UPD/rejected"; }; then
+        _pending_rc=1
+        if [ -f "$UPD/pending/ready" ]; then ota_bundle_ok "$UPD/pending" "$_fl"; _pending_rc=$?; fi
+        if [ "$_pending_rc" = 0 ] && ! { [ -f "$UPD/rejected" ] && grep -qx "$O_SHA" "$UPD/rejected"; }; then
             printf 'boots=1\nsha256=%s\n' "$O_SHA" > "$UPD/trial.tmp" 2>/dev/null \
                 && mv -f "$UPD/trial.tmp" "$UPD/trial" 2>/dev/null
             rm -f "$UPD/healthy" "$UPD/trial.crashed" "$UPD/trial.launched" 2>/dev/null
@@ -393,29 +438,34 @@ ota_select() {
             else
                 rm -f "$UPD/trial" 2>/dev/null; log "ota: could not start trial for staged bundle"
             fi
-        else
+        elif [ "$_pending_rc" != 2 ]; then
             log "ota: staged bundle rejected/ignored (floor $_fl); removing it"
             rm -rf "$UPD/pending" 2>/dev/null
         fi
     fi
 
-    # 3. otherwise the last good bundle, re-verified this boot (falling back to the one it replaced)
+    # 3. otherwise the last good bundle. Only a completed rejection may remove it.
     if [ -z "$CH_DIR" ] && [ -d "$UPD/good" ]; then
-        if ! ota_bundle_ok "$UPD/good" "$OTA_MINUI"; then
+        ota_bundle_ok "$UPD/good" "$OTA_MINUI"; _good_rc=$?
+        if [ "$_good_rc" = 1 ]; then
             log "ota: good bundle no longer verifies"
             rm -rf "$UPD/good" 2>/dev/null
-            if [ -d "$UPD/good.prev" ] && mv "$UPD/good.prev" "$UPD/good" 2>/dev/null && ota_bundle_ok "$UPD/good" "$OTA_MINUI"; then
-                log "ota: using the previous good bundle"
-            else
-                rm -rf "$UPD/good" 2>/dev/null
+            if [ ! -e "$UPD/good" ] && [ -d "$UPD/good.prev" ] && mv "$UPD/good.prev" "$UPD/good" 2>/dev/null; then
+                ota_bundle_ok "$UPD/good" "$OTA_MINUI"; _good_rc=$?
+                if [ "$_good_rc" = 0 ]; then log "ota: using the previous good bundle"
+                elif [ "$_good_rc" = 1 ]; then rm -rf "$UPD/good" 2>/dev/null; fi
             fi
         fi
-        if [ -d "$UPD/good" ]; then
+        if [ "$_good_rc" = 0 ]; then
             CH_DIR=$UPD/good; CH_KIND=good
-            rm -rf "$UPD/good.prev" 2>/dev/null            # the promoted build has now been re-verified on a later boot
-            # the floor follows the good build: rebuild `accepted` if a power cut (or a wipe) left it behind
+            rm -rf "$UPD/good.prev" 2>/dev/null            # promoted build re-verified on a later boot
+            # the floor follows the good build: rebuild accepted after an interrupted promotion
             _acc2=$(kv "$UPD/accepted" epoch); is_uint "$_acc2" || _acc2=0
             if [ "$O_EPOCH" -gt "$_acc2" ]; then ota_write_accepted "$O_VER" "$O_EPOCH" || log "ota: could not rebuild accepted"; fi
+        elif [ "$_good_rc" = 2 ] && [ -d "$UPD/good.prev" ] && ota_bundle_ok "$UPD/good.prev" "$OTA_MINUI"; then
+            # Use the other verified bundle in place; do not rename over the retryable good.
+            CH_DIR=$UPD/good.prev; CH_KIND=good
+            log "ota: using previous good this boot; good verification will retry next boot"
         fi
     fi
 
@@ -433,7 +483,43 @@ ota_select() {
         log "ota: running $BUILD build $B_VER (epoch $B_EPOCH)"
     fi
 }
-ota_select
+# A baseline transition never parses retained OTA records or selects an OTA this boot.
+# Validate every path before the first removal; reject unexpected types and root symlinks.
+reset_history() {
+    verify_ui /opt/diskos/mq_ui || { log "flash: embedded UI failed verify -> stock; preserve history"; return 1; }
+    if [ -L "$UPD" ] || { [ -e "$UPD" ] && [ ! -d "$UPD" ]; }; then
+        log "flash: invalid updates root -> stock; preserve history"; return 1
+    fi
+    for _reset in incoming pending pending.old active good good.prev; do
+        [ ! -L "$UPD/$_reset" ] && { [ ! -e "$UPD/$_reset" ] || [ -d "$UPD/$_reset" ]; } || return 1
+    done
+    for _reset in trial trial.tmp trial.crashed trial.launched trial.launched.tmp healthy healthy.tmp \
+                  revert revert.tmp accepted accepted.tmp rejected rejected.tmp rollback rollback.tmp; do
+        [ ! -L "$UPD/$_reset" ] && { [ ! -e "$UPD/$_reset" ] || [ -f "$UPD/$_reset" ]; } || return 1
+    done
+    for _reset in /usr/data/mq_ui /usr/data/.mq_ui.tmp /usr/data/mq_ui.rejected; do
+        [ ! -L "$_reset" ] && { [ ! -e "$_reset" ] || [ -f "$_reset" ]; } || return 1
+    done
+    [ -L /usr/data/mq_player ] || [ ! -e /usr/data/mq_player ] || [ -f /usr/data/mq_player ] || return 1
+    log "flash: embedded UI verified -> disable override, clear exact OTA history"
+    TO rm -f /usr/data/mq_player || return 1
+    for _reset in incoming pending pending.old active good good.prev; do
+        TO rm -rf "$UPD/$_reset" || return 1
+    done
+    for _reset in trial trial.tmp trial.crashed trial.launched trial.launched.tmp healthy healthy.tmp \
+                  revert revert.tmp accepted accepted.tmp rejected rejected.tmp rollback rollback.tmp; do
+        TO rm -f "$UPD/$_reset" || return 1
+    done
+    for _reset in /usr/data/mq_ui /usr/data/.mq_ui.tmp /usr/data/mq_ui.rejected; do
+        TO rm -f "$_reset" || return 1
+    done
+    log "flash: history cleared -> install embedded baseline (OTA suppressed this boot)"
+}
+if [ "$RESET_PENDING" = 1 ]; then
+    reset_history || { log "flash: reset failed -> stock; retry next boot"; exit 0; }
+else
+    ota_select
+fi
 
 rm -f /usr/data/.mq_ui.tmp 2>/dev/null   # never trust a leftover temp from a prior interrupted run
 
@@ -491,8 +577,8 @@ if [ "$copied" = 1 ]; then
     # Verify the LOCAL copy, then publish atomically. installed=1 is gated on the CORRECTNESS steps
     # only (verify -> chmod -> mv -> publish_symlink[proves exact target] -> re-verify); it works
     # entirely on the local copy.
-    # Durability rides on /usr/data being sync-mounted ubifs; the explicit sync is TO-bounded and
-    # deliberately NOT part of the success gate.
+    # Ordinary boots retain the advisory sync; reset durability is checked in ready(),
+    # before the helper may complete the new identity.
     if verify_ui /usr/data/.mq_ui.tmp \
        && chmod +x /usr/data/.mq_ui.tmp \
        && mv -f /usr/data/.mq_ui.tmp /usr/data/mq_ui \
@@ -500,7 +586,9 @@ if [ "$copied" = 1 ]; then
        && verify_ui /usr/data/mq_ui; then
         installed=1; log "installed verified mq_ui from ${src:-?} (size $MSIZE, build $BUILD)"
         rm -f /usr/data/mq_ui.rejected 2>/dev/null   # the quarantine copy: the live binary is verified, space is tight
-        TO sync 2>/dev/null || log "post-install sync slow/timed-out (ubifs is sync-mounted; already durable)"
+        if [ "$RESET_PENDING" != 1 ]; then
+            TO sync 2>/dev/null || log "post-install sync slow/timed-out (ubifs is sync-mounted; already durable)"
+        fi
     else
         log "staged copy failed verification/publish -> not installed"
     fi

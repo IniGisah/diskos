@@ -174,6 +174,10 @@ static lv_obj_t *skb_create(lv_obj_t *parent, lv_obj_t *ta, void (*submit)(void)
 /* ---- modal wrapper ------------------------------------------------------- */
 static lv_obj_t *g_modal, *g_ta;
 static kbinput_done_cb_t g_done;
+static kbinput_validator_t g_validate;
+static lv_obj_t *g_reason;
+static size_t g_max_bytes = 159;
+void kbinput_set_byte_limit(size_t bytes){ g_max_bytes=bytes; }
 static int g_keep_spaces;   /* password entry: trailing spaces are part of the secret, never stripped */
 
 int kbinput_active(void){ return g_modal != NULL; }
@@ -181,17 +185,43 @@ int kbinput_active(void){ return g_modal != NULL; }
 static void finish(const char *result){
     kbinput_done_cb_t cb = g_done; g_done = NULL;
     if(g_modal){ lv_obj_delete_async(g_modal); g_modal = NULL; g_ta = NULL; }
+    g_validate = NULL;
+    g_reason = NULL;
     if(cb) cb(result);
 }
 static void do_save(void){
-    static char buf[160];
-    snprintf(buf, sizeof buf, "%s", g_ta ? lv_textarea_get_text(g_ta) : "");
+    const char *text = g_ta ? lv_textarea_get_text(g_ta) : "";
+    if(strlen(text) > g_max_bytes){ lv_label_set_text(g_reason, "Text too long"); return; }
+    char *buf = lv_strdup(text);
+    if(!buf){ lv_label_set_text(g_reason, "Try saving again"); return; }
     int n = (int)strlen(buf);
     while(!g_keep_spaces && n > 0 && buf[n-1]==' ') buf[--n] = 0;
     finish(buf);
+    lv_free(buf);
 }
-static void save_btn(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) do_save(); }
+/* Validate the full raw entry before any trimming or callback. */
+static void validated_save(void){
+    if(!g_modal) return;
+    if(g_validate){
+        const char *text = lv_textarea_get_text(g_ta);
+        if(strlen(text) > g_max_bytes){ lv_label_set_text(g_reason, "Text too long"); return; }
+        char *copy = lv_strdup(text);
+        if(!copy){ lv_label_set_text(g_reason, "Try saving again"); return; }
+        /* Validation may persist the entry. Allocate before it so a successful
+         * write cannot be followed by an allocation failure and a duplicate retry. */
+        const char *reason = g_validate(copy);
+        if(reason){ lv_label_set_text(g_reason, reason); lv_free(copy); return; }
+        finish(copy);
+        lv_free(copy);
+    } else do_save();
+}
+static void save_btn(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) validated_save(); }
 static void cancel_btn(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) finish(NULL); }
+
+static void clear_reason(lv_event_t *e){
+    if(lv_event_get_target(e) == g_ta && g_reason)
+        lv_label_set_text(g_reason, "");
+}
 
 static void pill(lv_obj_t *parent, int x, int y, const char *sym, lv_color_t col, lv_event_cb_t cb){
     lv_obj_t *b = lv_button_create(parent);
@@ -214,11 +244,14 @@ static void pill(lv_obj_t *parent, int x, int y, const char *sym, lv_color_t col
 static int g_mask_next = 0;
 void kbinput_open_password(const char *title, const char *initial, kbinput_done_cb_t cb){
     g_mask_next = 1;
-    kbinput_open(title, initial, cb);
+    kbinput_open_limited(title, initial, cb, 63);
 }
 void kbinput_open(const char *title, const char *initial, kbinput_done_cb_t cb){
     if(g_modal) finish(NULL);
     g_done = cb;
+    g_max_bytes = 159;
+    g_validate = NULL;
+    g_reason = NULL;
 
     g_modal = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(g_modal);
@@ -254,5 +287,51 @@ void kbinput_open(const char *title, const char *initial, kbinput_done_cb_t cb){
     pill(g_modal, -66, 108, LV_SYMBOL_CLOSE, TC(TEXT_SECONDARY), cancel_btn);
     pill(g_modal,  66, 108, LV_SYMBOL_OK,    theme_def() ? TC(ACCENT_PRIMARY) : TC(STATUS_SUCCESS), save_btn);   /* confirm: go colour */
 
-    skb_create(g_modal, g_ta, do_save);   /* the keyboard's OK key also saves */
+    g_reason = lv_label_create(g_modal);
+    lv_label_set_text(g_reason, "");
+    lv_obj_set_width(g_reason, 280);
+    lv_label_set_long_mode(g_reason, LV_LABEL_LONG_WRAP);
+    lv_obj_align(g_reason, LV_ALIGN_TOP_MID, 0, 148);
+    lv_obj_set_style_text_align(g_reason, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(g_reason, TF(UI_14), 0);
+    lv_obj_set_style_text_color(g_reason, TC(TEXT_SECONDARY), 0);
+    lv_obj_add_event_cb(g_ta, clear_reason, LV_EVENT_VALUE_CHANGED, NULL);
+
+    skb_create(g_modal, g_ta, validated_save);   /* the keyboard's OK key also saves */
 }
+
+/* Keep caption fitting inside its band; the keyboard and validation line have
+ * fixed positions in the remaining space, as on the PIN entry screen. */
+static void validated_heading(const char *title){
+    lv_obj_t *area=lv_obj_create(g_modal);
+    lv_obj_remove_style_all(area);
+    lv_obj_remove_flag(area,LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_pos(area,0,0); lv_obj_set_size(area,360,60);
+    lv_obj_t *heading=ui_title_label(area,title,TF(UI_16));
+    theme_title_text(heading,title);
+    if(theme_kit()->style) theme_kit()->style(heading,KIT_TITLE);
+    kit_keep(heading);
+    ui_headers_fit(area);
+    lv_obj_update_layout(area);
+    int bottom=lv_obj_get_y(heading)+lv_obj_get_height(heading);
+    int lift=bottom>60 ? bottom-60 : 0;
+    lv_obj_set_style_translate_y(heading,-lift,0);
+    lv_obj_update_layout(area);
+    if(theme_kit()->title_placed) theme_kit()->title_placed(heading);
+}
+
+void kbinput_open_limited(const char *title, const char *initial,
+                          kbinput_done_cb_t cb, unsigned max_bytes){
+    kbinput_open(title, initial, cb);
+    kbinput_set_byte_limit(max_bytes);
+}
+
+void kbinput_open_validated(const char *title, const char *initial,
+                            kbinput_done_cb_t cb, kbinput_validator_t validator){
+    kbinput_open(title, initial, cb);
+    g_validate = validator;
+    if(!validator) return;
+    lv_obj_set_y(g_ta,64);
+    validated_heading(title);
+}
+

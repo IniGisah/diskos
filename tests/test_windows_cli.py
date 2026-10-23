@@ -590,7 +590,7 @@ class FirmwareDependencyTests(unittest.TestCase):
         self.assertNotIn('[E105]', text)
         self.assertNotIn('Traceback', text)
 
-    def run_spec(self, work, args=(), version='1.2.1', native=True, git_outputs=None,
+    def run_spec(self, work, args=(), version='1.2.2', native=True, git_outputs=None,
                  host=('Windows', 'AMD64'), missing=(), libfiles=(),
                  licence_text='upstream licence fixture\n', spec_source=None,
                  dll_bytes=b'pinned DLL fixture', dll_missing=False, analysis_binaries=None,
@@ -606,6 +606,14 @@ class FirmwareDependencyTests(unittest.TestCase):
         manifest.update(pin or {})
         real_open = builtins.open
         real_isdir = os.path.isdir
+        real_glob = Path.glob
+        mac_inputs = types.ModuleType('macos_inputs')
+        mac_inputs.verify = mock.Mock()
+        mac_libs = sorted(set(libfiles) | {'libusb-1.0.0.dylib'})
+        def globbing(path, pattern):
+            if host[0] == 'Darwin' and path == root / 'vendor/macos-arm64/lib':
+                return iter(path / name for name in mac_libs if name.endswith('.dylib'))
+            return real_glob(path, pattern)
         analysed = False
         def opening(path, *args, **kwargs):
             if str(path) == str(root / 'licenses/PyInstaller-COPYING.txt'):
@@ -616,7 +624,8 @@ class FirmwareDependencyTests(unittest.TestCase):
                 if dll_missing:
                     raise FileNotFoundError(path)
                 return io.BytesIO(post_analysis_bytes if analysed and post_analysis_bytes is not None else dll_bytes)
-            if str(path) == str(Path(work) / 'windows-hooks/hook-usb.py'):
+            if str(path) in (str(Path(work) / 'windows-hooks/hook-usb.py'),
+                              str(Path(work) / 'macos-hooks/hook-usb.py')):
                 if not real_isdir(Path(path).parent):
                     Path(path).parent.mkdir()
             return real_open(path, *args, **kwargs)
@@ -647,6 +656,8 @@ class FirmwareDependencyTests(unittest.TestCase):
         def collect_submodules(package, filter=lambda name: True):
             return [name for name in crypto_modules if filter(name)]
         hooks.collect_submodules = mock.Mock(side_effect=collect_submodules)
+        hooks.collect_data_files = mock.Mock(
+            return_value=[(str(root / 'site-packages/certifi/cacert.pem'), 'certifi')])
         build_main = types.ModuleType('PyInstaller.building.build_main')
         build_main.normalize_toc = windows_normalize_toc
         building = types.ModuleType('PyInstaller.building')
@@ -725,7 +736,9 @@ class FirmwareDependencyTests(unittest.TestCase):
         is_file = os.path.isfile
         present = lambda path: str(path) not in absent if Path(path).is_relative_to(root) else is_file(path)
         with mock.patch.dict(sys.modules, {'PyInstaller.utils.hooks': hooks,
-                'PyInstaller.building': building, 'PyInstaller.building.build_main': build_main}), \
+                'PyInstaller.building': building, 'PyInstaller.building.build_main': build_main,
+                'macos_inputs': mac_inputs}), \
+                mock.patch.object(Path, 'glob', globbing), \
                 mock.patch('platform.system', return_value=host[0]), mock.patch('platform.machine', return_value=host[1]), \
                 mock.patch('os.getcwd', return_value=str(root)), mock.patch('os.path.exists', side_effect=present), \
                 mock.patch('os.path.isfile', side_effect=present), mock.patch('os.path.isdir', return_value=bool(libfiles)), \
@@ -780,6 +793,25 @@ class FirmwareDependencyTests(unittest.TestCase):
                 self.assertFalse(call.kwargs['strip'])
             collect.assert_called_once_with(*outputs_exe, frozen.binaries, frozen.datas,
                                             strip=False, upx=False, name='diskos-installer')
+        elif host[0] == 'Darwin':
+            mac_inputs.verify.assert_called_once()
+            self.assertEqual(analysis.call_args.kwargs['binaries'], [
+                *[(str(root / 'vendor/macos-arm64' / name), 'vendor/macos-arm64')
+                  for name in ('usbboot', 'mksquashfs', 'unsquashfs')],
+                *[(str(root / 'vendor/macos-arm64/lib' / name), 'vendor/macos-arm64/lib')
+                  for name in mac_libs if name.endswith('.dylib')]])
+            self.assertEqual(analysis.call_args.kwargs['hookspath'], [str(Path(work) / 'macos-hooks')])
+            exe.assert_called_once_with(pyz.return_value, frozen.scripts, [], exclude_binaries=True,
+                                       name='diskos-installer', debug=False, bootloader_ignore_signals=False,
+                                       strip=False, upx=False, console=True, target_arch='arm64',
+                                       codesign_identity='-', argv_emulation=False)
+            collect.assert_called_once_with(outputs_exe[0], frozen.binaries, frozen.datas,
+                                            strip=False, upx=False, name='diskos-installer')
+            self.assertEqual(namespace['coll'].toc, frozen.binaries + frozen.datas)
+            namespace['BUNDLE'].assert_called_once_with(namespace['coll'],
+                name='diskOS Installer.app', bundle_identifier='org.diskos.installer',
+                info_plist={'CFBundleShortVersionString': version, 'NSHighResolutionCapable': True},
+                codesign_identity='-')
         else:
             self.assertEqual(analysis.call_args.kwargs['binaries'], [])
             self.assertEqual(analysis.call_args.kwargs['hookspath'], [])
@@ -949,7 +981,8 @@ class FirmwareDependencyTests(unittest.TestCase):
         inputs = re.search(r'\(cd "\$root" && sha256sum (.*?)\)', recipe, re.S).group(1)
         inputs = inputs.replace('\\\n', '').split()
         notices = [str(p.relative_to(root)) for p in (root / 'licenses').rglob('*')
-                   if p.is_file() and p.name != 'Adobe-Glyph-List-NOTICE.txt']
+                   if p.is_file() and p.name != 'Adobe-Glyph-List-NOTICE.txt'
+                   and 'macos' not in p.relative_to(root / 'licenses').parts]  # macOS-runtime notices ship only in the Mac app
         blobs = {'my_write6_dram.bin', 'disc_spl_lpddr3.bin'}
         for host, tag in ((('Windows', 'AMD64'), 'windows-x86_64'),
                           (('Linux', 'x86_64'), 'linux-x86_64'),
@@ -960,11 +993,14 @@ class FirmwareDependencyTests(unittest.TestCase):
                 expected = {'payload/' + n: 'payload' for n in PAYLOAD}
                 native = NATIVE | blobs | {'MANIFEST.txt'} if host[0] == 'Windows' else blobs | {
                     'usbboot', 'mksquashfs', 'unsquashfs'}
+                if host[0] == 'Darwin':
+                    native = blobs  # Host Mach-O files are BINARY inputs for dependency rewriting.
                 expected.update({f'vendor/{tag}/{n}': f'vendor/{tag}' for n in native})
                 expected.update({f'diskos_installer/assets/{n}': 'diskos_installer/assets' for n in (
                     'wordmark.png', 'wordmark@2x.png', 'display.png', 'display@1.5x.png', 'display@2x.png',
                     'display.json', 'disc.png', 'disc@1.5x.png', 'disc@2x.png',
                     'LICENSE-archivo-OFL.txt', 'LICENSE-michroma-OFL.txt')})
+                expected['site-packages/certifi/cacert.pem'] = 'certifi'
                 if host[0] == 'Windows':
                     sidecars = inputs + notices + ['LICENSE', 'NOTICE.md', 'README.md',
                         'build/windows-libusb.json',
@@ -972,7 +1008,7 @@ class FirmwareDependencyTests(unittest.TestCase):
                         'corresponding-source/windows/msys2-runtime-3.6.10-6.src.tar.zst',
                         'corresponding-source/windows/msys2-runtime-3.6.10-6.src.tar.zst.sig']
                     expected.update({n: os.path.dirname(n) or '.' for n in sidecars})
-                else:
+                elif host[0] == 'Linux':
                     expected.update({f'vendor/{tag}/lib/{n}': f'vendor/{tag}/lib'
                                      for n in ('adjacent.dylib', 'scratch.dll')})
                 self.assertEqual(files, expected)
@@ -1002,6 +1038,7 @@ class FirmwareDependencyTests(unittest.TestCase):
             'corresponding-source/windows/msys2-runtime-3.6.10-6.src.tar.zst.sig',
             'licenses/windows/msys2-runtime-BSD-NOTICES.txt',
             'licenses/FTL-FreeType.txt', 'licenses/BSL-1.0-dlg.txt')]
+        cases += [(('Darwin', 'arm64'), 'vendor/macos-arm64/lib/libusb-1.0.0.dylib')]
         cases += [(host, 'payload/diskos-root.pub.pem') for host in (
             ('Windows', 'AMD64'), ('Linux', 'x86_64'), ('Darwin', 'arm64'))]
         for host, name in cases:
@@ -1025,8 +1062,8 @@ class FirmwareDependencyTests(unittest.TestCase):
 
     def test_spec_refuses_invalid_enable_requests(self):
         with tempfile.TemporaryDirectory() as work:
-            for commit, version, native in (('', '1.2.1', True), ('short', '1.2.1', True),
-                    ('g' * 40, '1.2.1', True), ('a' * 40, '1.2.0', True), ('a' * 40, '1.2.1', False)):
+            for commit, version, native in (('', '1.2.2', True), ('short', '1.2.2', True),
+                    ('g' * 40, '1.2.2', True), ('a' * 40, '1.2.0', True), ('a' * 40, '1.2.2', False)):
                 with self.subTest(commit=commit, version=version, native=native), self.assertRaises(SystemExit):
                     self.run_spec(work, ('--enable-windows-flash', '--source-commit', commit), version, native)
 

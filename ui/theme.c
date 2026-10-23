@@ -222,28 +222,28 @@ static unsigned g_traits;
 static lv_font_t g_tf[THEME_FONT_COUNT];
 static lv_font_t g_tf_ft[THEME_FONT_COUNT];
 static const lv_font_t *g_tfp[THEME_FONT_COUNT];
-static void theme_fonts_install(void){
-    for(int r = 0; r < THEME_FONT_COUNT; r++){
-        g_tfp[r] = NULL;
-        if(!g_def || !g_def->font[r].face) continue;
-        int px = g_def->font[r].px;
-        g_tf[r] = *g_def->font[r].face;
-        if(r == THEME_FONT_ICON_20 || r == THEME_FONT_ICON_28) {
-            g_tfp[r] = &g_tf[r];
-            continue;
-        }
-        /* Standard text sizes keep the Montserrat/intl head for missing symbols.
-         * Special face sizes have no Montserrat peer, so use TTC then compiled CJK. */
-        if(px == 10 || px == 12 || px == 14 || px == 16 || px == 18 || px == 20 ||
-           px == 22 || px == 24 || px == 28 || px == 32 || px == 36 || px == 40)
-            g_tf[r].fallback = ui_font_cjk(px);
-        else {
-            const lv_font_t *ft = fontft_font(px);
-            if(ft) { g_tf_ft[r] = *ft; g_tf_ft[r].fallback = ui_font_cjk(16); }
-            g_tf[r].fallback = ft ? &g_tf_ft[r] : ui_font_cjk(16);
-        }
-        g_tfp[r] = &g_tf[r];
+/* One theme text face as a mutable copy whose fallback is the matching international/CJK chain (tf, and ft for the TTC
+ * step of a special size, are caller storage). Shared by the active theme's install below and by callers that need
+ * another theme's face (the custom saver's explicit font choices) without activating that theme. NULL = no such face. */
+const lv_font_t *theme_font_chain(const theme_def_t *d, int r, lv_font_t *tf, lv_font_t *ft){
+    if(!d || r < 0 || r >= THEME_FONT_COUNT || !d->font[r].face) return NULL;
+    int px = d->font[r].px;
+    *tf = *d->font[r].face;
+    if(r == THEME_FONT_ICON_20 || r == THEME_FONT_ICON_28) return tf;
+    /* Standard text sizes keep the Montserrat/intl head for missing symbols.
+     * Special face sizes have no Montserrat peer, so use TTC then compiled CJK. */
+    if(px == 10 || px == 12 || px == 14 || px == 16 || px == 18 || px == 20 ||
+       px == 22 || px == 24 || px == 28 || px == 32 || px == 36 || px == 40)
+        tf->fallback = ui_font_cjk(px);
+    else {
+        const lv_font_t *f = fontft_font(px);
+        if(f) { *ft = *f; ft->fallback = ui_font_cjk(16); }
+        tf->fallback = f ? ft : ui_font_cjk(16);
     }
+    return tf;
+}
+static void theme_fonts_install(void){
+    for(int r = 0; r < THEME_FONT_COUNT; r++) g_tfp[r] = theme_font_chain(g_def, r, &g_tf[r], &g_tf_ft[r]);
     /* a text size the theme's set lacks takes the theme's nearest own face: otherwise Default's face shows through
      * (the weather's "Fetching..." in Montserrat on a monospace theme) */
     static const theme_font_role_t GAP[][3] = { { THEME_FONT_UI_22, THEME_FONT_UI_24, THEME_FONT_UI_20 },
@@ -365,6 +365,18 @@ int theme_trait(theme_trait_t t){ return (unsigned)t < THEME_TRAIT_COUNT && (g_t
 
 /* flat list rows: no card, a hairline underneath, accent drill-down chevrons, and the pressed row as an accent-outlined
  * pill (assets/reference/something/library_dark.png). Default theme: nothing changes. */
+void theme_settings_switch(lv_obj_t *sw){
+    lv_obj_set_size(sw, 44, 24);
+    lv_obj_set_style_radius(sw, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_radius(sw, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(sw, LV_RADIUS_CIRCLE, LV_PART_KNOB);
+    lv_obj_set_style_bg_color(sw, TC(CONTROL_TRACK), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(sw, ui_current_accent(), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(sw, TC(CONTROL_KNOB), LV_PART_KNOB);
+    lv_obj_set_style_opa(sw, LV_OPA_40, LV_STATE_DISABLED);
+    kit_isolate(sw);
+}
+
 void theme_list_row(lv_obj_t *row){
     if(!row || !theme_trait(THEME_TRAIT_FLAT_LISTS)) return;
     int h = lv_obj_get_style_height(row, 0);
@@ -439,9 +451,7 @@ void theme_case_text(lv_obj_t *label, const char *text){   /* the theme's case o
     else lv_snprintf(buf, sizeof buf, "%s", text ? text : "");
     lv_label_set_text(label, buf);
 }
-/* A header title set after its header was laid out (a playlist's name) that is too wide for its box steps down the
- * theme's smaller faces rather than ending in "...", its last line staying where it was. Chosen before the text is
- * set: a dotted label edits its own copy. A title form may add a little (the terminal's "~/"): measured with it. */
+/* Dynamic page titles use the same case/form and shared fit as initial titles. */
 #define TITLE_STEPPED THEME_TITLE_STEPPED
 const char theme_title_tag = 0;
 /* a title's next smaller face: a display-face theme steps inside its own face first (HEADER_SM), so titles don't
@@ -451,30 +461,6 @@ const lv_font_t *theme_title_smaller(const lv_font_t *f){
     if(f == hf && hsm && lv_font_get_line_height(hsm) < lv_font_get_line_height(hf)) return hsm;
     return theme_font_smaller(f);
 }
-static void title_face(lv_obj_t *l, const char *text){
-    if(!g_def) return;
-    const lv_font_t *hf = theme_font(THEME_FONT_HEADER), *cur = lv_obj_get_style_text_font(l, 0);
-    if((cur != hf && !lv_obj_has_flag(l, TITLE_STEPPED)) || lv_obj_get_style_width(l, 0) == LV_SIZE_CONTENT) return;
-    lv_obj_update_layout(l);
-    int room = lv_obj_get_content_width(l);
-    if(room <= 0) return;
-    /* Terminal alone uses a path form, including its 160-byte limit and underscores. */
-    char m[160];
-    int terminal = !strcmp(theme_kit()->id, "terminal");
-    lv_snprintf(m, sizeof m, "%s%s", terminal ? "~/" : "", text);
-    if(terminal) for(int i = 2; m[i]; i++) if(m[i] == ' ') m[i] = '_';
-    const lv_font_t *f = hf;
-    for(int k = 0; k < 4; k++){
-        lv_point_t sz; lv_text_get_size(&sz, m, f, lv_obj_get_style_text_letter_space(l, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-        const lv_font_t *sm = theme_title_smaller(f);
-        if(sz.x <= room || !sm) break;
-        f = sm;
-    }
-    if(f == cur) return;
-    lv_obj_set_style_pad_top(l, lv_obj_get_style_pad_top(l, 0) + lv_font_get_line_height(cur) - lv_font_get_line_height(f), 0);
-    lv_obj_set_style_text_font(l, f, 0);
-    if(f == hf) lv_obj_remove_flag(l, TITLE_STEPPED); else lv_obj_add_flag(l, TITLE_STEPPED);
-}
 void theme_title_text(lv_obj_t *label, const char *text){
     if(!label) return;
     theme_case_t c = g_def ? g_def->title_case : THEME_CASE_KEEP;
@@ -482,21 +468,10 @@ void theme_title_text(lv_obj_t *label, const char *text){
     if(c == THEME_CASE_UPPER) theme_upper(buf, sizeof buf, text);
     else if(c == THEME_CASE_LOWER) theme_lower(buf, sizeof buf, text);
     else lv_snprintf(buf, sizeof buf, "%s", text ? text : "");
-    title_face(label, buf);
-    /* A content-sized dotted title (blueprint) still has the OLD text's box when the new text is set, and the label
-     * picks its dots against that box: a longer title wrapped, became "..." and then shrank to fit the dots. Set the
-     * text at the title's widest instead, so it dots only past that, then let it take its content size again. */
-    int fit = lv_obj_get_style_width(label, 0) == LV_SIZE_CONTENT && lv_label_get_long_mode(label) == LV_LABEL_LONG_DOT;
-    if(fit && theme_kit()->title_fit) theme_kit()->title_fit(label, buf);   /* the theme sizes it for THIS text */
-    else if(fit){
-        int32_t mw = lv_obj_get_style_max_width(label, 0);
-        if(mw <= 0 || mw >= LV_COORD_MAX || LV_COORD_IS_PCT(mw)) mw = lv_obj_get_content_width(lv_obj_get_parent(label));
-        lv_obj_set_width(label, mw);
-        lv_obj_update_layout(label);
-    }
-    if(theme_kit()->title) theme_kit()->title(label, buf);   /* the theme's title form (e.g. "~/library") */
+    if(theme_kit()->title) theme_kit()->title(label, buf);
     else lv_label_set_text(label, buf);
-    if(fit) lv_obj_set_width(label, LV_SIZE_CONTENT);
+    ui_title_source_changed(label);
+    if(lv_obj_get_user_data(label) == (void *)&theme_title_tag) ui_headers_fit(lv_obj_get_parent(label));
 }
 
 /* dot grid: one 2x2 dot every 12 px, DOT_GRID on CANVAS, pre-rendered ONCE as a full 360x360 image (a single blit
@@ -557,7 +532,7 @@ void theme_screen_bg(lv_obj_t *root){
 
 void theme_screen_solid(lv_obj_t *root){ if(root) lv_obj_set_style_bg_image_src(root, NULL, 0); }
 
-/* Font size (Settings > Display, stock's Small / Medium / Large): body text roles move one rung where the
+/* Font size (Settings > Display > Screen, stock's Small / Medium / Large): body text roles move one rung where the
  * fixed-height layouts fit. Large keeps UI_12/UI_14 and USER_14/USER_16 at Medium: enlarging those clips Home
  * controls or overlaps Now Playing metadata. Titles, clocks and display sizes stay fixed. Read once at startup. */
 int theme_font_size(void){
@@ -587,8 +562,7 @@ static const lv_font_t *lang_font(int px, const lv_font_t *base){
     if(!c[px].get_glyph_dsc) { c[px] = *base; c[px].fallback = ui_font_cjk(px); }
     return &c[px];
 }
-const lv_font_t *theme_font(theme_font_role_t role){
-    role = sized_role(role);
+static const lv_font_t *font_unsized(theme_font_role_t role){
     if((unsigned)role < THEME_FONT_COUNT && g_tfp[role]) return g_tfp[role];
     if(i18n_needs_fallback_font()){
         switch(role){
@@ -638,17 +612,22 @@ const lv_font_t *theme_font(theme_font_role_t role){
     }
 }
 
+const lv_font_t *theme_font(theme_font_role_t role){ return font_unsized(sized_role(role)); }
+/* The active theme's face for a role at its design size: ignores the Font Size setting (Small/Large), for surfaces
+ * that lay out against fixed pixel sizes (the custom saver overlay). */
+const lv_font_t *theme_font_fixed(theme_font_role_t role){ return font_unsized(role); }
+
 /* WCAG 2 relative luminance / contrast */
 static float lin(unsigned c){ float v = c / 255.0f; return v <= 0.03928f ? v / 12.92f : __builtin_powf((v + 0.055f) / 1.055f, 2.4f); }
 static float lum(uint32_t rgb){ return 0.2126f * lin(rgb >> 16 & 255) + 0.7152f * lin(rgb >> 8 & 255) + 0.0722f * lin(rgb & 255); }
 static float contrast(uint32_t a, uint32_t b){ float x = lum(a), y = lum(b); return x > y ? (x + 0.05f) / (y + 0.05f) : (y + 0.05f) / (x + 0.05f); }
 
-/* text on a fill of `bg`: the palette's ON_ACCENT while it reads at 3:1 (the rule for glyphs on the accent, below), else
+/* Text on a fill of `bg`: keep the palette's ON_ACCENT at 4.5:1 for small button labels, else
  * black or white, whichever reads better
  * (Default dark passes album/user accents through unchecked, and a light one under white text is unreadable) */
 lv_color_t theme_on_color(lv_color_t bg){
     uint32_t b = lv_color_to_u32(bg) & 0xFFFFFFu, on = g_pal[THEME_CLR_ON_ACCENT] & 0xFFFFFFu;
-    if(contrast(on, b) >= 3.0f) return lv_color_hex(on);
+    if(contrast(on, b) >= 4.5f) return lv_color_hex(on);
     return lv_color_hex(contrast(0x000000u, b) >= contrast(0xFFFFFFu, b) ? 0x000000u : 0xFFFFFFu);
 }
 /* The album-art accent is fitted (and cached per song) for the default DARK surfaces. Default dark returns it

@@ -78,9 +78,7 @@ static int g_scan_err;        /* worker-thread only: any I/O or DB-insert failur
 static int g_skipped_result; /* completed scan snapshot under g_mu */
 static int g_skipped;         /* files skipped this scan (unstat-able junk / overlong path) - logged, not fatal */
 static int g_unsupported;     /* audio-ish files present but not indexable (AAC/M4A/OGG/...) - drives a UI notice */
-static int g_prune_blocked;   /* an OVERLONG (unknowable) path was skipped -> its row can't be preserved in
-                               * `seen`, so the vanished-row prune must not run this scan. ENOENT/unreadable
-                               * audio files ARE preserved (added to seen), so they don't block the prune. */
+static int g_prune_blocked;   /* preservation infrastructure failed: retain globally */
 
 int scanner_active(void){ pthread_mutex_lock(&g_mu); int a=g_active; pthread_mutex_unlock(&g_mu); return a; }
 void scanner_progress(int *done, int *total){
@@ -303,26 +301,30 @@ static int id3_frame_used(const char *id){
 static int id3v2_read(FILE *f, char *title,char *artist,char *album,char *genre,
                       char *album_artist, int *track, int *disc, int *rerr){
     unsigned char h[10];
-    if(fread(h,1,10,f)!=10) return 0;
+    size_t nh=fread(h,1,10,f);
+    if(nh!=10){ if(nh>=3 && !memcmp(h,"ID3",3) && rerr)*rerr=1; return 0; }
     if(memcmp(h,"ID3",3)!=0) return 0;
     int ver=h[3];
+    if(ver<2 || ver>4 || ((h[6]|h[7]|h[8]|h[9])&0x80)){ if(rerr)*rerr=1; return 1; }
     int unsync=(h[5]&0x80)!=0, exthdr=(h[5]&0x40)!=0;
     long tagsize = synch32(h+6);
-    if(tagsize<=0 || tagsize>20*1024*1024) return 1;
+    if(tagsize==0) return 1;
+    if(tagsize<0 || tagsize>20*1024*1024){ if(rerr)*rerr=1; return 1; }
     off_t base = ftello(f);
     struct stat st;
     if(base < 0 || fstat(fileno(f), &st) != 0){ if(rerr)*rerr=1; return 1; }
-    if(st.st_size - base < tagsize) return 1;                                  /* truncated tag: nothing read */
+    if(st.st_size - base < tagsize){ if(rerr)*rerr=1; return 1; }                                  /* truncated tag: nothing read */
     tag_fields saved; tags_save(&saved, title, artist, album, genre, album_artist, track, disc);
     int err0 = ferror(f), ok = 1;
     long p=0;
     off_t at=base;                                /* the stream position */
+    if(exthdr && ver>=3 && tagsize<6) ok=0;
     if(exthdr && ver>=3 && tagsize>=6){           /* skip the extended header if present */
         unsigned char e[4] = {0};
         if(fread(e,1,4,f)!=4) ok=0;
         at += 4;
-        if(ver>=4){ long es=synch32(e);      if(es>0 && es<=tagsize) p+=es; }        /* v2.4: size incl itself */
-        else      { long es=be32(e);         if(es>0 && es<=tagsize-4) p+=4+es; }    /* v2.3: excl the 4 size bytes */
+        if(ver>=4){ long es=synch32(e);      if(es>=6 && es<=tagsize) p+=es; else ok=0; }        /* v2.4: size incl itself */
+        else      { long es=be32(e);         if(es>=6 && es<=tagsize-4) p+=4+es; else ok=0; }    /* v2.3: excl the 4 size bytes */
     }
     (void)unsync;
     int idlen = (ver==2)?3:4, fhdr=(ver==2)?6:10;
@@ -338,7 +340,7 @@ static int id3v2_read(FILE *f, char *title,char *artist,char *album,char *genre,
         if(ver==2) fsize = (fh[3]<<16)|(fh[4]<<8)|fh[5];
         else if(ver==4) fsize = synch32(fh+4);
         else fsize = be32(fh+4);
-        if(fsize<=0 || fsize > tagsize - p - fhdr) break;   /* overflow-safe (tagsize-p-fhdr >= 0) */
+        if(fsize<=0 || fsize > tagsize - p - fhdr){ ok=0; break; }   /* overflow-safe (tagsize-p-fhdr >= 0) */
         if(id[0]=='T' && id3_frame_used(id)){     /* text frame: enc byte + text */
             unsigned char *body = malloc((size_t)fsize);
             if(!body){ if(rerr)*rerr=1; ok=0; break; }                             /* OOM: a real read failure (ferror won't catch it) */
@@ -360,7 +362,7 @@ static int id3v2_read(FILE *f, char *title,char *artist,char *album,char *genre,
         }
         p += fhdr + fsize;
     }
-    if(!ok || (!err0 && ferror(f))) tags_restore(&saved, title, artist, album, genre, album_artist, track, disc);
+    if(!ok || (!err0 && ferror(f))){ if(rerr)*rerr=1; tags_restore(&saved, title, artist, album, genre, album_artist, track, disc); }
     return 1;
 }
 /* ID3v1: last 128 bytes "TAG" + 30+30+30 title/artist/album (Latin-1). Fallback only. */
@@ -382,19 +384,28 @@ static uint32_t le32(const unsigned char *p){ return (uint32_t)p[0]|((uint32_t)p
 
 /* A Vorbis comment body (vendor length + vendor + count + "KEY=value" items, little-endian lengths), as in a FLAC
  * VORBIS_COMMENT block and an Ogg Vorbis comment packet after its 7-byte "\x03vorbis" id. Fills only empty fields. */
-static void comments_with_provenance(const unsigned char *b, uint32_t len, char *title,char *artist,char *album,char *genre,
+static int comments_with_provenance(const unsigned char *b, uint32_t len, char *title,char *artist,char *album,char *genre,
                             char *album_artist, int *track, int *disc, int *title_tag){
     /* overflow-safe bounds: need 4(vendor-len field) + vlen(vendor) + 4(comment count) <= len, i.e. vlen <= len-8.
      * Use subtraction so a hostile vlen like 0xFFFFFFFA can't wrap an addition past the guard. */
-    if(len<8) return;
+    if(len<8) return 0;
     uint32_t vlen=le32(b);
-    if(vlen > len-8) return;
+    if(vlen > len-8) return 0;
     uint32_t off=4+vlen;                          /* off <= len-4, so le32(b+off) is in-bounds */
     uint32_t cnt=le32(b+off); off+=4;
-    for(uint32_t i=0;i<cnt && off+4<=len;i++){
+    /* Validate the complete declared table before publishing any field. A damaged late
+     * entry must not leave a believable-looking partial title/artist in the caller. */
+    uint32_t check=off;
+    for(uint32_t i=0;i<cnt;i++){
+        if(check > len-4) return 0;
+        uint32_t clen=le32(b+check); check+=4;
+        if(clen>len-check) return 0;
+        check+=clen;
+    }
+    for(uint32_t i=0;i<cnt;i++){
         uint32_t clen=le32(b+off); off+=4;
-        if(clen>len-off) break;                  /* overflow-safe (len-off >= 0) */
         char kv[1088];
+        if(clen>=sizeof kv && ad_comment_wanted(b+off,clen)) return 0;
         if(clen < sizeof kv){
             memcpy(kv,b+off,clen); kv[clen]=0;
             char *eq=strchr(kv,'=');
@@ -414,11 +425,12 @@ static void comments_with_provenance(const unsigned char *b, uint32_t len, char 
         }
         off+=clen;
     }
+    return 1;
 }
 
-static void vorbis_comments(const unsigned char *b, uint32_t len, char *title,char *artist,char *album,char *genre,
-                            char *album_artist, int *track, int *disc){
-    comments_with_provenance(b,len,title,artist,album,genre,album_artist,track,disc,NULL);
+static int vorbis_comments(const unsigned char *b, uint32_t len, char *title,char *artist,char *album,char *genre,
+                           char *album_artist, int *track, int *disc){
+    return comments_with_provenance(b,len,title,artist,album,genre,album_artist,track,disc,NULL);
 }
 
 /* FLAC: "fLaC" magic + metadata blocks; parse the VORBIS_COMMENT block (type 4) for
@@ -426,23 +438,30 @@ static void vorbis_comments(const unsigned char *b, uint32_t len, char *title,ch
 static void flac_read(FILE *f, char *title,char *artist,char *album,char *genre,
                       char *album_artist, int *track, int *disc, int *rerr){
     unsigned char magic[4];
-    if(fread(magic,1,4,f)!=4 || memcmp(magic,"fLaC",4)!=0) return;
+    if(fread(magic,1,4,f)!=4 || memcmp(magic,"fLaC",4)!=0) { if(rerr)*rerr=1; return; }
+    struct stat st;
+    if(fstat(fileno(f),&st)!=0){ if(rerr)*rerr=1; return; }
     for(int guard=0; guard<256; guard++){
         unsigned char h[4];
-        if(fread(h,1,4,f)!=4) return;
+        if(fread(h,1,4,f)!=4){ if(rerr)*rerr=1; return; }
         int last = h[0]&0x80, type = h[0]&0x7f;
         uint32_t len = ((uint32_t)h[1]<<16)|((uint32_t)h[2]<<8)|h[3];
+        off_t at=ftello(f);
+        if(at<0 || at>st.st_size || len>(uint64_t)(st.st_size-at)){ if(rerr)*rerr=1; return; }
         if(type==4){                                    /* VORBIS_COMMENT */
-            if(len<8 || len>1024*1024) return;
+            if(len<8 || len>1024*1024){ if(rerr)*rerr=1; return; }
             unsigned char *b=malloc(len); if(!b){ if(rerr)*rerr=1; return; }   /* OOM: signal a real read failure (ferror won't catch it) */
-            if(fread(b,1,len,f)!=len){ free(b); return; }                      /* short read: ferror() in tags_from_file distinguishes IO error from EOF */
-            vorbis_comments(b,len,title,artist,album,genre,album_artist,track,disc);
+            if(fread(b,1,len,f)!=len){ if(rerr)*rerr=1; free(b); return; }                      /* short read: ferror() in tags_from_file distinguishes IO error from EOF */
+            if(!vorbis_comments(b,len,title,artist,album,genre,album_artist,track,disc)){
+                if(rerr) *rerr=1;
+            }
             free(b);
             return;                                      /* got the comment block */
         }
         if(last) return;
-        if(fseek(f,(long)len,SEEK_CUR)!=0){ if(rerr && errno==EIO) *rerr=1; return; }   /* seek IO error (ferror won't catch it) */
+        if(fseek(f,(long)len,SEEK_CUR)!=0){ if(rerr) *rerr=1; return; }   /* seek failure (ferror will not catch every errno) */
     }
+    if(rerr)*rerr=1;
 }
 
 /* ---- MP4 / M4A (iTunes-style metadata) ----
@@ -498,25 +517,38 @@ static void mp4_take(const unsigned char *key, const unsigned char *v, long vn,
  * forever or rewind. fseek/ftell failures set rerr (ferror never catches those). */
 /* off_t (64-bit on musl for every arch) + fseeko/ftello so a book >=2GiB is walked correctly instead of
  * failing the whole tag/chapter read on a 32-bit `long` file offset. */
-static int mp4_find_child(FILE *f, off_t start, off_t end, const char *type,
-                          off_t *cpay, uint64_t *cpsz, int *rerr){
+static int mp4_find_child_checked(FILE *f, off_t start, off_t end, const char *type,
+                          off_t *cpay, uint64_t *cpsz, int *rerr, int *bad){
     if(fseeko(f, start, SEEK_SET) != 0){ if(rerr) *rerr = 1; return 0; }
     for(;;){
         off_t here = ftello(f);
         if(here < 0){ if(rerr) *rerr = 1; return 0; }
-        if(here >= end || end - here < 8) break;          /* no room for another header (end-here avoids here+8 overflow near the max) */
+        if(here >= end) break;
+        if(end - here < 8){ if(bad) *bad = 1; break; }          /* no room for another header (end-here avoids here+8 overflow near the max) */
         unsigned char h[16];
-        if(fread(h,1,8,f) != 8) break;                   /* clean EOF/short (ferror catches real IO) */
+        if(fread(h,1,8,f) != 8){ if(bad && rerr) *rerr = 1; break; }                   /* clean EOF/short (ferror catches real IO) */
         uint64_t sz = be32(h); int hdr = 8;
-        if(sz == 1){ if(end - here < 16 || fread(h+8,1,8,f)!=8) break; sz = ((uint64_t)be32(h+8)<<32)|be32(h+12); hdr = 16; }
+        if(sz == 1){
+            if(end - here < 16){ if(bad) *bad = 1; break; }
+            if(fread(h+8,1,8,f)!=8){ if(bad && rerr) *rerr = 1; break; }
+            sz = ((uint64_t)be32(h+8)<<32)|be32(h+12); hdr = 16;
+        }
         else if(sz == 0) sz = (uint64_t)(end - here);    /* runs to the end of the parent */
-        if(sz < (uint64_t)hdr) break;                    /* smaller than its own header */
-        if(sz > (uint64_t)(end - here)) break;           /* overruns the parent */
+        if(sz < (uint64_t)hdr){ if(bad) *bad = 1; break; }                    /* smaller than its own header */
+        if(sz > (uint64_t)(end - here)){ if(bad) *bad = 1; break; }           /* overruns the parent */
         if(memcmp(h+4,type,4)==0){ *cpay = here + hdr; *cpsz = sz - (uint64_t)hdr; return 1; }
         if(sz > (uint64_t)(INT64_MAX - here)) break;     /* next offset would overflow/rewind */
         if(fseeko(f, here + (off_t)sz, SEEK_SET) != 0){ if(rerr) *rerr = 1; return 0; }
     }
     return 0;
+}
+
+static int mp4_find_child(FILE *f, off_t start, off_t end, const char *type,
+                          off_t *cpay, uint64_t *cpsz, int *rerr){
+    int bad=0;
+    int found=mp4_find_child_checked(f,start,end,type,cpay,cpsz,rerr,&bad);
+    if(bad && rerr)*rerr=1;
+    return found;
 }
 
 /* Locate moov/udta: its payload's file offset + size. All the tags + chapters + cover live under udta; the
@@ -525,7 +557,7 @@ static int mp4_find_udta(FILE *f, off_t *upay, uint64_t *usz, int *rerr){
     if(fseeko(f, 0, SEEK_END) != 0){ if(rerr) *rerr = 1; return 0; }
     off_t fsz = ftello(f);
     if(fsz < 0){ if(rerr) *rerr = 1; return 0; }   /* ftello error -> a real IO failure, not "no metadata" */
-    if(fsz < 8) return 0;
+    if(fsz < 8){ if(rerr)*rerr=1; return 0; }
     off_t moov_pay; uint64_t moov_psz;
     if(!mp4_find_child(f, 0, fsz, "moov", &moov_pay, &moov_psz, rerr)) return 0;
     off_t moov_end = moov_pay + (off_t)moov_psz;         /* find_child already bounded moov to the file */
@@ -546,7 +578,7 @@ static int mp4_load_udta(FILE *f, unsigned char **out_buf, uint64_t *out_sz, int
     unsigned char *buf = malloc((size_t)udta_sz);
     if(!buf){ if(rerr) *rerr = 1; return 0; }            /* OOM: a real read failure (don't clobber the row) */
     if(fseeko(f, udta_pay, SEEK_SET) != 0){ if(rerr) *rerr = 1; free(buf); return 0; }
-    if(fread(buf,1,(size_t)udta_sz,f) != (size_t)udta_sz){ free(buf); return 0; }
+    if(fread(buf,1,(size_t)udta_sz,f) != (size_t)udta_sz){ if(rerr)*rerr=1; free(buf); return 0; }
     *out_buf = buf; *out_sz = udta_sz;
     return 1;
 }
@@ -568,50 +600,64 @@ static void mp4_read(FILE *f, char *title,char *artist,char *album,char *genre,
     tag_fields saved; tags_save(&saved, title, artist, album, genre, album_artist, track, disc);
     int err0 = ferror(f), ok = 1;
     off_t mts, is; uint64_t msz, isz;
-    if(mp4_find_child(f, up, up + (off_t)usz, "meta", &mts, &msz, rerr) &&
-       /* the iTunes `meta` atom carries 4 version/flags bytes before its children; some writers omit them */
-       (mp4_find_child(f, mts+4, mts + (off_t)msz, "ilst", &is, &isz, rerr) ||
-        mp4_find_child(f, mts, mts + (off_t)msz, "ilst", &is, &isz, rerr))){
-        off_t p = is, ie = is + (off_t)isz, at = ftello(f);   /* at = the stream position */
-        while(ie - p >= 8){
-            unsigned char h[16];
-            int sk = skip_to(f, &at, p);
-            if(sk){ if(sk == -2 && rerr) *rerr = 1; ok = 0; break; }
-            if(fread(h,1,8,f) != 8){ ok = 0; break; }
-            uint64_t sz = be32(h); int hdr = 8;
-            if(sz == 1){ if(ie - p < 16) break; if(fread(h+8,1,8,f) != 8){ ok = 0; break; } sz = ((uint64_t)be32(h+8)<<32)|be32(h+12); hdr = 16; }
-            else if(sz == 0) sz = (uint64_t)(ie - p);
-            if(sz < (uint64_t)hdr || sz > (uint64_t)(ie - p)) break;
-            at = p + hdr;
-            if(mp4_item_used(h+4)){
-                size_t n = (size_t)(sz - (uint64_t)hdr);
-                unsigned char *b = malloc(n ? n : 1);
-                if(!b){ if(rerr) *rerr = 1; ok = 0; break; }                       /* OOM: a real read failure (don't clobber the row) */
-                if(fread(b,1,n,f) != n){ free(b); ok = 0; break; }
-                at += (off_t)n;
-                long dts, dte;
-                if(mp4_child(b, 0, (long)n, "data", &dts, &dte) && dte - dts >= 8)
-                    mp4_take(h+4, b+dts+8, dte-dts-8, title,artist,album,genre,album_artist,track,disc);
-                free(b);
+    if(mp4_find_child(f, up, up + (off_t)usz, "meta", &mts, &msz, rerr)){
+        if(msz && msz<4){ if(rerr)*rerr=1; return; }
+        /* QuickTime may omit FullBox flags. Select that layout only from a
+         * bounded child header with a real atom type, never from a size-zero
+         * interpretation of the flags. Parse the selected layout just once. */
+        off_t children = mts + (msz >= 4 ? 4 : 0);
+        unsigned char h[16];
+        if(msz >= 8){
+            if(fseeko(f,mts,SEEK_SET) || fread(h,1,8,f)!=8){ if(rerr)*rerr=1; return; }
+            uint64_t sz=be32(h); unsigned hdr=8;
+            if(sz==1 && msz>=16){
+                if(fread(h+8,1,8,f)!=8){ if(rerr)*rerr=1; return; }
+                sz=((uint64_t)be32(h+8)<<32)|be32(h+12); hdr=16;
             }
-            p += (off_t)sz;
+            int type=1;
+            for(int i=4;i<8;i++) if(h[i]<32 || h[i]>126) type=0;
+            /* A zero first size is indistinguishable from FullBox flags.
+             * Require an explicit bounded size before choosing flags-less. */
+            if(type && sz>=hdr && sz<=msz) children=mts;
+        }
+        int bad=0,err=0;
+        int found=mp4_find_child_checked(f,children,mts+(off_t)msz,"ilst",&is,&isz,&err,&bad);
+        if((bad || err) && rerr)*rerr=1;
+        if(found){
+            off_t p = is, ie = is + (off_t)isz, at = ftello(f);   /* at = the stream position */
+            while(ie - p >= 8){
+                unsigned char h[16];
+                int sk = skip_to(f, &at, p);
+                if(sk){ if(sk == -2 && rerr) *rerr = 1; ok = 0; break; }
+                if(fread(h,1,8,f) != 8){ ok = 0; break; }
+                uint64_t sz = be32(h); int hdr = 8;
+                if(sz == 1){ if(ie - p < 16){ ok=0; break; } if(fread(h+8,1,8,f) != 8){ ok = 0; break; } sz = ((uint64_t)be32(h+8)<<32)|be32(h+12); hdr = 16; }
+                else if(sz == 0) sz = (uint64_t)(ie - p);
+                if(sz < (uint64_t)hdr || sz > (uint64_t)(ie - p)){ ok=0; break; }
+                at = p + hdr;
+                if(mp4_item_used(h+4)){
+                    size_t n = (size_t)(sz - (uint64_t)hdr);
+                    unsigned char *b = malloc(n ? n : 1);
+                    if(!b){ if(rerr) *rerr = 1; ok = 0; break; }                       /* OOM: a real read failure (don't clobber the row) */
+                    if(fread(b,1,n,f) != n){ free(b); ok = 0; break; }
+                    at += (off_t)n;
+                    long dts, dte;
+                    if(mp4_child(b, 0, (long)n, "data", &dts, &dte) && dte - dts >= 8)
+                        mp4_take(h+4, b+dts+8, dte-dts-8, title,artist,album,genre,album_artist,track,disc);
+                    else ok=0;
+                    free(b);
+                    if(!ok) break;
+                }
+                p += (off_t)sz;
+            }
+            if(p!=ie) ok=0;
         }
     }
-    if(!ok || (!err0 && ferror(f))) tags_restore(&saved, title, artist, album, genre, album_artist, track, disc);
+    if(!ok || (!err0 && ferror(f))){ if(rerr)*rerr=1; tags_restore(&saved, title, artist, album, genre, album_artist, track, disc); }
 }
 
-/* Read Nero 'chpl' chapters (moov/udta/chpl) from an M4B/M4A into out[0..max); returns the count (0 if
- * none/unsupported/malformed). Handles chpl version 0 (count at payload+4) and version 1 (count at
- * payload+8); every field is bounds-checked against the atom. Start times are 100ns ticks -> ms. Titles
- * are length-prefixed UTF-8 (no NUL), truncated only at a code-point boundary; an empty title becomes
- * "Chapter N". QuickTime chapter-track chapters are NOT read here (a later stage). */
-static int scan_read_chapters_leased(const char *path, chapter_t *out, int max){
-    if(!path || !out || max <= 0) return 0;
-    FILE *f = fopen(path, "rb"); if(!f) return 0;
-    unsigned char *buf; uint64_t udta_sz; int rerr = 0;
-    int ok = mp4_load_udta(f, &buf, &udta_sz, &rerr);
-    fclose(f);
-    if(!ok) return 0;
+static int mp4_chapters(const unsigned char *buf, uint64_t udta_sz, chapter_t *out, int max, int *valid){
+    *valid = 0;
     int n = 0;
     long cs, ce;
     if(mp4_child(buf, 0, (long)udta_sz, "chpl", &cs, &ce) && ce - cs >= 5){   /* buf IS the udta payload */
@@ -642,9 +688,27 @@ static int scan_read_chapters_leased(const char *path, chapter_t *out, int max){
                 }
                 q += tl;
             }
+            *valid = !bad;
             if(bad) n = 0;                                     /* a malformed/truncated list -> report none, not a partial one */
         }
     }
+    return n;
+}
+
+/* Read Nero 'chpl' chapters (moov/udta/chpl) from an M4B/M4A into out[0..max); returns the count (0 if
+ * none/unsupported/malformed). Handles chpl version 0 (count at payload+4) and version 1 (count at
+ * payload+8); every field is bounds-checked against the atom. Start times are 100ns ticks -> ms. Titles
+ * are length-prefixed UTF-8 (no NUL), truncated only at a code-point boundary; an empty title becomes
+ * "Chapter N". QuickTime chapter-track chapters are NOT read here (a later stage). */
+static int scan_read_chapters_leased(const char *path, chapter_t *out, int max){
+    if(!path || !out || max <= 0) return 0;
+    FILE *f = fopen(path, "rb"); if(!f) return 0;
+    unsigned char *buf; uint64_t udta_sz; int rerr = 0;
+    int ok = mp4_load_udta(f, &buf, &udta_sz, &rerr);
+    fclose(f);
+    if(!ok) return 0;
+    int valid;
+    int n = mp4_chapters(buf, udta_sz, out, max, &valid);
     free(buf);
     return n;
 }
@@ -694,7 +758,7 @@ static int scan_cancelled(void *ctx){
 /* ---- Ogg Vorbis ----
  * Pages ("OggS", 27-byte header + segment table). The comment header is the stream's SECOND packet
  * ("\x03vorbis" + a Vorbis comment body); it may span pages, so packets are reassembled from the lacing values.
- * Bounded: at most 64 pages and 1 MiB of packet data; only the first logical stream is read. */
+ * Streams comments under AD_TAG_BYTES / AD_TAG_PAGES; only wanted text is retained. */
 static void ogg_read(FILE *f, char *title,char *artist,char *album,char *genre,
                      char *album_artist, int *track, int *disc, int *rerr, int *title_tag){
     unsigned char id[8];
@@ -704,49 +768,64 @@ static void ogg_read(FILE *f, char *title,char *artist,char *album,char *genre,
             unsigned char *tags=NULL; uint32_t len=0;
             long long rc=ad_opus(f,&tags,&len,scan_cancelled,NULL);
             if(rc==AD_CANCELLED){ if(rerr) *rerr=AD_CANCELLED; }
-            else if(rc<0){ if(rerr) *rerr=1; }
+            else if(rc<=0){ if(rerr) *rerr=1; }
             if(rc>0){
-                comments_with_provenance(tags+8,len-8,title,artist,album,genre,album_artist,track,disc,title_tag);
+                if(!comments_with_provenance(tags+8,len-8,title,artist,album,genre,album_artist,track,disc,title_tag) && rerr) *rerr=1;
                 free(tags);
             }
             return;
         }
     }
-    if(fseek(f,0,SEEK_SET)!=0){ if(rerr && errno==EIO) *rerr=1; return; }
-    enum { OGG_MAX = 1024*1024 };
-    unsigned char *pkt = malloc(OGG_MAX);
-    if(!pkt){ if(rerr)*rerr=1; return; }
-    uint32_t plen = 0, serial = 0; int npkt = 0, have_serial = 0;
-    for(int page = 0; page < 64 && npkt < 2; page++){
+    if(fseek(f,0,SEEK_SET)!=0){ if(rerr) *rerr=1; return; }
+    unsigned char *pkt=malloc(1024*1024), *full=malloc(27+255+65025);
+    unsigned char *body=full ? full+27+255 : NULL;
+    if(!pkt || !body){ if(rerr)*rerr=1; free(pkt); free(full); return; }
+    ad_comment_stream comments={0};
+    uint32_t serial=0, seq=0, ident=0, budget=AD_TAG_BYTES;
+    int pending=0, vorbis=0, complete=0;
+    for(unsigned page=0; page<AD_TAG_PAGES; page++){
+        if(scan_cancelled(NULL)){ if(rerr)*rerr=AD_CANCELLED; break; }
         unsigned char h[27], seg[255];
-        if(fread(h,1,27,f)!=27 || memcmp(h,"OggS",4)!=0 || h[4]!=0) break;
-        uint32_t ser = le32(h+14);
-        if(!have_serial){ serial = ser; have_serial = 1; }
-        int nseg = h[26];
-        if(fread(seg,1,(size_t)nseg,f)!=(size_t)nseg) break;
-        if(ser != serial){                                    /* another logical stream: skip its page body */
-            long body = 0; for(int i=0;i<nseg;i++) body += seg[i];
-            if(fseek(f,body,SEEK_CUR)!=0){ if(rerr && errno==EIO) *rerr=1; break; }
-            continue;
-        }
-        for(int i = 0; i < nseg && npkt < 2; i++){
-            uint32_t n = seg[i];
-            if(n > OGG_MAX - plen){ npkt = 99; break; }      /* packet too large for the bound: give up */
-            if(n && fread(pkt+plen,1,n,f)!=n){ npkt = 99; break; }
-            plen += n;
-            if(seg[i] < 255){                                 /* a lacing value < 255 ends the packet */
-                npkt++;
-                if(npkt == 2){
-                    if(plen > 7 && pkt[0]==3 && !memcmp(pkt+1,"vorbis",6))
-                        comments_with_provenance(pkt+7, plen-7, title,artist,album,genre,album_artist,track,disc,title_tag);
-                    break;
+        if(budget<27 || ad_opus_read(f,h,27,scan_cancelled,NULL)!=1 || memcmp(h,"OggS",4) || h[4]) break;
+        unsigned ns=h[26], size=0;
+        if(ad_opus_read(f,seg,ns,scan_cancelled,NULL)!=1) break;
+        for(unsigned i=0;i<ns;i++) size+=seg[i];
+        if(27+ns+size>budget) break;
+        budget-=27+ns+size;
+        if(!page) serial=le32(h+14);
+        body=full+27+255;
+        int rr=ad_opus_read(f,body,size,scan_cancelled,NULL);
+        if(rr!=1){ if(rr==AD_CANCELLED && rerr)*rerr=rr; break; }
+        /* CRC covers the original bytes, including skipped pictures. */
+        memcpy(full,h,27); memcpy(full+27,seg,ns); memmove(full+27+ns,body,size);
+        body=full+27+ns;
+        if(ad_ogg_crc(full,27+ns+size)!=le32(h+22)) break;
+        if(le32(h+14)!=serial) continue;   /* interleaved logical stream, still charged to the work budget */
+        if(le32(h+18)!=seq++ || !!(h[5]&1)!=pending) break;
+        unsigned off=0;
+        for(unsigned i=0;i<ns;i++){
+            unsigned n=seg[i]; pending=n==255;
+            if(!vorbis){
+                if(n>1024*1024-ident) goto ogg_done;
+                memcpy(pkt+ident,body+off,n); ident+=n;
+                if(!pending){
+                    if(ident<7 || pkt[0]!=1 || memcmp(pkt+1,"vorbis",6)) goto ogg_done;
+                    vorbis=1;
                 }
-                plen = 0;                                     /* packet 1 (identification) done: start packet 2 */
+            } else {
+                if(ad_comment_feed(&comments,pkt,body+off,n)!=1) goto ogg_done;
+                if(!pending){
+                    if(ad_comment_finish(&comments,pkt))
+                        complete=comments_with_provenance(pkt+7,comments.used-7,title,artist,album,genre,album_artist,track,disc,title_tag);
+                    goto ogg_done;
+                }
             }
+            off+=n;
         }
-        if(npkt >= 2) break;
     }
-    free(pkt);
+ogg_done:
+    if(!complete && rerr && *rerr!=AD_CANCELLED) *rerr=scan_cancelled(NULL) ? AD_CANCELLED : 1;
+    free(full); free(pkt);
 }
 
 /* ---- APE (APEv2 tag) ----
@@ -762,19 +841,20 @@ static void ape_read(FILE *f, char *title,char *artist,char *album,char *genre,
         if(fread(ft,1,32,f)!=32) return;
         if(memcmp(ft,"APETAGEX",8)!=0) continue;
         uint32_t size = le32(ft+12), items = le32(ft+16);
-        if(size < 32 || size > 1024*1024 || items > 512) return;
+        if(size < 32 || size > 1024*1024 || items > 512){ if(rerr)*rerr=1; return; }
         uint32_t blen = size - 32;                                  /* the items, before the footer */
-        if(fseek(f, ends[k] - (long)blen, SEEK_END)!=0){ if(rerr && errno==EIO) *rerr=1; return; }
+        if(fseek(f, ends[k] - (long)blen, SEEK_END)!=0){ if(rerr)*rerr=1; return; }
         unsigned char *b = malloc(blen ? blen : 1);
         if(!b){ if(rerr)*rerr=1; return; }
-        if(fread(b,1,blen,f)!=blen){ free(b); return; }
+        if(fread(b,1,blen,f)!=blen){ if(rerr)*rerr=1; free(b); return; }
         uint32_t off = 0;
-        for(uint32_t i = 0; i < items && off + 8 <= blen; i++){
+        for(uint32_t i = 0; i < items; i++){
+            if(blen-off<8){ if(rerr)*rerr=1; break; }
             uint32_t vlen = le32(b+off), flags = le32(b+off+4); off += 8;
             uint32_t kend = off; while(kend < blen && b[kend]) kend++;
-            if(kend >= blen) break;                                  /* key must be NUL-terminated inside */
+            if(kend >= blen){ if(rerr)*rerr=1; break; }                                  /* key must be NUL-terminated inside */
             const char *key = (const char *)b+off; off = kend + 1;
-            if(vlen > blen - off) break;                             /* overflow-safe */
+            if(vlen > blen - off){ if(rerr)*rerr=1; break; }                             /* overflow-safe */
             if(((flags >> 1) & 3) == 0){                             /* UTF-8 text item */
                 char v[TAGLEN];
                 uint32_t n = vlen < sizeof v - 1 ? vlen : (uint32_t)sizeof v - 1;
@@ -815,41 +895,44 @@ static void id3v2_read_bounded(FILE *f, off_t room, char *title,char *artist,cha
                                char *album_artist, int *track, int *disc, int *rerr){
     off_t at = ftello(f);
     unsigned char h[10];
-    if(at < 0 || room < 10 || fread(h,1,10,f)!=10) return;
-    if(memcmp(h,"ID3",3)!=0 || ((h[6]|h[7]|h[8]|h[9]) & 0x80)) return;
+    if(at < 0 || room < 10 || fread(h,1,10,f)!=10){ if(rerr)*rerr=1; return; }
+    if(memcmp(h,"ID3",3)!=0 || ((h[6]|h[7]|h[8]|h[9]) & 0x80)){ if(rerr)*rerr=1; return; }
     off_t need = 10 + (off_t)synch32(h+6);
-    if(need > room) return;                                   /* claims more than its chunk: not read */
-    if(fseeko(f, at, SEEK_SET)!=0){ if(rerr && errno==EIO) *rerr=1; return; }
+    if(need > room){ if(rerr)*rerr=1; return; }                                   /* claims more than its chunk: not read */
+    if(fseeko(f, at, SEEK_SET)!=0){ if(rerr) *rerr=1; return; }
     id3v2_read(f,title,artist,album,genre,album_artist,track,disc,rerr);
 }
 static void aiff_read(FILE *f, char *title,char *artist,char *album,char *genre,
                       char *album_artist, int *track, int *disc, int *rerr){
     unsigned char h[12];
-    if(fread(h,1,12,f)!=12 || memcmp(h,"FORM",4)!=0 || (memcmp(h+8,"AIFF",4)!=0 && memcmp(h+8,"AIFC",4)!=0)) return;
+    if(fread(h,1,12,f)!=12 || memcmp(h,"FORM",4)!=0 || (memcmp(h+8,"AIFF",4)!=0 && memcmp(h+8,"AIFC",4)!=0)) { if(rerr)*rerr=1; return; }
     off_t fsz = file_size(f);
-    if(fsz < 0){ if(rerr) *rerr = 1; return; }
+    if(fsz < 12 || be32(h+4)>(uint64_t)(fsz-8)){ if(rerr)*rerr=1; return; }
     char name[TAGLEN] = "", auth[TAGLEN] = "";
-    for(int guard = 0; guard < 256; guard++){
+    int guard;
+    for(guard = 0; guard < 256; guard++){
         unsigned char c[8];
-        if(fread(c,1,8,f)!=8) break;
+        size_t nh=fread(c,1,8,f);
+        if(nh!=8){ if(nh && rerr)*rerr=1; break; }
         off_t here = ftello(f);
         if(here < 0){ if(rerr) *rerr = 1; break; }
         off_t len = (off_t)be32(c+4);
-        if(len > fsz - here) break;                           /* checked BEFORE any arithmetic: a chunk inside the file */
+        if(len > fsz - here){ if(rerr)*rerr=1; break; }                           /* checked BEFORE any arithmetic: a chunk inside the file */
         if(!memcmp(c,"ID3 ",4) || !memcmp(c,"id3 ",4)){
             id3v2_read_bounded(f,len,title,artist,album,genre,album_artist,track,disc,rerr);
         } else if((!memcmp(c,"NAME",4) || !memcmp(c,"AUTH",4)) && len > 0){
             char *dst = !memcmp(c,"NAME",4) ? name : auth;
             size_t n = len < TAGLEN - 1 ? (size_t)len : TAGLEN - 1;
             unsigned char t[TAGLEN];
-            if(fread(t,1,n,f)!=n) break;
+            if(fread(t,1,n,f)!=n){ if(rerr)*rerr=1; break; }
             id3_decode(0, t, (int)n, dst, TAGLEN);               /* plain text (Latin-1 per the spec) */
         }
         if(len >= fsz - here) break;                          /* this chunk (pad byte aside) runs to the end: nothing follows */
         off_t next = here + len + (len & 1);                  /* no overflow: len < fsz - here, so here+len+1 <= fsz */
         if(next >= fsz) break;
-        if(fseeko(f,next,SEEK_SET)!=0){ if(rerr && errno==EIO) *rerr=1; break; }
+        if(fseeko(f,next,SEEK_SET)!=0){ if(rerr) *rerr=1; break; }
     }
+    if(guard==256 && rerr)*rerr=1;
     if(!title[0] && name[0]) snprintf(title,TAGLEN,"%s",name);
     if(!artist[0] && auth[0]) snprintf(artist,TAGLEN,"%s",auth);
 }
@@ -860,12 +943,13 @@ static void aiff_read(FILE *f, char *title,char *artist,char *album,char *genre,
 static void dsf_read(FILE *f, char *title,char *artist,char *album,char *genre,
                      char *album_artist, int *track, int *disc, int *rerr){
     unsigned char h[28];
-    if(fread(h,1,28,f)!=28 || memcmp(h,"DSD ",4)!=0) return;
+    if(fread(h,1,28,f)!=28 || memcmp(h,"DSD ",4)!=0) { if(rerr)*rerr=1; return; }
     uint64_t meta  = (uint64_t)le32(h+20) | (uint64_t)le32(h+24) << 32;
     off_t fsz = file_size(f);                                /* the REAL size, not the header's claim */
     if(fsz < 0){ if(rerr) *rerr = 1; return; }
-    if(meta < 28 || meta >= (uint64_t)fsz) return;           /* 0 = no metadata; must lie inside the file */
-    if(fseeko(f,(off_t)meta,SEEK_SET)!=0){ if(rerr && errno==EIO) *rerr=1; return; }
+    if(!meta) return;
+    if(meta < 28 || meta >= (uint64_t)fsz){ if(rerr)*rerr=1; return; }           /* 0 = no metadata; must lie inside the file */
+    if(fseeko(f,(off_t)meta,SEEK_SET)!=0){ if(rerr) *rerr=1; return; }
     id3v2_read_bounded(f,fsz-(off_t)meta,title,artist,album,genre,album_artist,track,disc,rerr);
 }
 
@@ -886,34 +970,38 @@ static void utf16le_decode(const unsigned char *in, uint32_t n, char *out, int c
 static void wma_read(FILE *f, char *title,char *artist,char *album,char *genre,
                      char *album_artist, int *track, int *disc, int *rerr){
     unsigned char h[30];
-    if(fread(h,1,30,f)!=30 || memcmp(h,ASF_HDR,16)!=0) return;
+    if(fread(h,1,30,f)!=30 || memcmp(h,ASF_HDR,16)!=0) { if(rerr)*rerr=1; return; }
     uint64_t hsize = (uint64_t)le32(h+16) | (uint64_t)le32(h+20) << 32;
     uint32_t nobj = le32(h+24);
-    if(hsize <= 30 || hsize > 1024*1024 || nobj > 1024) return;
+    if(hsize <= 30 || hsize > 1024*1024 || nobj > 1024){ if(rerr)*rerr=1; return; }
     uint32_t blen = (uint32_t)hsize - 30;
     unsigned char *b = malloc(blen);
     if(!b){ if(rerr)*rerr=1; return; }
-    if(fread(b,1,blen,f)!=blen){ free(b); return; }
+    if(fread(b,1,blen,f)!=blen){ if(rerr)*rerr=1; free(b); return; }
     uint32_t off = 0;
-    for(uint32_t o = 0; o < nobj && off + 24 <= blen; o++){
+    for(uint32_t o = 0; o < nobj; o++){
+        if(blen-off<24){ if(rerr)*rerr=1; break; }
         uint64_t osz = (uint64_t)le32(b+off+16) | (uint64_t)le32(b+off+20) << 32;
-        if(osz < 24 || osz > blen - off) break;
+        if(osz < 24 || osz > blen - off){ if(rerr)*rerr=1; break; }
         const unsigned char *d = b + off + 24; uint32_t dl = (uint32_t)osz - 24;
+        if((!memcmp(b+off,ASF_CD,16) && dl<10) || (!memcmp(b+off,ASF_ECD,16) && dl<2)){ if(rerr)*rerr=1; break; }
         if(!memcmp(b+off,ASF_CD,16) && dl >= 10){
             uint32_t tl = d[0]|d[1]<<8, al = d[2]|d[3]<<8, cl = d[4]|d[5]<<8, dsl = d[6]|d[7]<<8, rl = d[8]|d[9]<<8;
-            (void)cl; (void)dsl; (void)rl;
+            if(tl+al+cl+dsl+rl>dl-10){ if(rerr)*rerr=1; break; }
             uint32_t p = 10;
             if(tl <= dl - p){ if(!title[0]) utf16le_decode(d+p, tl, title, TAGLEN); p += tl; } else p = dl;
             if(al <= dl - p){ if(!artist[0]) utf16le_decode(d+p, al, artist, TAGLEN); }
         } else if(!memcmp(b+off,ASF_ECD,16) && dl >= 2){
             uint32_t cnt = d[0]|d[1]<<8, p = 2;
-            for(uint32_t i = 0; i < cnt && i < 512 && p + 2 <= dl; i++){
+            if(cnt>512){ if(rerr)*rerr=1; break; }
+            for(uint32_t i = 0; i < cnt; i++){
+                if(dl-p<2){ if(rerr)*rerr=1; break; }
                 uint32_t nl = d[p]|d[p+1]<<8; p += 2;
-                if(nl > dl - p) break;
+                if(nl > dl - p){ if(rerr)*rerr=1; break; }
                 char nm[64]; utf16le_decode(d+p, nl, nm, sizeof nm); p += nl;
-                if(p + 4 > dl) break;
+                if(dl-p<4){ if(rerr)*rerr=1; break; }
                 uint32_t vt = d[p]|d[p+1]<<8, vl = d[p+2]|d[p+3]<<8; p += 4;
-                if(vl > dl - p) break;
+                if(vl > dl - p){ if(rerr)*rerr=1; break; }
                 const unsigned char *v = d+p;
                 char val[TAGLEN] = "";
                 if(vt == 0) utf16le_decode(v, vl, val, TAGLEN);                        /* Unicode string */
@@ -1050,6 +1138,49 @@ static const char *DUROK_INS = "INSERT OR IGNORE INTO book_dur_ok(PATH) VALUES(?
 
 static sqlite3 *g_db;
 static sqlite3_stmt *g_ins, *g_upd, *g_seen, *g_cuechk, *g_bookok, *g_durok;
+/* One byte predicate for SONG, BOOKS and CUE retirement. No text collation or wildcard rules.
+ * ROOT has no trailing slash; the explicit boundary keeps Album2 outside Album. */
+#define PRUNE_ALLOWED(path) \
+    "NOT EXISTS (SELECT 1 FROM protected_roots WHERE ROOT=CAST(" path " AS BLOB)) AND " \
+    "NOT EXISTS (WITH RECURSIVE cuts(n) AS (" \
+    "SELECT instr(CAST(" path " AS BLOB),x'2f') UNION ALL " \
+    "SELECT n+instr(substr(CAST(" path " AS BLOB),n+1),x'2f') FROM cuts " \
+    "WHERE n>0 AND instr(substr(CAST(" path " AS BLOB),n+1),x'2f')>0) " \
+    "SELECT 1 FROM cuts JOIN protected_roots AS P " \
+    "ON P.ROOT=substr(CAST(" path " AS BLOB),1,n-1) AND P.SUBTREE=1 WHERE n>0)"
+static const char *PROTECT_DDL =
+    "CREATE TEMP TABLE IF NOT EXISTS protected_roots(ROOT BLOB NOT NULL, SUBTREE INTEGER NOT NULL,"
+    "PRIMARY KEY(ROOT,SUBTREE)); DELETE FROM protected_roots;";
+static sqlite3_stmt *g_protect;
+static unsigned g_protect_count;
+static void protect_root(const char *path, int subtree, const char *reason){
+    /* Log at most 16 bounded paths, as hex bytes so names cannot inject log lines. */
+    if(g_protect_count++ < 16){
+        char hex[129]; size_t n = strlen(path); if(n > 64) n = 64;
+        for(size_t i = 0; i < n; i++) snprintf(hex + 2*i, 3, "%02x", (unsigned char)path[i]);
+        hex[2*n] = 0;
+        fprintf(stderr,"scanner: protect %s %s path_hex=%s%s\n", reason,
+                subtree ? "subtree" : "exact", hex, strlen(path) > n ? "..." : "");
+    }
+    if(!g_protect || sqlite3_reset(g_protect) != SQLITE_OK
+       || sqlite3_clear_bindings(g_protect) != SQLITE_OK
+       || sqlite3_bind_blob(g_protect, 1, path, (int)strlen(path), SQLITE_TRANSIENT) != SQLITE_OK
+       || sqlite3_bind_int(g_protect, 2, subtree) != SQLITE_OK
+       || sqlite3_step(g_protect) != SQLITE_DONE){
+        if(!g_prune_blocked) fprintf(stderr,"scanner: protection failed -> rollback\n");
+        g_prune_blocked = 1;
+        g_scan_err = 1;   /* CUE retirement may already have run before an ISO read failed. */
+    }
+}
+static void protect_parent(const char *path, const char *reason){
+    char parent[MAXPATH]; const char *slash = strrchr(path, '/');
+    if(!slash || slash == path){ protect_root(SCAN_ROOT, 1, reason); return; }
+    size_t n = (size_t)(slash - path);
+    if(n >= sizeof parent){ protect_root(SCAN_ROOT, 1, reason); return; }
+    memcpy(parent, path, n); parent[n] = 0;
+    protect_root(parent, 1, reason);
+}
+
 /* L39: a CUE/ISO backing file (e.g. one .flac holding many virtual tracks) has DB rows that share its
  * PATH but carry IS_CUE=1/IS_ISO=1 + per-track TITLE/TRACK/OFFSET. A rescan must NOT overwrite those
  * (UPDATE ... WHERE PATH=? would hit them) nor add a duplicate plain row - so we skip such a path. */
@@ -1112,9 +1243,14 @@ static void upsert_song(const char *path, const char *fname){
     int tst = tags_with_provenance(path, fname, title, artist, album, genre, album_artist, &track, &disc, &dur_ms, &title_tag);
     if(tst==AD_CANCELLED || atomic_load(&g_abort)){ g_scan_err=1; return; }
     if(tst == 0){
-        mark_seen(path);   /* couldn't open this pass -> preserve the entire existing row, no insert */
+        mark_seen(path);   /* observed, but it may back virtual CUE tracks */
+        protect_root(path, 0, "audio-open");
         g_skipped++;
         return;
+    }
+    if(tst < 0 || dur_ms < 0){
+        protect_root(path, 0, "audio-read");
+        if(g_scan_err) return;
     }
     /* record as seen (drives the post-walk delete of paths that vanished from the SD) */
     sqlite3_reset(g_seen); sqlite3_clear_bindings(g_seen);
@@ -1215,7 +1351,7 @@ static void upsert_song(const char *path, const char *fname){
  * tracks it no longer lists go, and the file becomes diskOS's. A file with stock CUE rows BESIDE its ordinary row
  * (stock's embedded-sheet shape) is never touched by an external sheet. A sheet may only name a file the walk itself indexed (no "..", no absolute path; "." and empty parts
  * are dropped), so symlinks and paths outside the card are never reached. A sheet that cannot be READ (I/O error)
- * blocks this cleanup and the prune, like any unreadable entry. Sheets for .m4b audiobooks and sheets with non-AUDIO
+ * protects its parent subtree from retirement and pruning. Sheets for .m4b audiobooks and sheets with non-AUDIO
  * tracks are ignored. Work is bounded: 256 KB per sheet, 32 MB of sheets per scan. */
 #define CUE_MAX_BYTES  (256 * 1024)
 #define CUE_MAX_TRACKS 99
@@ -1232,12 +1368,12 @@ static char (*g_cues)[MAXPATH];   /* .cue paths seen by the walk (processed afte
 static int g_ncues, g_cues_cap;
 
 static void cue_note(const char *path){
-    if(g_ncues >= CUE_MAX_SHEETS){ g_prune_blocked = 1; return; }   /* can't track it -> never delete rows it may own */
+    if(g_ncues >= CUE_MAX_SHEETS){ protect_parent(path, "cue-count"); return; }   /* can't track it -> never delete rows it may own */
     if(g_ncues == g_cues_cap){
         int nc = g_cues_cap ? g_cues_cap * 2 : 64;
         if(nc > CUE_MAX_SHEETS) nc = CUE_MAX_SHEETS;
         void *p = realloc(g_cues, (size_t)nc * sizeof *g_cues);
-        if(!p){ g_prune_blocked = 1; return; }
+        if(!p){ protect_parent(path, "cue-allocation"); return; }
         g_cues = p; g_cues_cap = nc;
     }
     snprintf(g_cues[g_ncues++], MAXPATH, "%s", path);
@@ -1386,7 +1522,8 @@ static int cue_write_file(const cue_sheet_t *cs, const cue_file_t *f, const char
     const char *base = strrchr(audio, '/'); base = base ? base + 1 : audio;
     char title[TAGLEN], artist[TAGLEN], album[TAGLEN], genre[TAGLEN], aa[TAGLEN]; int trk = 0, disc = 0; long long dur = 0;
     int tst = tags_from_file(audio, base, title, artist, album, genre, aa, &trk, &disc, &dur);
-    if(tst == 0 || dur <= 0) return 0;                  /* can't open it, or its length is unknown -> ordinary row */
+    if(tst <= 0 || dur < 0){ protect_root(audio, 0, "cue-audio-read"); return 0; }
+    if(dur == 0) return 0;                  /* readable, length unknown -> ordinary row */
     if(has_ext(audio, ".m4b")) return 0;                /* an audiobook: never a CUE row in the music table */
     { sqlite3_stmt *sh = NULL; int shape = -1;          /* stock embedded shape: CUE rows + ordinary row, not ours */
       if(sqlite3_prepare_v2(g_db, "SELECT EXISTS(SELECT 1 FROM SONG WHERE PATH=?1 AND COALESCE(IS_CUE,0)=1) AND "
@@ -1452,7 +1589,7 @@ static int cue_write_file(const cue_sheet_t *cs, const cue_file_t *f, const char
     if(db_exec_path("INSERT OR IGNORE INTO DISKOS_CUE_FILES(PATH) VALUES(?1);", audio, NULL) != 0) return -1;
     return 1;
 }
-enum { CR_OK, CR_ENOENT, CR_OPEN_ERR, CR_IOERR, CR_SKIP, CR_OOM };
+enum { CR_OK, CR_ENOENT, CR_OPEN_ERR, CR_IOERR, CR_SKIP, CR_OOM, CR_LIMIT };
 /* Read and parse one sheet (<= CUE_MAX_BYTES, UTF-8 or Latin-1, BOM dropped) into *cs. *nread = bytes read (budget). */
 static int cue_read_sheet(const char *cue_path, cue_sheet_t *cs, size_t *nread){
     *nread = 0;
@@ -1464,7 +1601,7 @@ static int cue_read_sheet(const char *cue_path, cue_sheet_t *cs, size_t *nread){
     int err = ferror(fp); fclose(fp);
     *nread = n;
     if(err){ free(raw); return CR_IOERR; }
-    if(n > CUE_MAX_BYTES){ free(raw); return CR_SKIP; }         /* not a sheet we read */
+    if(n > CUE_MAX_BYTES){ free(raw); return CR_LIMIT; }         /* not a sheet we read */
     size_t off = (n >= 3 && (unsigned char)raw[0] == 0xEF && (unsigned char)raw[1] == 0xBB && (unsigned char)raw[2] == 0xBF) ? 3 : 0;
     char *text;
     if(memchr(raw + off, 0, n - off)){ free(raw); return CR_SKIP; }   /* binary / UTF-16: not handled */
@@ -1500,12 +1637,14 @@ int scan_cue_files(const char *cue_path, char (*out)[MAXPATH], int max, int (*se
     return n_out;
 }
 static void cue_process(const char *cue_path, cue_sheet_t *cs){
-    if(g_cue_bytes >= CUE_MAX_TOTAL){ g_prune_blocked = 1; return; }   /* over budget: its rows wait, untouched */
+    if(g_cue_bytes >= CUE_MAX_TOTAL){ protect_parent(cue_path, "cue-budget"); return; }   /* over budget: its rows wait, untouched */
     size_t n; int rc = cue_read_sheet(cue_path, cs, &n);
     g_cue_bytes += (long long)n;
-    if(rc == CR_ENOENT || rc == CR_SKIP) return;
-    if(rc == CR_OPEN_ERR || rc == CR_IOERR){ g_prune_blocked = 1; return; }   /* unreadable sheet: its rows must not be dropped */
-    if(rc == CR_OOM){ g_scan_err = 1; return; }
+    if(rc == CR_SKIP) return;   /* readable invalid replacement: existing retirement policy */
+    if(rc == CR_ENOENT || rc == CR_LIMIT || rc == CR_OPEN_ERR || rc == CR_IOERR){
+        protect_parent(cue_path, "cue-read"); return;
+    }   /* unreadable sheet: its rows must not be dropped */
+    if(rc == CR_OOM){ protect_parent(cue_path, "cue-allocation"); return; }
     if(cs->bad) return;
     for(int i = 0; i < cs->nfiles && !g_scan_err; i++){
         char audio[MAXPATH];
@@ -1521,41 +1660,58 @@ static void cue_finish(void){
     }
     g_cue_bytes = 0; g_cue_up = g_cue_in = g_cue_seen = NULL;
     cue_sheet_t *cs = malloc(sizeof *cs);
-    if(!cs || sqlite3_prepare_v2(g_db, CUE_UPD, -1, &g_cue_up, NULL) != SQLITE_OK
+    if(!cs){
+        for(int i = 0; i < g_ncues && !g_scan_err; i++) protect_parent(g_cues[i], "cue-allocation");
+    } else if(sqlite3_prepare_v2(g_db, CUE_UPD, -1, &g_cue_up, NULL) != SQLITE_OK
            || sqlite3_prepare_v2(g_db, CUE_INS, -1, &g_cue_in, NULL) != SQLITE_OK
            || sqlite3_prepare_v2(g_db, "SELECT 1 FROM seen WHERE PATH=?1;", -1, &g_cue_seen, NULL) != SQLITE_OK) g_scan_err = 1;
-    for(int i = 0; i < g_ncues && !g_scan_err && !atomic_load(&g_abort); i++) cue_process(g_cues[i], cs);
+    for(int i = 0; cs && i < g_ncues && !g_scan_err && !atomic_load(&g_abort); i++) cue_process(g_cues[i], cs);
     free(cs);
     sqlite3_finalize(g_cue_up); sqlite3_finalize(g_cue_in); sqlite3_finalize(g_cue_seen);
     g_cue_up = g_cue_in = g_cue_seen = NULL;
-    if(g_scan_err || g_prune_blocked) return;           /* a sheet may be hidden in a skipped folder: keep all rows */
+    if(g_scan_err || g_prune_blocked) return;           /* preservation failed: keep all rows */
     /* files diskOS expanded that no sheet wrote this scan (deleted or now unusable): the first track turns back into the
      * ordinary row (same ID) and the other tracks go (only DISKOS_CUE_FILES - rows stock wrote are never removed here).
      * At most CUE_MAX_SHEETS per scan; the rest follow on the next one. */
     sqlite3_stmt *q = NULL;
-    if(sqlite3_prepare_v2(g_db, "SELECT PATH FROM DISKOS_CUE_FILES WHERE PATH LIKE '" SCAN_ROOT "/%' "
-                                "AND PATH NOT IN (SELECT PATH FROM cue_claimed) AND PATH NOT IN (SELECT PATH FROM unreadable) LIMIT 4096;", -1, &q, NULL) != SQLITE_OK){
+    if(sqlite3_prepare_v2(g_db, "SELECT PATH, PATH IN (SELECT PATH FROM seen) FROM DISKOS_CUE_FILES WHERE PATH LIKE '" SCAN_ROOT "/%' "
+                                "AND PATH NOT IN (SELECT PATH FROM cue_claimed) AND PATH NOT IN (SELECT PATH FROM unreadable) AND "
+                                PRUNE_ALLOWED("DISKOS_CUE_FILES.PATH") " LIMIT 4096;", -1, &q, NULL) != SQLITE_OK){
         g_scan_err = 1; return;
     }
-    char (*gone)[MAXPATH] = NULL; int ng = 0, cap = 0, rc;
+    struct retired_path { char path[MAXPATH]; int observed; } *gone = NULL;
+    int ng = 0, cap = 0, rc;
     while((rc = sqlite3_step(q)) == SQLITE_ROW){
         const unsigned char *p = sqlite3_column_text(q, 0);
         if(!p) continue;
         if(ng == cap){ int nc = cap ? cap * 2 : 16; void *m = realloc(gone, (size_t)nc * sizeof *gone); if(!m){ rc = SQLITE_NOMEM; break; } gone = m; cap = nc; }
-        snprintf(gone[ng++], MAXPATH, "%s", (const char *)p);
+        gone[ng].observed = sqlite3_column_int(q, 1);
+        snprintf(gone[ng++].path, MAXPATH, "%s", (const char *)p);
     }
     sqlite3_finalize(q);
     if(rc != SQLITE_DONE){ free(gone); g_scan_err = 1; return; }
     for(int i = 0; i < ng && !g_scan_err; i++){
         if(atomic_load(&g_abort)){ g_scan_err = 1; break; }   /* cancel: stop per item */
+        if(gone[i].observed){
+            FILE *f = fopen(gone[i].path, "rb");
+            if(!f){ protect_root(gone[i].path, 0, "cue-retirement-open"); continue; }
+            int bad = fgetc(f) == EOF && ferror(f);
+            fclose(f);
+            if(bad){ protect_root(gone[i].path, 0, "cue-retirement-read"); continue; }
+        }
         if(db_exec_path("UPDATE SONG SET IS_CUE=0,TRACK=0,DISC=0,OFFSET=0,ALBUM_ARTIST_CODE=0 WHERE ID=(SELECT MIN(ID) FROM SONG WHERE PATH=?1 "
                         "AND COALESCE(IS_CUE,0)=1) AND NOT EXISTS (SELECT 1 FROM SONG WHERE PATH=?1 AND COALESCE(IS_CUE,0)=0 "
-                        "AND COALESCE(IS_ISO,0)=0);", gone[i], NULL) != 0
-           || db_exec_path("DELETE FROM SONG WHERE PATH=?1 AND COALESCE(IS_CUE,0)=1;", gone[i], NULL) != 0
-           || db_exec_path("DELETE FROM DISKOS_CUE_FILES WHERE PATH=?1;", gone[i], NULL) != 0){ g_scan_err = 1; break; }
+                        "AND COALESCE(IS_ISO,0)=0);", gone[i].path, NULL) != 0
+           || db_exec_path("DELETE FROM SONG WHERE PATH=?1 AND COALESCE(IS_CUE,0)=1;", gone[i].path, NULL) != 0
+           || db_exec_path("DELETE FROM DISKOS_CUE_FILES WHERE PATH=?1;", gone[i].path, NULL) != 0){ g_scan_err = 1; break; }
         struct stat st;
-        const char *b = strrchr(gone[i], '/');
-        if(lstat(gone[i], &st) == 0 && S_ISREG(st.st_mode) && b && is_audio(b + 1)) upsert_song(gone[i], b + 1);
+        const char *b = strrchr(gone[i].path, '/');
+        unsigned protections = g_protect_count;
+        if(lstat(gone[i].path, &st) == 0 && S_ISREG(st.st_mode) && b && is_audio(b + 1))
+            upsert_song(gone[i].path, b + 1);
+        else if(gone[i].observed) g_scan_err = 1;
+        /* A failed refresh was discovered after retirement writes: undo the scan. */
+        if(g_protect_count != protections) g_scan_err = 1;
     }
     free(gone);
 }
@@ -1584,11 +1740,11 @@ static void cue_finish(void){
 static char (*g_isos)[MAXPATH];
 static int g_nisos, g_isos_cap;
 static void iso_note(const char *path){
-    if(g_nisos >= ISO_MAX){ g_prune_blocked = 1; return; }
+    if(g_nisos >= ISO_MAX){ protect_root(path, 0, "iso-count"); return; }
     if(g_nisos == g_isos_cap){
         int nc = g_isos_cap ? g_isos_cap * 2 : 16; if(nc > ISO_MAX) nc = ISO_MAX;
         void *p = realloc(g_isos, (size_t)nc * sizeof *g_isos);
-        if(!p){ g_prune_blocked = 1; return; }
+        if(!p){ protect_root(path, 0, "iso-allocation"); return; }
         g_isos = p; g_isos_cap = nc;
     }
     snprintf(g_isos[g_nisos++], MAXPATH, "%s", path);
@@ -1632,7 +1788,7 @@ typedef struct { int n; long long dur[255]; char title[255][TAGLEN], perf[255][T
 static int iso_parse(const char *path, iso_disc_t *d){
     memset(d, 0, sizeof *d);
     FILE *f = fopen(path, "rb");
-    if(!f) return errno == ENOENT ? 0 : -1;
+    if(!f) return -1;   /* listed image became unopenable: not an invalid replacement */
     off_t fsz = file_size(f);
     unsigned char m[ISO_SECT], t[ISO_SECT], s[ISO_SECT];
     int ok = 0;
@@ -1750,11 +1906,14 @@ static void iso_write(const char *path, const iso_disc_t *d){
 }
 static void iso_finish(void){
     iso_disc_t *d = malloc(sizeof *d);
-    if(!d){ if(g_nisos) g_scan_err = 1; return; }
+    if(!d){
+        for(int i = 0; i < g_nisos && !g_scan_err; i++) protect_root(g_isos[i], 0, "iso-allocation");
+        return;
+    }
     for(int i = 0; i < g_nisos && !g_scan_err && !atomic_load(&g_abort); i++){
         int r = iso_parse(g_isos[i], d);
         if(r > 0) iso_write(g_isos[i], d);
-        else if(r < 0) g_prune_blocked = 1;                 /* an image we couldn't READ: keep its rows, prune nothing */
+        else if(r < 0) protect_root(g_isos[i], 0, "iso-read");                 /* unreadable image: retain all its tracks */
         else {                                              /* read fine but no longer a usable SACD image: its rows go */
             pthread_mutex_lock(&g_mu); g_done++; pthread_mutex_unlock(&g_mu);   /* a card read in full: the removal commits */
             sqlite3_stmt *del = NULL;
@@ -1782,22 +1941,20 @@ static void walk(const char *dir, int depth){
                                                 * (g_scan_err also blocks the commit, keeping the library) */
         if(e->d_name[0]=='.'){
             if(e->d_name[1]==0 || (e->d_name[1]=='.'&&e->d_name[2]==0)) continue;   /* . / .. */
-            /* Our OWN app-owned art-cache dir (SCAN_ROOT/.diskos) holds no indexed audio, so it must NOT
-             * block the prune. Without this skip EVERY scan sets g_prune_blocked and neither vanished songs
-             * NOR vanished/renamed books are ever pruned. Restrict to depth 0 (the real cache dir at the SD
-             * root): a user's ".diskos" deeper in the tree may hold indexed songs and must still block. */
+            /* Root .diskos is our cache, with no indexed audio. A nested .diskos is a
+             * user's directory and receives the same subtree protection as other dot-directories. */
             if(depth == 0 && strcmp(e->d_name, ".diskos") == 0) continue;
-            /* other dotfile/dotdir: don't index it, but a skipped dot-DIRECTORY may hold songs already
-             * in the DB that this walk won't re-see, so block the vanished-row prune to avoid deleting them. */
             int wl = snprintf(path,sizeof path,"%s/%s",dir,e->d_name);
             struct stat ds;
-            /* block the prune if this skipped dot-entry is a directory (may hold indexed songs) OR we
-             * could not stat it (unknown type -> stay safe, never risk deleting its subtree's rows). */
-            if(wl<=0 || wl>=(int)sizeof path || lstat(path,&ds)!=0 || S_ISDIR(ds.st_mode)) g_prune_blocked = 1;
+            if(wl<=0 || wl>=(int)sizeof path) protect_root(dir, 1, "dot-path-length");
+            else if(lstat(path,&ds)!=0) protect_root(dir, 1, "dot-unresolved");
+            else if(S_ISDIR(ds.st_mode)) protect_root(path, 1, "dot-directory");
             continue;
         }
         int w = snprintf(path,sizeof path,"%s/%s",dir,e->d_name);
-        if(w<0 || w>=(int)sizeof path){ g_skipped++; g_prune_blocked=1; continue; }   /* overlong path unknowable -> can't preserve its row -> block the prune */
+        if(w<0 || w>=(int)sizeof path){
+            g_skipped++; protect_root(dir, 1, "path-length"); continue;
+        }
         struct stat st;
         /* Failing the whole scan on ANY per-file lstat error was the killer bug: every real exFAT SD
          * has entries that readdir lists but lstat can't resolve (ENOENT) - orphaned entries and, on
@@ -1808,16 +1965,8 @@ static void walk(const char *dir, int depth){
          * stays fatal so we never commit a silently-incomplete library over a good one. */
         if(lstat(path,&st)!=0){
             if(errno == ENOENT){
-                if(is_audio(e->d_name)){
-                    mark_seen(path);   /* preserve the entire existing row (special-char names) */
-                    if(db_exec_path("INSERT OR IGNORE INTO unreadable(PATH) VALUES(?1);", path, NULL) != 0) g_prune_blocked = 1;
-                }
-                else if(e->d_type == DT_REG && !has_ext(e->d_name, ".iso") && !has_ext(e->d_name, ".cue")){
-                    /* readdir says plain file (a special-char .m3u/.jpg): it owns no rows and hides no subtree,
-                     * so it must not block the prune - one such file used to stop vanished songs and images
-                     * from ever leaving the library */
-                } else g_prune_blocked = 1;                /* could be an unresolvable DIRECTORY whose songs we never
-                                                            * walked -> block the prune so its subtree rows aren't deleted */
+                /* Neither a suffix nor d_type proves identity with earlier database bytes. */
+                protect_root(dir, 1, "entry-unresolved");
                 g_skipped++; continue;                     /* unresolvable entry -> skip, best-effort */
             }
             g_scan_err = 1; continue;                        /* real I/O/access error -> don't commit a partial index */
@@ -1869,6 +2018,10 @@ static int scan_busy(void *p, int n){
     usleep(10000);
     return 1;
 }
+static int scan_sql_cancel(void *p){
+    (void)p;
+    return atomic_load(&g_abort) != 0;
+}
 static void *scan_thread(void *arg){
     g_decode_old_tags = (int)(intptr_t)arg;   /* immutable for this whole scan */
     int ok=0, found=0;
@@ -1885,6 +2038,7 @@ static void *scan_thread(void *arg){
     }
     if(sqlite3_open_v2(DB_PATH,&g_db,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_FULLMUTEX,NULL)==SQLITE_OK){
         sqlite3_busy_handler(g_db, scan_busy, NULL);   /* up to 8 s, but gives up at once when a cancel/abort lands */
+        sqlite3_progress_handler(g_db, 1000, scan_sql_cancel, NULL);
         /* Everything that can change song.db (schema migration, index, scratch tables) runs INSIDE the scan
          * transaction, so a cancelled or failed scan rolls back to a byte-identical file. */
         int in_txn = (sqlite3_exec(g_db,"BEGIN IMMEDIATE;",0,0,0)==SQLITE_OK);
@@ -1918,7 +2072,7 @@ static void *scan_thread(void *arg){
         }
         }   /* in_txn */
         int decided = 0;
-        g_ins=NULL; g_upd=NULL; g_seen=NULL; g_cuechk=NULL; g_bookok=NULL; g_durok=NULL;
+        g_ins=NULL; g_upd=NULL; g_seen=NULL; g_cuechk=NULL; g_bookok=NULL; g_durok=NULL; g_protect=NULL;
         /* a required column still missing: roll back and finish now, no walk (retried on the next scan) */
         if(in_txn && !g_scan_err && sqlite3_prepare_v2(g_db, INS_SONG, -1, &g_ins,  NULL)==SQLITE_OK
            && sqlite3_prepare_v2(g_db, UPD_SONG, -1, &g_upd,  NULL)==SQLITE_OK
@@ -1928,14 +2082,17 @@ static void *scan_thread(void *arg){
            && sqlite3_exec(g_db, BOOKOK_DDL, 0,0,0)==SQLITE_OK
            && sqlite3_prepare_v2(g_db, BOOKOK_INS, -1, &g_bookok, NULL)==SQLITE_OK
            && sqlite3_exec(g_db, DUROK_DDL, 0,0,0)==SQLITE_OK
-           && sqlite3_prepare_v2(g_db, DUROK_INS, -1, &g_durok, NULL)==SQLITE_OK){
+           && sqlite3_prepare_v2(g_db, DUROK_INS, -1, &g_durok, NULL)==SQLITE_OK
+           && sqlite3_exec(g_db, PROTECT_DDL, 0,0,0)==SQLITE_OK
+           && sqlite3_prepare_v2(g_db, "INSERT OR IGNORE INTO protected_roots(ROOT,SUBTREE) VALUES(?1,?2);",
+                                 -1, &g_protect, NULL)==SQLITE_OK){
             /* ONE atomic transaction: the whole MERGE (UPDATE existing / INSERT new / DELETE vanished)
              * commits together, or ROLLBACK on any failure - a failed/partial scan can never corrupt or
              * wipe the library. MERGE (not delete+reinsert) so existing rows KEEP their ID + ACCENT,
              * preserving resume (MEMORY_PLAY.MUSIC_ID) + favourites (MY_LOVE.ID) + art-accent across a
              * rescan. Only mp3/flac/wav rows are ever removed; m4a/ape/dsf/... are never touched. */
             {
-                g_skipped=0; g_prune_blocked=0;
+                g_skipped=0; g_prune_blocked=0; g_protect_count=0;
                 /* Audiobooks live in their OWN table, never SONG (the player queues all of SONG for
                  * music, so a book in SONG would leak into Play-All/shuffle). */
                 sqlite3_exec(g_db,"CREATE TABLE IF NOT EXISTS BOOKS (ID INTEGER PRIMARY KEY autoincrement,"
@@ -1951,16 +2108,13 @@ static void *scan_thread(void *arg){
                 /* observability: one concise line per scan */
                 fprintf(stderr,"scanner: merged %d songs, skipped %d unreadable file(s), scan_err=%d\n",
                         found, g_skipped, g_scan_err);
+                fprintf(stderr,"scanner: protection events=%u global_retention=%d\n", g_protect_count, g_prune_blocked);
                 /* Commit only if the walk found audio AND the SD is STILL mounted afterwards (guards a
                  * card pulled / gone-I/O mid-scan; zero-found rolls back too). Then delete scanned-format
                  * rows whose PATH vanished from the SD - inside the txn, so it rolls back on any failure. */
                 if(found > 0 && !g_scan_err && !atomic_load(&g_abort) && scan_root_ready()){
-                    /* Prune vanished songs - but ONLY when pruning wasn't blocked (!g_prune_blocked: no
-                     * overlong/unknown-type skip, no mark_seen failure) and scoped to THIS mount (PATH
-                     * under SCAN_ROOT). ENOENT/unreadable audio files ARE preserved in `seen`, so they
-                     * don't block; only unknowable skips do. Rows from another mount/source that this
-                     * scanner never inspected must not be touched. If blocked, we still commit the merge
-                     * (UPDATEs/INSERTs) but do NOT delete. */
+                    /* Local uncertainty retains only protected roots. Infrastructure failure keeps
+                     * the global fallback; format and mount restrictions remain unchanged. */
                     static const char *DEL_ABSENT =
                         "DELETE FROM SONG WHERE (lower(PATH) LIKE '%.mp3' OR lower(PATH) LIKE '%.flac'"
                         " OR lower(PATH) LIKE '%.wav' OR lower(PATH) LIKE '%.m4a' OR lower(PATH) LIKE '%.m4b'"
@@ -1969,7 +2123,7 @@ static void *scan_thread(void *arg){
                         " OR lower(PATH) LIKE '%.dsf' OR lower(PATH) LIKE '%.dff' OR lower(PATH) LIKE '%.dts' OR lower(PATH) LIKE '%.iso'"
                         " OR lower(PATH) LIKE '%.opus' OR lower(PATH) LIKE '%.oga')"
                         " AND PATH LIKE '" SCAN_ROOT "/%' "
-                        "AND PATH NOT IN (SELECT PATH FROM seen);";
+                        "AND PATH NOT IN (SELECT PATH FROM seen) AND " PRUNE_ALLOWED("SONG.PATH") ";";
                     int del_ok = (g_prune_blocked) ? 1
                                                    : (sqlite3_exec(g_db,DEL_ABSENT,0,0,0)==SQLITE_OK);
                     /* Relocate the .m4b rows the walk indexed into BOOKS, then remove them from SONG, all
@@ -2005,7 +2159,8 @@ static void *scan_thread(void *arg){
                             "AND COALESCE(IS_CUE,0)=0 AND COALESCE(IS_ISO,0)=0;",0,0,0)==SQLITE_OK;
                         if(r && !g_prune_blocked)
                             r = sqlite3_exec(g_db,
-                                "DELETE FROM BOOKS WHERE PATH LIKE '" SCAN_ROOT "/%' AND PATH NOT IN (SELECT PATH FROM seen);",0,0,0)==SQLITE_OK;
+                                "DELETE FROM BOOKS WHERE PATH LIKE '" SCAN_ROOT "/%' AND PATH NOT IN (SELECT PATH FROM seen) AND "
+                                PRUNE_ALLOWED("BOOKS.PATH") ";",0,0,0)==SQLITE_OK;
                         if(!r) del_ok = 0;   /* relocate failed -> roll back the whole scan */
                     }
                     /* A cancellation that lands AFTER the walk (or during the pruning SQL) must still keep the
@@ -2028,6 +2183,7 @@ static void *scan_thread(void *arg){
         sqlite3_finalize(g_seen); g_seen=NULL;
         sqlite3_finalize(g_bookok); g_bookok=NULL;
         sqlite3_finalize(g_durok); g_durok=NULL;
+        sqlite3_finalize(g_protect); g_protect=NULL;
     }
     if(ok) ipc_note_library_commit();
     sqlite3_close(g_db); g_db=NULL;   /* close even on a failed open: sqlite3_open_v2 may still return a handle */
@@ -2100,4 +2256,84 @@ int scan_read_narrator(const char *path, char *out, int cap){
     int result = scan_read_narrator_leased(path, out, cap);
     sd_io_end();
     return result;
+}
+
+/* Same bounded atom walk as the scanner, with malformed and I/O exits kept distinct. */
+static book_meta_outcome_t book_child(FILE *f, off_t p, uint64_t n, const char *key,
+                                      off_t *pay, uint64_t *size){
+    int err = 0, bad = 0;
+    int found = mp4_find_child_checked(f, p, p + (off_t)n, key, pay, size, &err, &bad);
+    if(err || ferror(f)) return BOOK_META_READ_FAILURE;
+    if(bad) return BOOK_META_UNSUPPORTED;
+    return found ? BOOK_META_OK : BOOK_META_ABSENT;
+}
+
+book_meta_result_t scan_read_book_meta(const char *path, chapter_t *out, int max,
+                                      char *narrator, int cap){
+    book_meta_result_t r = { BOOK_META_READ_FAILURE, BOOK_META_READ_FAILURE, 0 };
+    if(narrator && cap > 0) narrator[0] = 0;
+    if(!path || !out || max <= 0 || !narrator || cap <= 0) return r;
+    if(!sd_io_begin()){
+        r.chapters = r.narrator = BOOK_META_ADMISSION_REFUSED;
+        return r;
+    }
+    FILE *f = fopen(path, "rb");
+    if(!f){ sd_io_end(); return r; }
+    off_t p; uint64_t n;
+    /* No udta allocation/size cap: even multi-MB artwork is only seeked past. */
+    if(fseeko(f, 0, SEEK_END) != 0 || (p = ftello(f)) < 0) goto done;
+    r.chapters = book_child(f, 0, (uint64_t)p, "moov", &p, &n);
+    if(r.chapters == BOOK_META_OK) r.chapters = book_child(f, p, n, "udta", &p, &n);
+    r.narrator = r.chapters;
+    if(r.chapters != BOOK_META_OK) goto done;
+    off_t up = p; uint64_t un = n;
+    r.chapters = book_child(f, up, un, "chpl", &p, &n);
+    if(r.chapters == BOOK_META_OK){
+        /* One byte count and title lengths bound all meaningful chapter bytes. */
+        size_t len = n > 9u + 255u*264u ? 9u + 255u*264u : (size_t)n;
+        unsigned char *b = malloc(len + 8);
+        r.chapters = BOOK_META_READ_FAILURE;
+        if(b){
+            uint32_t sz = (uint32_t)len + 8;
+            b[0] = sz>>24; b[1] = sz>>16; b[2] = sz>>8; b[3] = sz;
+            memcpy(b+4, "chpl", 4);
+            if(fread(b+8, 1, len, f) == len){
+                int valid;
+                r.count = mp4_chapters(b, len+8, out, max, &valid);
+                r.chapters = !valid ? BOOK_META_UNSUPPORTED :
+                             r.count ? BOOK_META_OK : BOOK_META_ABSENT;
+            }
+            free(b);
+        }
+    }
+    clearerr(f);                           /* chapter errors must not poison narrator reads */
+    /* Locate only the first composer and its data, preserving the legacy convention.
+     * book_child seeks over covr and every other ilst item without reading payloads. */
+    r.narrator = book_child(f, up, un, "meta", &p, &n);
+    if(r.narrator == BOOK_META_OK){
+        off_t mp = p; uint64_t mn = n;
+        r.narrator = n >= 4 ? book_child(f, p+4, n-4, "ilst", &p, &n) : BOOK_META_UNSUPPORTED;
+        if(r.narrator != BOOK_META_OK && r.narrator != BOOK_META_READ_FAILURE){
+            book_meta_outcome_t fallback = book_child(f, mp, mn, "ilst", &p, &n);
+            if(fallback != BOOK_META_UNSUPPORTED || r.narrator != BOOK_META_ABSENT)
+                r.narrator = fallback;
+        }
+        if(r.narrator == BOOK_META_OK) r.narrator = book_child(f, p, n, "\251wrt", &p, &n);
+        if(r.narrator == BOOK_META_OK) r.narrator = book_child(f, p, n, "data", &p, &n);
+        if(r.narrator == BOOK_META_OK){
+            if(n < 8) r.narrator = BOOK_META_UNSUPPORTED;
+            else {
+                size_t len = n-8 > (uint64_t)(cap-1) ? (size_t)(cap-1) : (size_t)(n-8);
+                if(fseeko(f, p+8, SEEK_SET) != 0 || fread(narrator, 1, len, f) != len)
+                    r.narrator = BOOK_META_READ_FAILURE;
+                else { narrator[len] = 0; str_trim(narrator); r.narrator = narrator[0] ? BOOK_META_OK : BOOK_META_ABSENT; }
+            }
+        }
+    }
+done:
+    if(fclose(f) != 0) r.chapters = r.narrator = BOOK_META_READ_FAILURE;
+    sd_io_end();                            /* descriptor closes before lease release */
+    if(r.chapters != BOOK_META_OK) r.count = 0;
+    if(r.narrator != BOOK_META_OK) narrator[0] = 0;
+    return r;
 }

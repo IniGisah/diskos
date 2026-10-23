@@ -1,4 +1,4 @@
-# PyInstaller spec - Windows onedir; Linux and macOS onefile.
+# PyInstaller spec - Windows onedir, macOS app bundle, Linux onefile.
 # Bundles the native flashing tools (vendor/<os>-<arch>/) and the payload
 # (mq_ui + on-device init scripts) as data, plus pyusb. The result needs no
 # system Python and no system packages.
@@ -31,10 +31,10 @@ options.add_argument("--enable-windows-flash", action="store_true")
 options.add_argument("--source-commit", default="")
 capability = options.parse_args()
 if capability.enable_windows_flash and (
-        not platform_probe.windows_native_runtime() or __version__ != "1.2.1"
+        not platform_probe.windows_native_runtime() or __version__ != "1.2.2"
         or not re.fullmatch(r"[0-9a-f]{40}", capability.source_commit)):
     raise SystemExit("REFUSING to enable Windows flash: native x64 Windows CPython, "
-                     "version 1.2.1 and a full source commit SHA are required")
+                     "version 1.2.2 and a full source commit SHA are required")
 
 if capability.enable_windows_flash:
     def repository_git(*args):
@@ -83,6 +83,17 @@ with open(capability_hook, "w", encoding="ascii") as hook:
 
 binaries = []
 hookspath = []
+if _os == "macos":
+    from macos_inputs import verify as verify_macos_inputs
+    verify_macos_inputs(ROOT, os.environ.get("DISKOS_MACOS_INPUTS", ""),
+                        os.environ.get("DISKOS_MACOS_INPUTS_SHA256", ""))
+    # PyInstaller's supported binary collection rewrites Mach-O dependencies.
+    # Override host-discovery so USB always uses our explicitly provided dylib.
+    _usb_hooks = os.path.join(workpath, "macos-hooks")
+    os.makedirs(_usb_hooks, exist_ok=True)
+    with open(os.path.join(_usb_hooks, "hook-usb.py"), "w", encoding="ascii") as hook:
+        hook.write("hiddenimports = ['glob']\nbinaries = []\n")
+    hookspath = [_usb_hooks]
 if _os == "windows":
     # Only the explicitly supplied official DLL may enter the Windows freeze.
     # PyInstaller appends the spec name to --workpath and cleans that subdirectory.
@@ -132,6 +143,13 @@ if _missing:
                      f"Populate vendor/{TAG}/ and payload/ first.")
 
 datas = [(os.path.join(vend, n), f"vendor/{TAG}") for n in _required_native]
+if _os == "macos":
+    _mac_libusb = os.path.join(vend, "lib", "libusb-1.0.0.dylib")
+    if not os.path.isfile(_mac_libusb):
+        raise SystemExit("REFUSING to build: missing bundled libusb-1.0.0.dylib")
+    datas = [(os.path.join(vend, n), f"vendor/{TAG}") for n in _required_native if n.endswith('.bin')]
+    binaries += [(os.path.join(vend, n), f"vendor/{TAG}") for n in _required_native if not n.endswith('.bin')]
+    binaries += [(str(p), f"vendor/{TAG}/lib") for p in sorted(Path(vend, 'lib').glob('*.dylib'))]
 if _os == "windows":
     # Keep manifest inputs at the paths used by runtime verification. The helper
     # embeds its UAC manifest; the hashed original belongs here, not in vendor/.
@@ -153,6 +171,11 @@ if _os == "windows":
     _license_files = """
         0BSD-xz.txt Apache-2.0-OpenSSL.txt
         BSD-2-Clause-lz4.txt BSD-3-Clause-pyusb.txt BSD-3-Clause-zstd.txt
+        Apache-2.0-mbedTLS.txt BSD-2-Clause-Monocypher.txt BSD-3-Clause-SpeexDSP.txt
+        BSD-3-Clause-openscreen.txt LGPL-2.1-libplist.txt MIT-libplist-time64.txt
+        Unlicense-or-MIT-0-dr_libs.txt Zlib-nanopb.txt
+        BSD-3-Clause-SpeexDSP-resampler.txt MIT-libplist-jsmn.txt Zlib-LodePNG.txt
+        MIT-or-Unlicense-stb_image_write.txt
         BSL-1.0-dlg.txt CC-BY-4.0.txt CPython-3.12.10-Windows-LICENSE.txt
         CPython-3.12.10-Incorporated-Software.txt
         FTL-FreeType.txt Tk-8.6.15-license.terms.txt
@@ -173,6 +196,7 @@ if _os == "windows":
         OFL-1.1-Nunito.txt OFL-1.1-RubikGlitch.txt OFL-1.1-SourceHanSans.txt
         OFL-1.1-SpaceGrotesk.txt PSF-Python.txt PyInstaller-COPYING.txt
         README.md THIRD_PARTY_BUNDLED.md XZ-COPYING.txt pycryptodome-LICENSE.txt
+        MPL-2.0-certifi.txt MPL-2.0.txt MIT-platformdirs.txt
         zlib-1.3.1-LICENSE-README.txt
         bundled/libBLT.copyright.txt bundled/libX11.copyright.txt
         bundled/libXau.copyright.txt bundled/libXdmcp.copyright.txt
@@ -206,7 +230,7 @@ if _missing_assets:
     raise SystemExit(f"REFUSING to build: missing installer assets: {_missing_assets}")
 datas += [(os.path.join(_assets, n), "diskos_installer/assets") for n in _asset_files]
 libdir = os.path.join(vend, "lib")           # bundled dylibs (macOS), built by vendor/setup-macos.sh
-if _os != "windows" and os.path.isdir(libdir):
+if _os not in ("windows", "macos") and os.path.isdir(libdir):
     for fn in sorted(os.listdir(libdir)):
         if os.path.isfile(os.path.join(libdir, fn)):
             datas.append((os.path.join(libdir, fn), f"vendor/{TAG}/lib"))
@@ -224,11 +248,19 @@ BlobGuard(ROOT, capability.source_commit or 'HEAD').verify(_blob_pairs)
 
 # Collect pycryptodome's runtime modules to AES-decrypt the FiiO OTA chunks.
 # Its SelfTest suite is not needed by the frozen app.
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 from diskos_installer.service import require_firmware_dependencies
 require_firmware_dependencies()  # Refuse a frozen build with no working AES backend.
 hidden = ["usb", "usb.core", "usb.backend.libusb1"] + collect_submodules(
     "Crypto", filter=lambda name: name != "Crypto.SelfTest" and not name.startswith("Crypto.SelfTest."))
+
+# net_tls.build_context() loads certifi's cacert.pem on every platform; a freeze without it cannot
+# verify TLS, so refuse to build one. The data lands at <data root>/certifi/cacert.pem.
+_certifi_data = collect_data_files("certifi")
+if not any(os.path.basename(src) == "cacert.pem" and dest.replace("\\", "/") == "certifi"
+           for src, dest in _certifi_data):
+    raise SystemExit("REFUSING to build: certifi's cacert.pem was not collected (pip install -r requirements.txt)")
+datas += _certifi_data
 
 cli_entry = os.path.join(ROOT, "diskos_installer", "__main__.py")
 entries = [cli_entry]
@@ -349,6 +381,17 @@ if _os == "windows":
         strip=False, upx=False, name="diskos-installer",
     )
     verify_windows_tk_data(coll.toc)
+elif _os == "macos":
+    exe = EXE(
+        pyz, a.scripts, [], exclude_binaries=True,
+        name="diskos-installer", debug=False, bootloader_ignore_signals=False,
+        strip=False, upx=False, console=True, target_arch=_arch,
+        codesign_identity="-", argv_emulation=False,
+    )
+    coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="diskos-installer")
+    app = BUNDLE(coll, name="diskOS Installer.app", bundle_identifier="org.diskos.installer",
+                 info_plist={"CFBundleShortVersionString": __version__,
+                             "NSHighResolutionCapable": True}, codesign_identity="-")
 else:
     exe = EXE(
         pyz, a.scripts, a.binaries, a.datas, [],

@@ -153,8 +153,16 @@ void ctl_mirror_via(const ctl_state_t *st, void (*set_int)(const char *key, int 
         if(st->key[i] == CTL_ACT_TRACK || st->key[i] == CTL_ACT_VOLUME) set_int(CFG[i], st->key[i]);
 }
 
+/* Cast admission (16b): the stock volume keys switch track unless ALL THREE gestures are Adjust Volume, and a track switch would start local audio behind the
+ * receiver. 1 only when every gesture is exactly Adjust Volume (unknown = -1 = no). Never writes a setting. */
+int ctl_keys_cast_ok(const int act[CTL_KEY_N]){
+    for(int i = 0; i < CTL_KEY_N; i++) if(act[i] != CTL_ACT_VOLUME) return 0;
+    return 1;
+}
+
 #ifndef CTL_CORE_ONLY
 #include "config.h"
+int ui_cast_session_active(void);   /* main.c (also in screens.h) */
 #include "fwcaps.h"
 #include "ipc.h"
 #include "fb_pan.h"
@@ -220,7 +228,19 @@ int ui_set_screen_rot(int v){
 }
 int ui_set_volume_key(int key, int act){
     if(!ctl_supported()){ fprintf(stderr, "volume keys: unverified firmware (MAIN_OS_VER=%d)\n", fw_os_ver()); return -1; }
+    if(act != CTL_ACT_VOLUME && ui_cast_session_active()){ fprintf(stderr, "volume keys: a track action is refused while casting\n"); return -1; }   /* 16b: settings.c says why */
     return ctl_apply_key_via(ipc_send_cmd, key, act);
+}
+/* The player's stored gestures (SYSCONFIG) are the truth; the cfg mirror stands in for one that cannot be read right now. */
+int ui_cast_keys_ok(void){
+    static const char *const CFG[CTL_KEY_N] = { "key_single", "key_double", "key_long" };
+    ctl_state_t st; int act[CTL_KEY_N], rc = ctl_read_state(CTL_SYSCONFIG, &st);
+    for(int i = 0; i < CTL_KEY_N; i++){
+        int requested = cfg_get_int(CFG[i], -1);
+        if(requested != -1 && requested != CTL_ACT_VOLUME) return 0;
+        act[i] = (rc == 0 && st.key[i] >= 0) ? st.key[i] : requested;
+    }
+    return ctl_keys_cast_ok(act);
 }
 #endif
 
