@@ -1,20 +1,21 @@
-# Install diskOS 1.2.1
+# Install diskOS 1.2.2
 
 [Home](../README.md) | [Tour](TOUR.md) | [Privacy](PRIVACY.md)
 
 > [!CAUTION]
 > Flashing replaces the Disc's system software. Stored data is not wiped, and the SD card is not changed. Back up the card and keep a copy of the saved stock image on separate storage. Use a reliable USB cable, keep it connected, and keep the computer awake until flashing finishes. An interrupted flash may require [mask-ROM recovery](#restore-stock-and-recover).
 
-The installer builds an image locally from an official FiiO firmware archive you supply. It accepts V2.09, V2.28, V2.40, and V2.57. 1.2.0 users can install the signed 1.2.1 app update if updates are allowed; fresh installs and older versions use the installer. App updates do not replace the boot install script. The shutdown fix and the additional boot-script update fixes require a full flash with the complete 1.2.1 installer; see the fixes marked as requiring a full flash in the [release notes](RELEASE_NOTES_1.2.1.md).
+The installer builds an image locally from an official FiiO firmware archive. Select the version already on your Disc, then use **Get firmware** to download and verify its ZIP, or **Browse...** for a matching local copy. It accepts V2.09, V2.28, V2.40, and V2.57. 1.2.1 users can install the signed 1.2.2 app update if updates are allowed; fresh installs and older versions use the installer. App updates do not replace the boot install script. The network name hook, per-flash identity and boot-script update-retention fix require a full flash with the complete 1.2.2 installer; see the changes marked as requiring a full flash in the [release notes](RELEASE_NOTES_1.2.2.md).
 
 ## Requirements
 
 - A **FiiO Snowsky Disc** with supported stock firmware.
-- The matching official FiiO firmware `.zip`. You supply this file; the installer decrypts and
-  extracts its root filesystem locally.
+- The version already on your Disc: V2.09, V2.28, V2.40 or V2.57. **Get firmware** obtains
+  its matching official FiiO `.zip`; **Browse...** accepts a local copy for offline use.
+  The installer decrypts and extracts its root filesystem locally.
 - A reliable USB cable and about 20 uninterrupted minutes.
-- **Python 3.8+** and the dependencies installed by `./install.sh` on Linux and macOS.
-  The Windows release ZIP includes Python and its tools; no separate Python or MSYS2 install is needed.
+- **Python 3.8+** and the dependencies installed by `./install.sh` on Linux and source checkouts.
+  The macOS app and Windows release ZIP include Python and their tools.
 - USB access to mask-ROM device `a108:eaef`.
 - **Linux x86-64** (Debian, Ubuntu, Arch, CachyOS, Fedora), **macOS**, or
   **Windows 10/11 x64**; see
@@ -33,8 +34,8 @@ Build, save, and flash run under your user account.
 
 ## OS packages
 
-These packages and the setup commands below apply to Linux and macOS. On Windows, use
-the complete release ZIP and follow [Windows](#windows).
+These packages and setup commands apply to Linux and source checkouts. For the
+macOS release app, follow [macOS](#macos). On Windows, follow [Windows](#windows).
 
 Install Python 3.8 or newer and the host packages before running setup. `tkinter` is needed for the graphical installer; the command line works without it. The setup script reports anything missing.
 
@@ -43,16 +44,59 @@ Install Python 3.8 or newer and the host packages before running setup. `tkinter
 | Debian / Ubuntu | `sudo apt install python3 python3-venv python3-tk` | `sudo apt install libusb-1.0-0 squashfs-tools` |
 | Arch / CachyOS | `sudo pacman -S python tk` | `sudo pacman -S libusb squashfs-tools` |
 | Fedora | `sudo dnf install python3 python3-tkinter` | `sudo dnf install libusb1 squashfs-tools` |
-| macOS | Install Python 3 with Homebrew or python.org; for Homebrew Python, install the matching `python-tk@<version>` | Apple Silicon release package: native tools and libusb are bundled. Intel Mac or source checkout: see below. |
+| macOS source checkout | Python from python.org with Tk >= 8.6, or Homebrew Python with matching python-tk | See the source steps below. |
 
-Apple Silicon release packages contain prebuilt flash tools and their private libraries, so Homebrew flash-tool packages are not required. Intel Macs and macOS source checkouts need Homebrew, the Xcode command line tools, and `bash vendor/setup-macos.sh`; the script installs `pkg-config`, `libusb`, `squashfs`, `lzo`, `lz4`, `xz`, `zstd`, and `dylibbundler` as needed. See [native tools](../build/NATIVE_TOOLS.md).
+## macOS
+
+1. Download `diskos-installer-macos-arm64.tar.gz` from the release for an Apple
+   Silicon Mac. Double-click the archive, then drag **diskOS Installer.app** to
+   Applications or another writable folder. Keep the accompanying source and
+   licence files with your download. No Python, Tk, Homebrew, libusb or LZO
+   installation is needed.
+2. Double-click the app. This distribution uses ad-hoc signing, without a verified
+   developer identity. If Gatekeeper blocks it, first try opening it once, then
+   use **System Settings > Privacy & Security > Open Anyway** and confirm Open.
+   Only do this for the package downloaded from the diskOS release page.
+3. Select the firmware version already on your Disc and press **Get firmware**.
+   For a local download, use the original FiiO ZIP. If Safari already unpacked it,
+   right-click the download link and choose **Download Linked File**. The installer
+   requires the original archive to verify its recorded checksum.
+4. Power off the Disc, hold **Volume Down**, and connect USB directly with a data
+   cable. The screen stays black in mask-ROM mode. Select **Install diskOS...**,
+   read the confirmation and begin flashing. Keep the lid open and USB connected.
+   The installer prevents sleep automatically during the flash and logs that it
+   is active. Wait for successful verification before power-cycling the Disc.
+
+If macOS cannot unblock a tool in a read-only location, move the app to a writable
+folder and reopen it. If it is still blocked, download and extract a fresh complete
+release. The app changes only its own bundled tools' attributes.
+
+### macOS source checkout
+
+Install Python from [python.org](https://www.python.org/downloads/macos/) with
+Tk >= 8.6. For Homebrew Python, install the matching `python-tk@<major.minor>`.
+`install.sh` checks Tk before selecting Python and refuses an existing environment
+that still uses old Tk; rename that `.venv` and rerun setup if instructed.
+With Homebrew and the Xcode command line tools available, run from the checkout:
+
+```sh
+bash vendor/setup-macos.sh
+./install.sh
+./diskos-installer doctor
+./diskos-installer gui
+```
+
+Native setup installs LZO when missing and checks pinned tool versions. It may
+require installing/linking the recorded Homebrew versions. See
+[native tools](../build/NATIVE_TOOLS.md). Intel source builds need matching x86_64
+inputs; the Apple Silicon release is the packaged path.
 
 ## Setup
 
-Run these commands from the installer directory.
+For Linux and source checkouts, run these commands from the installer directory.
 
 The installer runs with your own **Python 3.8+**. The setup script creates a local virtual
-environment and installs two Python dependencies into it; nothing is installed system-wide.
+environment and installs four Python dependencies into it; nothing is installed system-wide.
 
 ```bash
 ./install.sh
@@ -70,18 +114,21 @@ After setup, run commands through `./diskos-installer`; it selects the local env
 ## Graphical installer
 
 1. Run `./diskos-installer gui`.
-2. Select your official FiiO firmware `.zip`, then select a variant:
+2. Under **Which firmware is on your Disc?**, select its current version, then press
+   **Get firmware**. V2.57 is preselected; change it if your Disc runs an older supported version.
+   Wait for verification and the filled path. You can do this before connecting the Disc.
+   **Browse...** also verifies a matching official ZIP. Then select a variant:
    - **Public** *(recommended):* no always-on root shell. SSH can still be enabled temporarily
      from Debug Mode in the UI.
    - **Dev** (under **Advanced**): adds a passwordless USB-serial root shell on every boot. Use this only on a dedicated
      development device you control.
-   - **Allow diskOS updates over Wi-Fi:** checked by default in the 1.2.1 release package, which
+   - **Allow diskOS updates over Wi-Fi:** checked by default in the 1.2.2 release package, which
      includes the diskOS release key. Untick it to leave the key out. The box is disabled if a
      package has no key. Updates still require a tap on the Disc and accept only signed app bundles.
 3. Power the Disc off. Hold **Volume Down** and plug in USB to enter mask-ROM mode. The screen stays
    black; that is expected.
 4. Read the Ready checklist. It checks for a Disc in flash mode, USB driver or permission hints,
-   a firmware choice, and installer tools. It shows items needing attention and flash-mode help;
+   firmware readiness, and installer tools. It shows items needing attention and flash-mode help;
    **Refresh** checks again. Checklist warnings do not block the install; the installer validates
    the firmware and actual USB access before flashing.
 5. Select **Install diskOS...**. After building the image, the installer shows a confirmation
@@ -96,12 +143,65 @@ The flash replaces the system software, not the writable data area (`/usr/data`)
 On first boot, diskOS installs or updates its own files there; this is not a factory wipe.
 The installer does not change your SD card.
 
+## Get firmware
+
+Read the version on the Disc before entering flash mode: in diskOS, use Settings > Device (Settings > System on 1.2.1 and earlier) >
+Device Info > Firmware. The stock menu hint is Settings > System Settings > About device.
+Choose that version; downloading another version does not upgrade the Disc's kernel or recovery.
+The final flash gate still checks the actual Disc and refuses a mismatched base.
+
+**Get firmware** rechecks the saved ZIP first, then downloads from FiiO if needed. No firmware
+request happens at startup, when changing the dropdown, or on Install. Download progress shows
+bytes and percentage, followed by a separate verification stage. **Cancel** stops acquisition;
+**Retry** starts an interrupted download again from zero. Nothing has been flashed at this stage.
+
+After an ordinary download failure, the installer checks Downloads for a matching file. It searches
+only that folder, verifies candidates by size and SHA-256, and copies a match into its own cache.
+Your original stays untouched. If no match is found, use **Open FiiO download page**, download the
+selected version in your browser, then press **Check Downloads**, or use **Browse...**. TLS errors
+also offer these buttons. A browser failure leaves a selectable page address. For space or write
+errors, follow the displayed message and retry. See the [privacy disclosure](PRIVACY.md#the-installer-this-repo).
+
+In the GUI, downloaded, cached and manually selected ZIPs must match the installer's recorded whole-file size
+and SHA-256 before use. The installer checks the selected file again on Install or Restore; a path
+alone is not verification. A changed archive is refused, with no override. The pins were measured
+from official archives; they are not a claim that FiiO publishes these checksums.
+
+The cache uses FiiO's original filename under `firmware/` inside the installer state folder:
+
+- Linux: `~/.local/share/diskos-installer` (or `$XDG_DATA_HOME/diskos-installer`).
+- macOS: `~/Library/Application Support/diskos-installer`.
+- Windows: `%LOCALAPPDATA%\diskos-installer`.
+
+`DISKOS_INSTALLER_HOME` overrides that location. **Get firmware** can reuse a matching verified cache
+entry offline. **Browse...** works with a local ZIP without network access; the command line still
+requires `--firmware` for install and does not download automatically. Downloads need roughly
+99-128 MB for the ZIP plus headroom; extraction, building, temporary files and backup staging need
+additional free space, checked separately before building.
+
+**Remove installer data** removes cached firmware, partial downloads, saved recovery images and
+owned GUI logs. Keep a separate backup first. It leaves Downloads and manually selected originals
+alone. This project distributes installer code and verification pins, not FiiO firmware or generated
+firmware images.
+
+HTTPS uses system certificate roots plus the bundled certifi roots, with hostname checking and
+TLS 1.2 or newer. An explicit `SSL_CERT_FILE` adds trusted certificates; an unreadable or invalid
+file fails visibly. Verification cannot be disabled. Normal HTTPS proxy settings are supported.
+
 ## Command line
 
 ```bash
 ./install.sh
 ./diskos-installer doctor
 ./diskos-installer install --firmware SNOWSKY_DISC_update_*.zip --variant public
+```
+
+The macOS app runs the same commands with no setup. Open the app once first so macOS
+approves it, then use its executable:
+
+```bash
+"/Applications/diskOS Installer.app/Contents/MacOS/diskos-installer" doctor
+"/Applications/diskOS Installer.app/Contents/MacOS/diskos-installer" install --firmware ~/Downloads/SNOWSKY_DISC_update_*.zip --variant public
 ```
 
 Add `--no-ota` to build without an update key, or `--ota-key PATH` to use your own public key.
@@ -115,7 +215,7 @@ Useful recovery and cleanup commands:
 ```
 
 `restore-stock` acts on the player. `remove` cleans up the installer's files on the host, including
-saved recovery files and its GUI logs; restore first if needed and keep a separate copy of your
+saved recovery files, firmware cache, partial downloads and its GUI logs; restore first if needed and keep a separate copy of your
 saved stock image. It keeps the executable and the Windows USB driver binding. In the GUI,
 this action is **Remove installer data...**; it does not restore firmware or remove diskOS
 from the Disc.
@@ -153,18 +253,19 @@ will not boot. Follow [RECOVERY.txt](../RECOVERY.txt), also included in the Wind
 
 | Code | What to do |
 |---|---|
-| E101 | The host, runtime or build does not support flashing. Use the public flash-enabled 1.2.1 Windows ZIP on native Windows x64. Source runs and disabled builds are not the public flashing package; use Linux if your host is unsupported. |
+| E101 | The host, runtime or build does not support flashing. Use the public flash-enabled 1.2.2 Windows ZIP on native Windows x64. Source runs and disabled builds are not the public flashing package; use Linux if your host is unsupported. |
 | E102 | A required bundled component is missing. Obtain the complete matching installer package; keep its files together. Keep the log if it still fails. |
 | E103 | A native tool could not start. Follow the message: use an executable filesystem, supply the required libraries, or rebuild the matching tools. |
 | E104 | The image tools lack required compression or archive support. Use the complete matching package; report the error if it persists. |
 | E105 | A required firmware-decryption component cannot load. For a standalone app, obtain the complete package again. For a source run, install `requirements.txt` in the Python environment running the installer. |
+| E106 | macOS could not safely prepare its bundled tools. Move the app to a writable folder and reopen it; if still blocked, download and extract a fresh complete release. |
 | E110 | No connected Disc was found in mask-ROM mode. Power it off, hold **Volume Down**, and connect USB; the screen stays black. |
 | E111 | More than one boot-mode device was found. Disconnect the other Ingenic devices and leave only the Disc connected. |
 | E112 | Windows could not list the USB devices. Reconnect the Disc in mask-ROM mode, then check USB access again. |
 | E113 | The Disc was found but USB access failed. Select **Refresh** in the Ready checklist. Use **Set up USB driver...** only if offered; if WinUSB is already ready, close other USB tools and reconnect the Disc. |
 | E114 | The Disc is present but WinUSB is not ready. Select **Set up USB driver...** in the Ready checklist when offered and follow the message. |
 | E115 | The boot-mode USB check failed. Close other USB tools, power-cycle the Disc into mask-ROM mode, and check its driver and connection again. |
-| E116 | Windows could not keep the computer awake for flashing. Nothing was sent to the Disc. Ask for help resolving the Windows power-request error before retrying. |
+| E116 | Windows or macOS could not keep the computer awake for flashing. Nothing was sent to the Disc. Resolve the reported power-request or caffeinate error before retrying. |
 | E117 | The bundled USB or driver tool failed its integrity checks. Use a complete matching installer package; do not mix tools from different versions or bypass the check. |
 | E118 | Administrator approval was cancelled. Select **Set up USB driver...** again when ready. |
 | E119 | Administrator approval or credentials are needed. Ask an administrator to approve driver setup. |
@@ -193,8 +294,9 @@ will not boot. Follow [RECOVERY.txt](../RECOVERY.txt), also included in the Wind
 
 Power off the Disc, hold **Volume Down**, and connect USB to enter mask-ROM mode;
 the screen stays black. Read the Ready checklist and select **Restore stock firmware...**.
-The restore screen uses the saved stock image and offers a firmware ZIP picker only when
-no saved image is found. On the confirmation screen, tick the acknowledgement and select
+The restore screen checks the saved stock image when you request restore. A usable image needs
+no download. If it is missing or fails validation, choose the Disc's version and use **Get firmware**
+or **Browse...** to rebuild it. On the confirmation screen, tick the acknowledgement and select
 **Begin flash (~20 min)**. The installer verifies the saved stock image before writing. Keep the
 computer awake and wait for successful verification before power-cycling the Disc.
 Restoring replaces the Disc's system software with FiiO's stock firmware and deactivates diskOS.
@@ -204,9 +306,9 @@ and the SD card is not changed. Keep the USB cable connected until it finishes.
 Keep the entire installer state folder, normally `%LOCALAPPDATA%\diskos-installer`
 (or your configured state location), and a separate copy of the stock backup.
 Keep interrupted backup generations too. Automatic restore uses the committed backup.
-For **E141**, the restore screen offers a firmware ZIP when no saved image is found.
-For **E144/E145**, preserve the state folder and use the command-line firmware option;
-the GUI may still show the damaged saved backup instead of offering a ZIP picker.
+For **E141/E144/E145**, preserve the state folder. The GUI offers the firmware acquisition flow
+when the saved image cannot be used; the command-line firmware option below is also available.
+An acquisition or rebuild failure keeps the previous backup and committed pointer.
 
 From PowerShell in the extracted folder:
 
@@ -223,24 +325,24 @@ guessed block or bypass a refusal. If you cannot establish the matching firmware
 keep the logs and get help. The Linux installer also accepts
 `restore-stock --firmware <zip>` with the same matching firmware.
 
-## Upgrading to 1.2.1
+## Upgrading to 1.2.2
 
-1.2.0 users can install the signed 1.2.1 app update over Wi-Fi from Settings > System >
+1.2.1 users can install the signed 1.2.2 app update over Wi-Fi from Settings > System >
 Update diskOS if updates are allowed. App updates do not replace the boot install script.
-The shutdown fix and the additional boot-script update fixes require a full flash with the
-complete 1.2.1 installer; see the [release notes](RELEASE_NOTES_1.2.1.md). Fresh installs
+The network name hook, per-flash identity and boot-script update-retention fix require a full flash with the
+complete 1.2.2 installer; see the [release notes](RELEASE_NOTES_1.2.2.md). Fresh installs
 and older versions also use the installer.
 
-For a full flash, use the complete 1.2.1 installer and matching flash tools, supply your
+For a full flash, use the complete 1.2.2 installer and matching flash tools, supply your
 official firmware archive, and follow the same steps. Back up the card and keep your
 saved stock image first. The installer accepts only unmodified official V2.09, V2.28, V2.40, and
 V2.57 firmware. Before writing, it checks that the Disc's kernel and recovery match the selected
 firmware. The saved stock image remains available for restore.
 
-The 1.2.1 release image includes the diskOS release key by default.
-Settings > System > Update diskOS checks for a newer signed release and updates only the diskOS app,
+The 1.2.2 release image includes the diskOS release key by default.
+Settings > Device > Update diskOS checks for a newer signed release and updates only the diskOS app,
 not stock firmware or the whole flashed image. After a trial update, choose Keep or Go back;
-a broken update rolls back automatically. Settings > System > Allow diskOS Updates can stop
+a broken update rolls back automatically. Settings > Device > Allow diskOS Updates can stop
 downloads. Off still allows a release check, but nothing is downloaded or staged. Turning it off
 while an update is pending offers Discard or Cancel. An install without a key shows "Not supported
 on this install". Untick the GUI checkbox when flashing or use `--no-ota` to leave the key out.
@@ -249,9 +351,9 @@ on this install". Untick the GUI checkbox when flashing or use `--no-ota` to lea
 
 The installer can flash an older diskOS release, or your own build of the UI (`--ui PATH`), on top
 of supported stock firmware. The in-app update path is designed to accept only newer releases
-signed by the key in the image. Flashing an older installer or your own build does not
-clear retained signed app updates: a retained newer accepted build may still run at the
-next boot. Do not assume that flashing an older image also downgrades the running app.
+signed by the key in the image. A full flash with the complete 1.2.2 installer clears downloaded app updates and starts
+the UI included in that installer or supplied with `--ui`. Settings and music are kept.
+Older installers may retain a newer accepted app update, which can run at the next boot.
 
 Choose how the image treats over-the-air updates when you build it:
 
@@ -265,7 +367,7 @@ Choose how the image treats over-the-air updates when you build it:
 - `--ota-key PATH` bakes your own public key (PEM, ECDSA P-256). That image accepts only updates
   you sign with the matching private key. A private key is refused.
 - With neither option the installer uses `DISKOS_OTA_ROOTPUB` or a bundled key if one exists.
-  The 1.2.1 release package bundles the diskOS release key; a source checkout without a key
+  The 1.2.2 release package bundles the diskOS release key; a source checkout without a key
   builds without updates. `./diskos-installer doctor` and the confirmation before flashing both
   say which state the image will have.
 
@@ -276,8 +378,8 @@ when a new playlist is created. Keep a copy of important playlists before downgr
 ## Host support
 
 - **Linux x86-64:** supported.
-- **macOS, Apple Silicon:** the release package includes prebuilt native flash tools. Python 3 and setup dependencies are still needed.
-- **Windows 10/11 x64:** use the complete flash-enabled 1.2.1 release ZIP. It includes the runtime and native tools; only Disc driver setup asks for administrator approval. Source runs require a development opt-in to flash; use the release ZIP for normal installation.
+- **macOS, Apple Silicon:** use the self-contained release app; no separate runtime or tool installation.
+- **Windows 10/11 x64:** use the complete flash-enabled 1.2.2 release ZIP. It includes the runtime and native tools; only Disc driver setup asks for administrator approval. Source runs require a development opt-in to flash; use the release ZIP for normal installation.
 - **macOS, Intel:** build the native tools with `vendor/setup-macos.sh` (Homebrew build dependencies required).
 
 **Image builds work on the default case-insensitive macOS filesystem.** The installer creates
@@ -301,13 +403,17 @@ installation. This is built from your official firmware archive, not a dump of t
 partition. It deactivates diskOS, but it is not a factory wipe; inactive files under `/usr/data`
 remain until you remove them.
 
+The GUI validates the saved image before using it. When it cannot be used, the same version
+dropdown, **Get firmware** and **Browse...** controls rebuild it from matching official firmware.
+The command-line equivalent is `restore-stock --firmware <zip>`. A valid saved image is usable offline.
+
 Older, shorter saved stock images remain usable: restore creates a copy padded to the current
 768-block image size, then validates it before flashing. Keep your saved stock image on separate
 storage.
 
 You can also switch without reflashing:
 
-- **Persistently:** Settings > System > Default UI > Stock
+- **Persistently:** Settings > Device > Default UI > Stock
 - **Once:** hold **Volume Up** from power-on until the other UI appears
 
 Both keep the diskOS delete guard, because the diskOS image stays installed. Restoring the saved
@@ -327,7 +433,7 @@ flashed code runs.
 <details>
 <summary><strong>Optional SSH access and security notes</strong></summary>
 
-Debug Mode is **off by default**. Open **Settings > System > Debug Mode > Enable Debug** to show an
+Debug Mode is **off by default**. Open **Settings > Device > Debug Mode > Enable Debug** to show an
 SSH command and a newly generated password. The password rotates each time Debug Mode is enabled.
 
 While enabled, the password is stored in plaintext at `/usr/data/sshd/current_pw` with mode `0600`

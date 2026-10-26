@@ -125,10 +125,10 @@ static int artcache_get_thumb_leased(const char *track, const char *thumb_out){
 
 /* Return the native path of the cached 148px cover for a track (no copy), so a caller can read/decode it
  * directly (e.g. an off-thread cover loader). Returns 0 + fills out on a cache hit, -1 if not cached. */
-static int artcache_cover_path_leased(const char *track, char *out, int cap){
+static int artcache_cover_path_leased(const char *track, char *out, int cap, int validate){
     char fp[24]; if(fingerprint(track,fp,sizeof fp)!=0) return -1;
     char cv[600],th[600],bg[600]; cache_paths(fp,cv,th,bg,600);
-    if(!CV_OK(cv)) return -1;
+    if(validate && !CV_OK(cv)) return -1;
     snprintf(out, cap, "%s", cv);
     return 0;
 }
@@ -204,7 +204,14 @@ int artcache_get_cover(const char *track, const char *cover_out){
 
 int artcache_cover_path(const char *track, char *out, int cap){
     if(!sd_io_begin()) return -1;
-    int result = artcache_cover_path_leased(track, out, cap);
+    int result = artcache_cover_path_leased(track, out, cap, 1);
+    sd_io_end();
+    return result;
+}
+
+int artcache_cover_candidate(const char *track, char *out, int cap){
+    if(!out || cap <= 0 || !sd_io_begin()) return -1;
+    int result = artcache_cover_path_leased(track, out, cap, 0);
     sd_io_end();
     return result;
 }

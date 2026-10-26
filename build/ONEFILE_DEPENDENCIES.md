@@ -40,7 +40,8 @@ host; inventory the extracted shared objects before redistributing a build.
 | BLT | `libBLT*` | BSD-style |
 
 ## Already in NOTICE.md (direct deps)
-CPython (PSF), pyusb (BSD-3), pycryptodome (BSD-2 + public-domain), PyInstaller bootloader
+CPython (PSF), pyusb (BSD-3), pycryptodome (BSD-2 + public-domain), certifi (MPL-2.0; pure
+Python plus the cacert.pem data file), platformdirs (MIT), PyInstaller bootloader
 (GPL-2.0 + bootloader exception). The pycryptodome `_raw_*`/`_ghash_*` etc. modules are part of it.
 
 ## If you build and redistribute the onefile yourself

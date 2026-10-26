@@ -9,15 +9,45 @@ LVGL and running-player inspection are replaced at their boundaries.
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 app = Path(__file__).resolve().parents[1]
+import re
+
+def function(text, name):
+    start = re.search(r'^(?:static )?int ' + name + r'\([^;{}]*\)\s*\{',
+                      text, re.M).start()
+    pos = text.index('{', start)
+    tokens = re.finditer(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|'
+                         r"'(?:\\.|[^'\\])*'|[{}]", text[pos:], re.S)
+    depth = 0
+    for token in tokens:
+        if token.group() == '{':
+            depth += 1
+        elif token.group() == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:pos + token.end()]
+    raise AssertionError('unclosed function: ' + name)
 source = (app / "main.c").read_text()
 source = source[source.index("/* SD operations share"):source.index("static int book_session_active(void);")]
 a = source.index("static int storage_player_guarded(void){")
 b = source.index("static int source_send(", a)
 source = source[:a] + "static int storage_player_guarded(void){ return test_guarded; }\n" + source[b:]
 source = source.replace("static int rmguard_dir_ok(const char *dir);", "")
+# Receiver entry is not a storage-test subject. Keep the storage functions real,
+# but replace the embedded controller with an idle, unowned receiver boundary.
+a = source.index("/* RECEIVER-ENTRY-BEGIN:")
+b = source.index("/* RECEIVER-ENTRY-END */", a) + len("/* RECEIVER-ENTRY-END */")
+source = source[:a] + r'''
+static const struct { int owned, active, failed; } g_rxsw = {0};
+static int receiver_switch(receiver_source target){
+    (void)target;
+    assert(0 && "storage tests must not enter a receiver session");
+    return -1;
+}
+''' + source[b:]
 
 def run_harness(exe, timeout):
     """Run a compiled harness; its LAST stdout line must be HARNESS COMPLETE, so an early return 0 fails."""
@@ -50,10 +80,22 @@ with tempfile.TemporaryDirectory(prefix="diskos-storage-tests-") as tmp:
 #include "sdio.h"
 #include "fwcaps.h"
 int fw_has_usb_audio_out(void){ return 1; }
+#include "airplay_sender.h"
+#include "receiver.h"
+#include "modes.h"
+static aps_sender g_sender;
+static int g_sender_pending;
+/* Current Local evidence, no receiver session: the receiver guard is OPEN. */
+int receiver_available(void){ return 1; }
+void ipc_source_snapshot(ipc_source_evidence *out){
+    *out = (ipc_source_evidence){ .generation=1, .sequence=1, .mode=8, .valid=1 };
+}
 typedef void lv_timer_t;
+static void lv_timer_set_period(lv_timer_t *t, uint32_t p){ (void)t; (void)p; }
+static int g_screen_off = 0;
 static uint32_t test_clock;
 static int test_mounted=1, test_exported, test_host, test_guarded=1, test_scan;
-static int test_sends, test_fail, test_export_sends, test_seed;
+static int test_sends, test_fail, test_export_sends, test_seed, test_lib_checks;
 static int g_playing;
 static _Atomic int g_source_mode;
 static uint32_t lv_tick_get(void){ return test_clock; }
@@ -61,23 +103,26 @@ static void ui_toast(const char *s){ (void)s; }
 static void art_cancel(void){}
 static void modelock_open(int mode){ (void)mode; }
 static void modelock_close(void){}
-static void modes_output_reset(void){}   /* output routing is not under test here */
-static int modes_output_busy(void){ return 0; }
+void modes_output_reset(void){}   /* output routing is not under test here */
+int fw_os_ver(void){ return 257; }   /* source_send() refuses unverified firmware */
+static void route_loss_invalidate_seek(void){}
+int modes_output_busy(void){ return 0; }
 typedef enum { ROUTE_UNKNOWN = -1, ROUTE_ANALOG = 0, ROUTE_BT = 1 } route_state_t;
 static __attribute__((unused)) char g_route_mac[18];
 static __attribute__((unused)) route_state_t g_route_state;
 static int ui_usb_dac_connected(void){ return 1; }
 static int scanner_active(void){ return test_scan; }
 static int scanner_start(void){ return 0; }
-static int mdb_total_song_count(void){ return 1; }
-static int mdb_load_failed(void){ return 0; }
+int mdb_total_song_count(void){ return 1; }
+int mdb_load_failed(void){ return 0; }
 static void albumwall_prewarm_seed(void){ test_seed++; }
 static int test_player_ready=1, test_settling=0;
 static unsigned test_rx_frames=1;
-static int ipc_player_ready(void){ return test_player_ready; }
-static unsigned ipc_rx_frames(void){ return test_rx_frames; }
-static int ui_player_settling(void){ return test_settling; }
-static int ipc_send_cmd(const char *s){
+int ipc_player_ready(void){ return test_player_ready; }
+unsigned ipc_rx_frames(void){ return test_rx_frames; }
+int ui_player_settling(void){ return test_settling; }
+static void ui_library_check(void){ test_lib_checks++; }   /* Cover Flow refresh request; counted, not run */
+int ipc_send_cmd(const char *s){
     test_sends++;
     if(test_fail) return -1;
     if(!strcmp(s,"0642000C0001")){
@@ -87,6 +132,7 @@ static int ipc_send_cmd(const char *s){
     return 0;
 }
 '''
+    headers += function((app / "airplay_sender.c").read_text(), "aps_sender_active")
     tests = r'''
 static int sd_exported_to_host(void){ return test_exported; }
 static int coldplug_mounted(void){ return test_mounted; }
@@ -102,7 +148,7 @@ static void reset(void){
     assert(sd_io_active()==0);
     unlink(SD_EXPORT_MARKER);
     test_clock=0; test_mounted=1; test_exported=0; test_host=0;
-    test_guarded=1; test_scan=0; test_sends=0; test_fail=0; test_export_sends=0; test_seed=0;
+    test_guarded=1; test_scan=0; test_sends=0; test_fail=0; test_export_sends=0; test_seed=0; test_lib_checks=0;
     test_player_ready=1; test_settling=0; test_rx_frames=1;
     g_sd_hold=0; g_sd_phase=SD_LOCAL; g_source_mode=0; g_sd_reissue=0;
     atomic_store(&g_sd_writable,1); atomic_store(&g_sd_writers,0);
@@ -116,6 +162,11 @@ static void enter_host(void){
     storage_tick(NULL); assert(g_sd_phase==SD_HOST);
 }
 int main(void){
+    reset(); ui_sd_quiesce_begin(); assert(ui_sd_quiesce_drained());
+    g_sender.phase=APSS_ENDING; assert(!ui_sd_quiesce_drained());
+    g_sender.phase=APSS_IDLE; g_sender_pending=1; assert(!ui_sd_quiesce_drained());
+    g_sender_pending=0; assert(ui_sd_quiesce_drained()); ui_sd_quiesce_end();
+    puts("PASS sender cleanup and pending start prevent restart drain");
     /* Until the launcher publishes a positive verdict for THIS player, nothing may touch the card:
      * no lease, no resume, and no playback - whatever the mount and gadget state look like. */
     reset();
@@ -146,6 +197,7 @@ int main(void){
     assert(g_sd_phase==SD_LOCAL && sd_io_begin()); sd_io_end();
     assert(sd_write_begin()); sd_write_end();
     assert(test_seed==1 && access(SD_EXPORT_MARKER,F_OK)!=0);
+    assert(test_lib_checks==1);   /* the return to local asks for one library check */
     puts("PASS drain, export acknowledgement, detach, mount and cache resume");
 
     reset(); test_guarded=0;

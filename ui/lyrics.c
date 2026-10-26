@@ -5,6 +5,7 @@
 #include "theme_kit.h"
 #include "sdio.h"
 #include "ipc.h"
+#include "playback.h"   /* playback_display_state: the Cast view */
 #include "musicdb.h"
 #include "config.h"
 #include "lrc.h"
@@ -15,7 +16,7 @@
 #include <errno.h>
 
 /* Lyrics view: a sibling .lrc on the SD card first, then lyrics stored inside the audio file (lrc.h), then - unless
- * Settings > Display > Online Lyrics is off - lrclib.net by track + artist (no API key). The blocking
+ * Settings > Library > Online Lyrics is off - lrclib.net by track + artist (no API key). The blocking
  * work runs on a detached thread; the result is applied on the main thread by lyrics_poll(). Timed lyrics (a .lrc,
  * or lrclib's syncedLyrics) show one row per line: the line at the playback position is highlighted and kept in
  * the middle, unless the user has just scrolled. Untimed lyrics show as one block of text. */
@@ -286,7 +287,7 @@ static void start_fetch(void)
     }
     job->req = g_req;
     job->online_only = online_only;
-    job->online = cfg_get_int("online_lyrics", 1);   /* Settings > Display > Online Lyrics (on unless turned off) */
+    job->online = cfg_get_int("online_lyrics", 1);   /* Settings > Library > Online Lyrics (on unless turned off) */
     snprintf(job->title,  sizeof job->title,  "%s", g_q_title);
     snprintf(job->artist, sizeof job->artist, "%s", g_q_artist);
     snprintf(job->path,   sizeof job->path,   "%s", g_path);
@@ -348,16 +349,20 @@ static int show_timed(const char *lrc)
     return 1;
 }
 
+/* Slice 15b: the track the lyrics follow. LOCAL: exactly the player's state. CAST: the facade's track (its library path keys the
+ * local .lrc / tag lookup; position and play state are the Cast ones). No receiver data is read. */
+static void ly_state(track_state_t *out){ track_state_t raw; ipc_get_state(&raw); playback_display_state(out, &raw); }
+
 /* the playback position now: the last reported one, plus the time since it arrived while playing (capped) */
 static long lyrics_position(void)
 {
-    track_state_t st; ipc_get_state(&st);
+    track_state_t st; ly_state(&st);
     uint32_t now = lv_tick_get();
     if(st.pos_seq != g_last_pos_seq || st.position_ms != g_pos_base){   /* a new report (or a seeded/first one) */
         g_last_pos_seq = st.pos_seq; g_pos_base = st.position_ms; g_pos_tick = now;
     }
     long est = g_pos_base;
-    if(ui_is_playing()){ uint32_t d = now - g_pos_tick; est += d > 1500 ? 1500 : (long)d; }
+    if(ui_view_playing()){ uint32_t d = now - g_pos_tick; est += d > 1500 ? 1500 : (long)d; }
     return est;
 }
 
@@ -422,7 +427,7 @@ static void lyrics_query(const track_state_t *st)
     int ready = !st->have_track || st->title_ready;
     if(ready) snprintf(title, sizeof title, "%s", st->title);
     snprintf(artist, sizeof artist, "%s", st->artist);
-    if(ready && !title[0]){
+    if(ready && !title[0] && playback_source() == PB_SRC_LOCAL){   /* 15b: the DB "current play" is the LOCAL track, never a Cast track's title */
         mdb_song_t cur; int pm, pl;
         if(mdb_current_play(&cur, &pm, &pl)){
             snprintf(title, sizeof title, "%s", cur.title);
@@ -436,13 +441,16 @@ static void lyrics_query(const track_state_t *st)
 
 void lyrics_open(void)
 {
+    track_state_t st; ly_state(&st);
+    int needs_db=playback_source()==PB_SRC_LOCAL && (!st.have_track || st.title_ready) && !st.title[0];
+    if(needs_db && !mdb_ui_read_begin()){ ui_toast("Library busy - try again"); return; }
     g_req++;   /* path/view request supersedes any in-flight fetch */
-    track_state_t st; ipc_get_state(&st);
     g_local_done = g_local_found = 0;
     g_title_pending = st.have_track && !st.title_ready;
     g_token = st.playback_token; g_generation = st.player_generation;
     snprintf(g_path, sizeof g_path, "%s", st.path);
     lyrics_query(&st);
+    if(needs_db) mdb_ui_read_end();
     show_text("Checking SD card...", 1);
     screen_show(SCR_LYRICS);
     if(g_q_title[0] || (g_title_pending && g_path[0])) start_fetch();
@@ -462,9 +470,12 @@ static void lyrics_commit_title(const track_state_t *st)
     int waiting = g_linflight || g_lready;
     pthread_mutex_unlock(&g_ly_mu);
     if(waiting || !g_local_done) return;
-    g_title_pending = 0;
-    if(g_local_found) return;
+    if(g_local_found){ g_title_pending=0; return; }
+    int needs_db=playback_source()==PB_SRC_LOCAL && !st->title[0];
+    if(needs_db && !mdb_ui_read_begin()) return;
     lyrics_query(st);
+    if(needs_db) mdb_ui_read_end();
+    g_title_pending=0;
     if(g_q_title[0] && cfg_get_int("online_lyrics", 1)) start_fetch();
 }
 
@@ -476,7 +487,7 @@ void lyrics_poll(lv_timer_t *t)
      * track, bumps g_req to supersede any in-flight fetch, and updates g_path so this
      * fires once per change. Only while SCR_LYRICS is visible - no wasted fetches. */
     if(screen_current() == SCR_LYRICS){
-        track_state_t st; ipc_get_state(&st);
+        track_state_t st; ly_state(&st);
         if(st.path[0] && strcmp(st.path, g_path)){ lyrics_open(); return; }
         lyrics_commit_title(&st);
     }

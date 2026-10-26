@@ -8,6 +8,8 @@
 #include "config.h"
 #include "modelock.h"
 #include "i18n.h"
+#include "playback.h"   /* playback_display_state: the Cast view */
+#include "cast_ui.h"     /* BEAM_GLYPH, cast_ui_open, the session as the UI shows it */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -15,8 +17,8 @@
 
 /* Quick Settings: an iOS-Control-Center-style pull-down panel (top-edge swipe-down; gesture handled
  * in main.c). It is USER-CUSTOMISABLE: the brightness bar sits on top, an optional transport row below
- * it, then a grid of up to six circular tiles chosen in Settings > Display > Quick Settings. The tile
- * palette is Wi-Fi, Bluetooth, EQ, Search, Rescan, Working Mode and Screen off. "On" tiles fill with the
+ * it, then a grid of up to six circular tiles chosen in Settings > Controls > Quick Settings. The tile
+ * palette is Wi-Fi, Bluetooth, EQ, Search, Rescan, Audio Source and Screen off, and the opt-in tiles listed below. "On" tiles fill with the
  * live accent colour (album-art derived, or the user's fixed pick); everything else is a dark disc.
  * The panel is rebuilt from config on every open so a customisation change shows up immediately.
  * Dismissed by the back-swipe (screen_back). */
@@ -38,7 +40,8 @@ LV_FONT_DECLARE(font_icons_20)          /* FontAwesome 20px - EQ + Search glyphs
 
 /* ---- tile palette ---------------------------------------------------------------------------- */
 enum { QT_WIFI, QT_BT, QT_EQ, QT_SEARCH, QT_RESCAN, QT_MODE, QT_SCREENOFF,
-       QT_SHUFFLE, QT_FAV, QT_LYRICS, QT_TIMER, QT_GAPLESS, QT_GAIN, QT_DRE, QT_RG, QT_OUTDOOR, QT_THEME, QT_COUNT };
+       QT_SHUFFLE, QT_FAV, QT_LYRICS, QT_TIMER, QT_GAPLESS, QT_GAIN, QT_DRE, QT_RG, QT_OUTDOOR, QT_THEME,
+       QT_BEAM, QT_COUNT };
 
 typedef struct {
     const char       *cfg;      /* per-tile enable key */
@@ -57,7 +60,7 @@ static const qtile_t QTILES[QT_COUNT] = {
     [QT_RESCAN]    = { "qs_t_rescan",    "Rescan",     LV_SYMBOL_REFRESH,   THEME_FONT_UI_20, 1, 0 },
     [QT_MODE]      = { "qs_t_mode",      "Source",     LV_SYMBOL_AUDIO,     THEME_FONT_UI_20, 1, 0 },
     [QT_SCREENOFF] = { "qs_t_screenoff", "Screen off", LV_SYMBOL_EYE_CLOSE, THEME_FONT_UI_20, 0, 0 },
-    /* opt-in audio/playback tiles (default off; enable in Settings > Display > Quick Settings) */
+    /* opt-in audio/playback tiles (default off; enable in Settings > Controls > Quick Settings) */
     [QT_SHUFFLE]   = { "qs_t_shuffle",   "Shuffle",    LV_SYMBOL_SHUFFLE,   THEME_FONT_UI_20, 0, 1 },
     [QT_FAV]       = { "qs_t_fav",       "Favourite",  WI_HEART,            THEME_FONT_ICON_20,         0, 0 },
     [QT_LYRICS]    = { "qs_t_lyrics",    "Lyrics",     WI_MIC,              THEME_FONT_ICON_20,         0, 0 },
@@ -68,7 +71,15 @@ static const qtile_t QTILES[QT_COUNT] = {
     [QT_RG]        = { "qs_t_rg",        "ReplayGain", LV_SYMBOL_VOLUME_MID,THEME_FONT_UI_20, 0, 0 },
     [QT_OUTDOOR]   = { "qs_t_outdoor",   "Outdoor",    WI_SUN,              THEME_FONT_ICON_20,         0, 1 },
     [QT_THEME]     = { "qs_t_theme",     "Theme",      WI_TINT,             THEME_FONT_ICON_20,         0, 1 },
+    [QT_BEAM]      = { "qs_t_beam",      "Beam",       BEAM_GLYPH,          THEME_FONT_ICON_20,         0, 0 },   /* Cast 21: opt-in (owner decision 85); opens the Beam picker, lit + the device name while beaming */
 };
+
+/* Local song/book actions have no meaning while another source owns playback (the retained local path would
+ * otherwise be favourited, its lyrics fetched or the local play mode changed). */
+static int tile_local_blocked(int id){
+    return ui_receiver_in_use() &&
+        (id == QT_SHUFFLE || id == QT_FAV || id == QT_LYRICS);
+}
 
 static lv_obj_t *g_qs_root;
 static lv_obj_t *g_qs_hdr;
@@ -78,6 +89,7 @@ static lv_obj_t *g_prev_glyph, *g_next_glyph;
 static lv_obj_t *g_pp_glyph;                 /* transport play/pause glyph (NULL when transport is off) */
 static lv_obj_t *g_tile_dot[QT_COUNT];       /* the circle per shown tile, recoloured on refresh */
 static lv_obj_t *g_tile_lbl[QT_COUNT];       /* its caption (the ring style colours it too) */
+static lv_obj_t *dim_tile, *dim_cap;         /* the Favourite tile (circle, caption) currently dimmed while casting (cleared when the tiles are rebuilt) */
 
 static int s_qs_batt = -1;
 static int s_qs_charging = 0;
@@ -96,10 +108,12 @@ static int qs_enabled(int ids[QT_COUNT], int cap){
     return n;
 }
 
+static int beam_active(void){ return ui_cast_phase() == 2 && *ui_cast_device(); }   /* a session is playing or paused: the same test as the status line */
+
 /* is a toggle tile currently "on"? action tiles are never lit. */
 static int qtile_is_on(int id){
     switch(id){
-        case QT_WIFI:    return cfg_get_int("wifi_on", 1);
+        case QT_WIFI:    return wifi_control_on();
         case QT_BT:      return bt_radio_on();   /* actual radio state, not just the persisted intent */
         case QT_EQ:      return cfg_get_int("eq_preset", 0) > 0;
         case QT_SHUFFLE: return cfg_get_int("work_mode", 0) == 1;
@@ -107,7 +121,8 @@ static int qtile_is_on(int id){
         case QT_GAIN:    return fw_gain_tag() && cfg_get_int("audio_gain", 0) == 1;   /* unmapped firmware: never lit */
         case QT_DRE:     return cfg_get_int("audio_dre", 1) == 1;
         case QT_OUTDOOR: return theme_outdoor();
-        case QT_FAV:   { track_state_t st; ipc_get_state(&st); return st.path[0] && st.is_favorite; }
+        case QT_BEAM:    return beam_active();   /* lit while beaming (drawn lit; the tile itself is an action) */
+        case QT_FAV:   { track_state_t raw, st; ipc_get_state(&raw); playback_display_state(&st, &raw); return st.path[0] && st.is_favorite; }   /* 15b: never lit while casting (the receiver's favourite state is unknown and the write is refused) */
         default:         return 0;   /* action tiles (Search/Rescan/Source/Screen off/Lyrics/Timer/RG) never lit */
     }
 }
@@ -124,7 +139,7 @@ static void tile_paint(int id, int on){
     lv_obj_t *c = g_tile_dot[id], *g = lv_obj_get_child(c, 0);
     if(theme_kit()->qs_tile){                         /* the theme's own tile */
         int toggle = id == QT_WIFI || id == QT_BT || id == QT_EQ || id == QT_SHUFFLE || id == QT_FAV || id == QT_GAPLESS
-                  || id == QT_GAIN || id == QT_DRE || id == QT_OUTDOOR;   /* the tiles qtile_is_on() can light */
+                  || id == QT_GAIN || id == QT_DRE || id == QT_OUTDOOR || id == QT_BEAM;   /* the tiles qtile_is_on() can light */
         kit_keep(c);                                  /* the theme painted it: the styling pass leaves it */
         theme_kit()->qs_tile(c, g, g_tile_lbl[id], on, toggle); return;
     }
@@ -162,6 +177,7 @@ static void eq_toggle(void){
 /* ---- unified tile handlers (tile id in user_data) ---------------------------------------------- */
 static void tile_short_cb(lv_event_t *e){
     int id = (int)(intptr_t)lv_event_get_user_data(e);
+    if(tile_local_blocked(id)) return;
     switch(id){
         case QT_WIFI:      { int on = wifi_toggle(); tile_recolor(QT_WIFI, on); ui_toast(on ? "Turning on Wi-Fi..." : "Wi-Fi off"); } break;
         case QT_BT: {
@@ -187,6 +203,7 @@ static void tile_short_cb(lv_event_t *e){
             }
             modes_open();
             break;
+        case QT_BEAM:      cast_ui_open(); break;
         case QT_SCREENOFF: ui_request_sleep(); screen_show(SCR_SAVER); break;
         case QT_SHUFFLE: {
             if(ui_book_active()){ ui_toast("Not available in books"); break; }   /* books stay in Single */
@@ -195,9 +212,9 @@ static void tile_short_cb(lv_event_t *e){
             tile_recolor(QT_SHUFFLE, on); ui_toast(on ? "Shuffle on" : "Shuffle off");
         } break;
         case QT_FAV: {
-            track_state_t st; ipc_get_state(&st);
-            if(!st.path[0] || ui_book_active()){ ui_toast("No track playing"); break; }
-            int nv = !st.is_favorite; ui_set_favorite(nv);
+            track_state_t raw, st; ipc_get_state(&raw); playback_display_state(&st, &raw);
+            if(!st.path[0] || (ui_book_active() && playback_source() == PB_SRC_LOCAL)){ ui_toast("No track playing"); break; }   /* casting: ui_set_favorite refuses with its own toast */
+            int nv = !st.is_favorite; if(!ui_set_favorite(nv)) break;   /* refused while casting: no tile recolour, no "Loved" toast */
             tile_recolor(QT_FAV, nv); ui_toast(nv ? "Loved" : "Unloved");
         } break;
         case QT_LYRICS:
@@ -246,6 +263,7 @@ static void tile_long_cb(lv_event_t *e){
         return;
     }
     int id = (int)(intptr_t)lv_event_get_user_data(e);
+    if(tile_local_blocked(id)) return;
     switch(id){
         case QT_WIFI: wifi_open(); break;
         case QT_BT:   bt_open();   break;
@@ -307,10 +325,59 @@ static void build_tile(lv_obj_t *root, int id, int x, int y){
     if(theme_kit()->qs_tile) tile_recolor(id, qtile_is_on(id));
 }
 
+/* ---- Beam tile caption + live state (Cast 21) -------------------------------------------------------
+ * The caption is "Beam", or the receiver's name while a session plays. The drawer follows the session while it is open: a timer exists only
+ * while the drawer is shown on a lit screen (the nphub_poll_sync pattern: started by a build or a refresh, deleted by its own next tick once
+ * the drawer is left or the screen is dark; the wake refresh starts it again), and it touches the tile only when the session changed. */
+int ui_screen_backlight_on(void);
+static lv_timer_t *g_beam_tm;
+static char g_beam_raw[100];   /* the caption text last set, before any theme case change or shortening */
+static int  g_beam_on = -1, g_beam_maxw;
+static const lv_font_t *g_beam_font;
+/* Repaints the tile when the session, the caption font or the room for the caption changed. A long name is shortened here with "..." to fit its
+ * column (not by the label's own dot mode: that rewrites the label text, and the theme tile styles lower- or upper-case what the label holds). */
+static int beam_sync(void){
+    lv_obj_t *lb = g_tile_lbl[QT_BEAM];
+    if(!lb) return 0;
+    int on = beam_active() ? 1 : 0;
+    const char *want = on ? ui_cast_device() : tr("Beam");
+    lv_obj_t *par = lv_obj_get_parent(lb);
+    if(par != g_qs_root) lv_obj_update_layout(par);   /* a checklist row (Terminal) is sized by its theme: its own width, less the box that leads it */
+    int maxw = par == g_qs_root ? 96 : lv_obj_get_width(par) - 64;   /* 84 px column pitch, a name gets 96 */
+    if(on == g_beam_on && maxw == g_beam_maxw && lv_obj_get_style_text_font(lb, 0) == g_beam_font && !strcmp(want, g_beam_raw)) return 0;
+    g_beam_on = on; g_beam_maxw = maxw; snprintf(g_beam_raw, sizeof g_beam_raw, "%s", want);
+    char up[100];
+    lv_label_set_text(lb, theme_trait(THEME_TRAIT_QS_RING) ? theme_upper(up, sizeof up, g_beam_raw) : g_beam_raw);
+    tile_recolor(QT_BEAM, on);                            /* the theme's own caption pass first (case, font) ... */
+    const lv_font_t *fn = lv_obj_get_style_text_font(lb, 0); g_beam_font = fn;
+    char buf[100]; snprintf(buf, sizeof buf, "%s", lv_label_get_text(lb));
+    int ls = lv_obj_get_style_text_letter_space(lb, 0); lv_point_t sz;
+    lv_text_get_size(&sz, buf, fn, ls, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    for(int n = (int)strlen(buf); sz.x > maxw && n > 0;){   /* ... then the name is cut to what the final font fits */
+        do n--; while(n > 0 && ((unsigned char)buf[n] & 0xC0) == 0x80);
+        char t[104]; snprintf(t, sizeof t, "%.*s...", n, buf);
+        lv_text_get_size(&sz, t, fn, ls, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        if(sz.x <= maxw) lv_label_set_text(lb, t);
+    }
+    return 1;
+}
+static void beam_tm_cb(lv_timer_t *t){
+    if(screen_current() != SCR_QUICK || !g_tile_dot[QT_BEAM] || !ui_screen_backlight_on()){ lv_timer_delete(t); g_beam_tm = NULL; return; }
+    beam_sync();
+}
+static void beam_poll_sync(void){
+    int want = g_tile_dot[QT_BEAM] && screen_current() == SCR_QUICK && ui_screen_backlight_on();
+    if(want && !g_beam_tm) g_beam_tm = lv_timer_create(beam_tm_cb, 250, NULL);
+    else if(!want && g_beam_tm){ lv_timer_delete(g_beam_tm); g_beam_tm = NULL; }
+}
+#ifdef DISKOS_HOST
+int qs_host_beam_timer_live(void){ return g_beam_tm != NULL; }   /* host probe */
+#endif
+
 /* ---- optional transport row -------------------------------------------------------------------- */
 static void cmd_cb(lv_event_t *e){
     const char *c = (const char*)lv_event_get_user_data(e); if(!c) return;
-    if(ui_transport_command(c) == 0) quicksettings_refresh(ui_is_playing());
+    if(ui_transport_command(c) == 0) quicksettings_refresh(ui_transport_playing());   /* receiver first, else the view (Cast facade or local) */
 }
 static lv_obj_t *tp_btn(lv_obj_t *root, const char *sym, const lv_font_t *font, int x, int y, int sz, void *cmd){
     lv_obj_t *b = lv_button_create(root);
@@ -336,7 +403,7 @@ static void build_transport(lv_obj_t *root, int y){
     g_prev_glyph = tp_btn(root, LV_SYMBOL_PREV, TF(UI_22), -84, y + 5, 46, (void*)"0201000C0002");
     g_pp_glyph = tp_btn(root, LV_SYMBOL_PAUSE, TF(UI_28), 0, y, 56, (void*)"0201000C0000");
     g_next_glyph = tp_btn(root, LV_SYMBOL_NEXT, TF(UI_22), 84, y + 5, 46, (void*)"0201000C0001");
-    if(g_pp_glyph) ui_pp_glyph(g_pp_glyph, ui_is_playing());
+    if(g_pp_glyph) ui_pp_glyph(g_pp_glyph, ui_transport_playing());
 }
 
 /* ---- brightness bar ---------------------------------------------------------------------------- */
@@ -483,6 +550,8 @@ void quicksettings_build(void){
     g_qs_hdr = NULL; g_qs_clock = NULL; g_qs_date = NULL; g_qs_batt = NULL;
     g_bright = NULL; g_pp_glyph = NULL; g_prev_glyph = NULL; g_next_glyph = NULL;
     for(int i=0;i<QT_COUNT;i++){ g_tile_dot[i] = NULL; g_tile_lbl[i] = NULL; }
+    dim_tile = dim_cap = NULL;
+    g_beam_raw[0] = 0; g_beam_on = -1;
 
     /* ensure fresh clock & date */
     qs_update_time_now();
@@ -490,7 +559,7 @@ void quicksettings_build(void){
     lv_obj_set_style_bg_color(g_qs_root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(g_qs_root, LV_OPA_COVER, 0);
 
-    /* grabber */
+    /* grabber at the bottom edge, where the swipe up that closes the panel starts */
     lv_obj_t *grab = lv_obj_create(g_qs_root);
     lv_obj_remove_style_all(grab);
     lv_obj_clear_flag(grab, LV_OBJ_FLAG_CLICKABLE);
@@ -528,15 +597,16 @@ void quicksettings_build(void){
         for(int i = 0; i < nt; i++){ q.tile[i] = g_tile_dot[ids[i]]; q.cap[i] = g_tile_lbl[ids[i]]; }
         theme_kit()->quicksettings(&q);
     }
-    quicksettings_refresh(ui_is_playing());
+    quicksettings_refresh(ui_transport_playing());
 }
 
 /* light update while the panel is open (playstate ticks, radio/EQ state changes) - no rebuild */
 void quicksettings_refresh(int playing){
     if(g_bright && !lv_obj_has_state(g_bright, LV_STATE_PRESSED))
         lv_slider_set_value(g_bright, ui_effective_brightness(), LV_ANIM_OFF);
+    if(ui_receiver_active()) playing = ui_transport_playing();   /* main.c passes the frozen local state */
     if(g_pp_glyph) ui_pp_glyph(g_pp_glyph, ui_pp_icon_playing(playing));
-    int book = ui_book_active();
+    int book = ui_book_active() && !ui_receiver_active() && playback_source() == PB_SRC_LOCAL;   /* a retained book session does not turn receiver skips into +30/-15; a Cast track has no -15/+30 either */
     if(g_prev_glyph){
         lv_label_set_text(g_prev_glyph, book ? "-15" : LV_SYMBOL_PREV);
         lv_obj_set_style_text_font(g_prev_glyph, book ? TF(UI_16) : TF(UI_22), 0);
@@ -545,72 +615,113 @@ void quicksettings_refresh(int playing){
         lv_label_set_text(g_next_glyph, book ? "+30" : LV_SYMBOL_NEXT);
         lv_obj_set_style_text_font(g_next_glyph, book ? TF(UI_16) : TF(UI_22), 0);
     }
-    for(int i=0;i<QT_COUNT;i++)
-        if(g_tile_dot[i]) tile_recolor(i, qtile_is_on(i));
+    beam_sync();
+    for(int i=0;i<QT_COUNT;i++){
+        if(!g_tile_dot[i]) continue;
+        if(tile_local_blocked(i))
+            lv_obj_add_state(g_tile_dot[i], LV_STATE_DISABLED);
+        else
+            lv_obj_remove_state(g_tile_dot[i], LV_STATE_DISABLED);
+        tile_recolor(i, qtile_is_on(i));
+    }
+    beam_poll_sync();
+    /* Favourite is refused while casting: the tile is shown dimmed (a tap says why) instead of looking available. Only a change touches it. */
+    lv_obj_t *ft = g_tile_dot[QT_FAV]; int cast = playback_source() != PB_SRC_LOCAL;
+    lv_obj_t *fc = g_tile_lbl[QT_FAV];
+    if(cast && ft && dim_tile != ft){ lv_obj_set_style_opa(ft, LV_OPA_50, 0); dim_tile = ft; }
+    else if(!cast && dim_tile){ if(dim_tile == ft) lv_obj_set_style_opa(ft, LV_OPA_COVER, 0); dim_tile = NULL; }
+    if(cast && fc && dim_cap != fc){ lv_obj_set_style_opa(fc, LV_OPA_50, 0); dim_cap = fc; }
+    else if(!cast && dim_cap){ if(dim_cap == fc) lv_obj_set_style_opa(fc, LV_OPA_COVER, 0); dim_cap = NULL; }
+
     quicksettings_set_status(s_qs_batt, s_qs_charging);
     qs_update_time_now();
     if(g_qs_clock) lv_label_set_text(g_qs_clock, s_qs_time);
     if(g_qs_date) lv_label_set_text(g_qs_date, s_qs_date);
 }
 
-/* ---- customisation screen (SCR_QSCONFIG): pick which tiles appear -------------------------------- */
-static lv_obj_t *g_qscfg_root;
+/* ---- customisation screen (SCR_QSCONFIG): Choose tiles - pick which tiles the drawer shows ---------- *
+ * One list: "Playback controls" first, then every tile, each a whole-row switch (a tap anywhere on the row flips it). A
+ * counter under the title says how many are chosen of how many fit. The saved choices are the same per-tile keys
+ * (qs_t_*) and qs_transport as always, so an existing choice shows as it was; a tile that does not fit is refused with
+ * a toast and nothing a user chose is ever switched off for them. */
+static lv_obj_t *g_qscfg_root, *g_qscfg_count;
 
 static void qscfg_back_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) screen_back(); }
+static int qscfg_chosen(void){
+    int cnt = 0;
+    for(int i=0;i<QT_COUNT;i++) if(cfg_get_int(QTILES[i].cfg, QTILES[i].def_on)) cnt++;
+    return cnt;
+}
+static void qscfg_count_paint(void){
+    if(!g_qscfg_count) return;
+    char b[64];
+    lv_snprintf(b, sizeof b, tr("%d of %d tiles selected"), qscfg_chosen(), qs_cap());
+    lv_label_set_text(g_qscfg_count, b);
+}
 static void qscfg_sw_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_VALUE_CHANGED) return;
     int id = (int)(intptr_t)lv_event_get_user_data(e);
     lv_obj_t *sw = lv_event_get_target(e);
     int on = lv_obj_has_state(sw, LV_STATE_CHECKED) ? 1 : 0;
     if(id < 0){
-        int cnt = 0;
-        for(int i=0;i<QT_COUNT;i++) if(cfg_get_int(QTILES[i].cfg, QTILES[i].def_on)) cnt++;
-        if(on && cnt > 5){
+        if(on && qscfg_chosen() > QS_MAX_TILES - 1){
             lv_obj_remove_state(sw, LV_STATE_CHECKED);
             ui_toast("Turn off a tile first");
             return;
         }
         cfg_set_int("qs_transport", on);
+        qscfg_count_paint();
         return;
     }   /* id -1 = the transport row */
     if(on){                                                  /* refuse to enable past the drawer's tile cap */
         int cap = qs_cap();
-        int cnt = 0; for(int i=0;i<QT_COUNT;i++) if(cfg_get_int(QTILES[i].cfg, QTILES[i].def_on)) cnt++;
-        if(cnt >= cap){                                     /* this tile is still off in cfg, so cnt excludes it */
+        if(qscfg_chosen() >= cap){                          /* this tile is still off in cfg, so the count excludes it */
             lv_obj_remove_state(sw, LV_STATE_CHECKED);
             char m[32]; snprintf(m, sizeof m, "Up to %d tiles shown", cap); ui_toast(m);
             return;
         }
     }
     cfg_set_int(QTILES[id].cfg, on);
+    qscfg_count_paint();
 }
-/* a labelled row with an LVGL switch on the right */
+/* The row is the tap target: it flips the switch like a finger on the switch would. */
+static void qscfg_row_cb(lv_event_t *e){
+    if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+    lv_obj_t *sw = lv_obj_get_child(lv_event_get_target(e), 1);
+    if(lv_obj_has_state(sw, LV_STATE_CHECKED)) lv_obj_remove_state(sw, LV_STATE_CHECKED); else lv_obj_add_state(sw, LV_STATE_CHECKED);
+    lv_obj_send_event(sw, LV_EVENT_VALUE_CHANGED, NULL);
+}
+/* a labelled row with an LVGL switch on the right (the Settings switch-row look: card, name left, switch right) */
 static void qscfg_row(lv_obj_t *list, const char *label, int id, int on){
-    lv_obj_t *row = lv_obj_create(list);
+    lv_obj_t *row = lv_button_create(list);
     lv_obj_remove_style_all(row);
     lv_obj_set_size(row, 268, 50);
     lv_obj_set_style_radius(row, 12, 0);
     lv_obj_set_style_bg_color(row, TC(SURFACE), 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_70, 0);
+    lv_obj_set_style_bg_color(row, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    ui_on(row, qscfg_row_cb, LV_EVENT_CLICKED, NULL, "quicksettings.qscfg_row", UI_CORE);
 
     lv_obj_t *lbl = lv_label_create(row);
     lv_label_set_text(lbl, tr(label));
-    lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 16, 0);
+    lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 18, 0);
     lv_obj_set_style_text_font(lbl, TF(UI_16), 0);
     lv_obj_set_style_text_color(lbl, TC(TEXT_PRIMARY), 0);
 
     lv_obj_t *sw = lv_switch_create(row);
-    lv_obj_set_size(sw, 48, 26);
+    lv_obj_clear_flag(sw, LV_OBJ_FLAG_CLICKABLE);               /* the row takes the tap; the switch shows the state */
+    theme_settings_switch(sw);
     lv_obj_align(sw, LV_ALIGN_RIGHT_MID, -12, 0);
     if(on) lv_obj_add_state(sw, LV_STATE_CHECKED);
-    lv_obj_set_style_bg_color(sw, ui_current_accent(), LV_PART_INDICATOR | LV_STATE_CHECKED);
-    ui_on(sw, qscfg_sw_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)id, "quicksettings.qscfg_sw.value", UI_CORE);
+    lv_obj_add_event_cb(sw, qscfg_sw_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)id);
+    theme_list_row(row);
 }
 
 static lv_obj_t *g_qscfg_list = NULL;
 
 void qsconfig_create(lv_obj_t *root){ g_qscfg_root = root; }
+static void qscfg_count_deleted(lv_event_t *e){ (void)e; g_qscfg_count = NULL; }
 
 void qsconfig_refresh(void){
     if(!g_qscfg_root) return;
@@ -619,14 +730,25 @@ void qsconfig_refresh(void){
     lv_obj_set_style_bg_opa(g_qscfg_root, LV_OPA_COVER, 0);
     ui_header_cb(g_qscfg_root, "Quick Settings", qscfg_back_cb);
 
+    g_qscfg_count = lv_label_create(g_qscfg_root);               /* "4 of 6 tiles selected", live */
+    lv_obj_add_event_cb(g_qscfg_count, qscfg_count_deleted, LV_EVENT_DELETE, NULL);
+    lv_label_set_long_mode(g_qscfg_count, LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(g_qscfg_count, 50, 66);
+    lv_obj_set_size(g_qscfg_count, 260, 20);
+    lv_obj_set_style_text_align(g_qscfg_count, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(g_qscfg_count, TF(UI_14), 0);
+    lv_obj_set_style_text_color(g_qscfg_count, TC(TEXT_SECONDARY), 0);
+    qscfg_count_paint();
+
     lv_obj_t *list = lv_obj_create(g_qscfg_root);
     lv_obj_remove_style_all(list);
-    lv_obj_set_pos(list, 30, 70);
-    lv_obj_set_size(list, 300, 250);
+    lv_obj_set_pos(list, 30, 92);
+    lv_obj_set_size(list, 300, 228);
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_pad_row(list, 8, 0);
     lv_obj_set_style_pad_bottom(list, 44, 0);
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
     ui_setup_scrollbar(list);
     lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLL_MOMENTUM);
@@ -635,15 +757,6 @@ void qsconfig_refresh(void){
     qscfg_row(list, "Playback controls", -1, cfg_get_int("qs_transport", 0));
     for(int i=0;i<QT_COUNT;i++)
         qscfg_row(list, QTILES[i].cap, i, cfg_get_int(QTILES[i].cfg, QTILES[i].def_on));
-
-    lv_obj_t *hint = lv_label_create(list);
-    lv_label_set_text(hint, tr("The drawer shows up to 6 tiles (5 with playback controls)."));
-    lv_obj_set_width(hint, 288);
-    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(hint, TF(UI_14), 0);
-    lv_obj_set_style_text_color(hint, TC(TEXT_MUTED), 0);
-    lv_obj_set_style_pad_top(hint, 6, 0);
-    lv_obj_set_style_pad_left(hint, 6, 0);
 }
 
 lv_obj_t *qsconfig_scroller(void){ return g_qscfg_list; }

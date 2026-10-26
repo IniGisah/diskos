@@ -62,6 +62,7 @@ void lv_gif_set_src(lv_obj_t * obj, const void * src)
 {
     lv_gif_t * gifobj = (lv_gif_t *) obj;
     gd_GIF * gif = gifobj->gif;
+    lv_timer_pause(gifobj->timer);
 
     /*Close previous gif if any*/
     if(gif != NULL) {
@@ -70,11 +71,12 @@ void lv_gif_set_src(lv_obj_t * obj, const void * src)
         gd_close_gif(gif);
         gifobj->gif = NULL;
         gifobj->imgdsc.data = NULL;
+        gif = NULL;
     }
 
     if(lv_image_src_get_type(src) == LV_IMAGE_SRC_VARIABLE) {
         const lv_image_dsc_t * img_dsc = src;
-        gif = gd_open_gif_data(img_dsc->data);
+        gif = gd_open_gif_data(img_dsc->data, img_dsc->data_size);
     }
     else if(lv_image_src_get_type(src) == LV_IMAGE_SRC_FILE) {
         gif = gd_open_gif_file(src);
@@ -134,7 +136,7 @@ void lv_gif_resume(lv_obj_t * obj)
         return;
     }
 
-    lv_timer_resume(gifobj->timer);
+    if(gifobj->gif->status > 0) lv_timer_resume(gifobj->timer);
 }
 
 bool lv_gif_is_loaded(lv_obj_t * obj)
@@ -142,6 +144,12 @@ bool lv_gif_is_loaded(lv_obj_t * obj)
     lv_gif_t * gifobj = (lv_gif_t *) obj;
 
     return (gifobj->gif != NULL);
+}
+
+int lv_gif_get_status(lv_obj_t * obj)
+{
+    lv_gif_t * gifobj = (lv_gif_t *) obj;
+    return gifobj->gif ? gifobj->gif->status : -1;
 }
 
 int32_t lv_gif_get_loop_count(lv_obj_t * obj)
@@ -198,17 +206,17 @@ static void next_frame_task_cb(lv_timer_t * t)
 {
     lv_obj_t * obj = t->user_data;
     lv_gif_t * gifobj = (lv_gif_t *) obj;
+    if(!gifobj->gif) return;
     uint32_t elaps = lv_tick_elaps(gifobj->last_call);
     if(elaps < gifobj->gif->gce.delay * 10) return;
 
     gifobj->last_call = lv_tick_get();
 
     int has_next = gd_get_frame(gifobj->gif);
-    if(has_next == 0) {
-        /*It was the last repeat*/
-        lv_result_t res = lv_obj_send_event(obj, LV_EVENT_READY, NULL);
+    if(has_next <= 0) {
         lv_timer_pause(t);
-        if(res != LV_RESULT_OK) return;
+        lv_obj_send_event(obj, has_next == 0 ? LV_EVENT_READY : LV_EVENT_CANCEL, NULL);
+        return;
     }
 
     gd_render_frame(gifobj->gif, (uint8_t *)gifobj->imgdsc.data);

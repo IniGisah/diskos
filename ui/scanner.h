@@ -22,6 +22,18 @@ int  scanner_unsupported(void);               /* count of audio files present bu
 /* Audiobook chapters (Nero 'chpl' in an M4B/M4A). */
 #define CHAP_TITLE 128
 typedef struct { long start_ms; char title[CHAP_TITLE]; } chapter_t;
+/* Blocking worker reader. Caller owns buffers; no shared state or UI calls.
+ * Invalid arguments yield READ_FAILURE. Non-OK fields have count/string cleared. */
+typedef enum {
+    BOOK_META_OK, BOOK_META_ABSENT, BOOK_META_UNSUPPORTED,
+    BOOK_META_READ_FAILURE, BOOK_META_ADMISSION_REFUSED
+} book_meta_outcome_t;
+typedef struct {
+    book_meta_outcome_t chapters, narrator;
+    int count;
+} book_meta_result_t;
+book_meta_result_t scan_read_book_meta(const char *path, chapter_t *out, int max,
+                                      char *narrator, int cap);
 int  scan_read_chapters(const char *path, chapter_t *out, int max);   /* count read (0 if none); chpl only */
 int  scan_cue_files(const char *cue_path, char (*out)[1024], int max, int (*seen)(const char *));   /* Browse Files: the library files a .cue sheet names (the scanner's bounded resolver); count */
 int  scan_read_narrator(const char *path, char *out, int cap);        /* 1 if the m4b names a narrator (composer/0xA9 + "wrt") */

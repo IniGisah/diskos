@@ -3,6 +3,7 @@
 /* theme_kits.c - each unique theme's component kit (theme_kit.h): its styler and the builders it replaces. */
 #include "theme.h"
 #include "theme_kit.h"
+#include "ui_dialog.h"
 #include "screens.h"
 #include <string.h>
 #include <stdlib.h>
@@ -184,6 +185,100 @@ static void np_text_rows(const np_parts_t *p, int title_y, int artist_y, int alb
     lv_obj_set_y(p->title, title_y);
     lv_obj_set_y(p->artist, artist_y);
     lv_obj_set_y(p->album, album_y);
+}
+/* ---- AirPlay receiving (rx_parts_t): guarded setters, because a receiver hook runs every tick ---- */
+static void rx_place(lv_obj_t *o, lv_align_t al, int x, int y, int w, const lv_font_t *f){
+    if(lv_obj_get_style_align(o, 0) != al) lv_obj_set_style_align(o, al, 0);
+    lv_obj_set_pos(o, x, y);
+    if(w && lv_obj_get_style_width(o, 0) != w) lv_obj_set_width(o, w);
+    if(f && lv_obj_get_style_text_font(o, 0) != f) lv_obj_set_style_text_font(o, f, 0);
+}
+static void rx_show(lv_obj_t *o, int on){
+    if(o && !lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) != !!on){
+        if(on) lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+static void rx_wrap(lv_obj_t *l, int wrap){
+    lv_label_long_mode_t m = wrap ? LV_LABEL_LONG_WRAP : LV_LABEL_LONG_DOT;
+    int32_t h = wrap ? LV_SIZE_CONTENT :
+        lv_font_get_line_height(lv_obj_get_style_text_font(l, 0)) +
+        lv_obj_get_style_pad_top(l, 0) +
+        lv_obj_get_style_pad_bottom(l, 0);
+    if(lv_obj_get_style_height(l, 0) != h) lv_obj_set_height(l, h);
+    if(lv_label_get_long_mode(l) != m) lv_label_set_long_mode(l, m);
+}
+static void rx_box(lv_obj_t *k, int x, int y, int w, int h){   /* a key: TOP_MID, x from the centre */
+    rx_place(k, LV_ALIGN_TOP_MID, x, y, w, NULL);
+    if(lv_obj_get_style_height(k, 0) != h) lv_obj_set_height(k, h);
+}
+static void rx_label(lv_obj_t *l, const lv_font_t *f, lv_color_t c){
+    lv_obj_set_style_text_font(l, f, 0); lv_obj_set_style_text_color(l, c, 0);
+}
+/* the transport row every receiving theme shares: previous / play-pause / next; y = top of the play key */
+static void rx_transport(const rx_parts_t *p, int y, int pp, int side){
+    rx_box(p->key[0], -side, y + pp / 2 - 22, 44, 44);
+    rx_box(p->key[1], 0, y, pp, pp);
+    rx_box(p->key[2], side, y + pp / 2 - 22, 44, 44);
+}
+static void rx_bg(lv_obj_t *o, lv_color_t c){ if(!lv_color_eq(lv_obj_get_style_bg_color(o, 0), c)) lv_obj_set_style_bg_color(o, c, 0); }
+/* Progress, display only (rx_state_t.show: the model trusts the position). The fill of a track at x,y,w,h and the two
+ * times under it; both are hidden whenever the model says no. A paused view keeps the bar at the frozen position and
+ * shows "Paused" where the times were. */
+static void rx_fill(const rx_parts_t *p, const rx_state_t *s, int x, int y, int w, int h, lv_color_t c){
+    int fw = s->show && (s->mode == RX_RECEIVING || s->mode == RX_PAUSED) ? (int)((int64_t)w * s->fraction / 1000) : 0;
+    rx_show(p->bar, fw > 0);
+    if(fw <= 0) return;
+    if(lv_obj_get_style_x(p->bar, 0) != x || lv_obj_get_style_y(p->bar, 0) != y) lv_obj_set_pos(p->bar, x, y);
+    if(lv_obj_get_style_width(p->bar, 0) != fw) lv_obj_set_width(p->bar, fw);
+    if(lv_obj_get_style_height(p->bar, 0) != h) lv_obj_set_height(p->bar, h);
+    rx_bg(p->bar, c);
+}
+static void rx_times(const rx_parts_t *p, const rx_state_t *s, int x, int y, int w){
+    int on = s->show && s->mode == RX_RECEIVING;
+    rx_show(p->elapsed, on); rx_show(p->remain, on);
+    if(!on) return;
+    rx_place(p->elapsed, LV_ALIGN_TOP_LEFT, x, y, w / 2, NULL); rx_place(p->remain, LV_ALIGN_TOP_LEFT, x + w / 2, y, w / 2, NULL);
+}
+static void rx_times_style(const rx_parts_t *p, const lv_font_t *f, lv_color_t c){
+    rx_label(p->elapsed, f, c); rx_label(p->remain, f, c);
+    lv_obj_set_style_text_align(p->elapsed, LV_TEXT_ALIGN_LEFT, 0); lv_obj_set_style_text_align(p->remain, LV_TEXT_ALIGN_RIGHT, 0);
+}
+/* The ring form (Default's arc, driven by a hook): the indicator follows the model's fraction, dimmed while paused and
+ * frozen, transparent whenever the model says no. The theme styles the indicator (width, colour) once, in `first`. */
+static void rx_ring(const rx_parts_t *p, const rx_state_t *s){
+    int on = s->show && (s->mode == RX_RECEIVING || s->mode == RX_PAUSED), v = on ? s->fraction : 0;
+    if(lv_arc_get_value(p->arc) != v) lv_arc_set_value(p->arc, v);
+    lv_opa_t o = !on || v <= 0 ? LV_OPA_TRANSP : s->mode == RX_PAUSED ? LV_OPA_50 : LV_OPA_COVER;
+    if(lv_obj_get_style_arc_opa(p->arc, LV_PART_INDICATOR) != o) lv_obj_set_style_arc_opa(p->arc, o, LV_PART_INDICATOR);
+}
+static void rx_frame(lv_obj_t *f, int x, int y, int w, int h){   /* the cover frame, from the top left */
+    rx_place(f, LV_ALIGN_TOP_LEFT, x, y, w, NULL);
+    if(lv_obj_get_style_height(f, 0) != h) lv_obj_set_height(f, h);
+}
+/* A theme that left-aligns the rows gets Default's centred placement back, once, for the states it does not own. */
+static void rx_recenter(const rx_parts_t *p, int *owned){
+    if(!*owned) return;
+    *owned = 0;
+    for(int i = 0; i < 5; i++){
+        rx_place(p->text[i], LV_ALIGN_TOP_MID, 0, 0, i == 3 ? 230 : 280, NULL);
+        lv_obj_set_style_text_align(p->text[i], LV_TEXT_ALIGN_CENTER, 0);
+    }
+    lv_obj_set_style_max_height(p->text[1], LV_COORD_MAX, 0);
+    rx_show(p->text[3], 1);
+}
+/* The text rows, "Paused", the glyph and the waiting block. y: title, artist, album, paused, glyph, heading, Disc name,
+ * hint; f: title face, plain-title face (no metadata yet), waiting-heading face. */
+static void rx_rows(const rx_parts_t *p, const rx_state_t *s, const int y[8], const lv_font_t *const f[3]){
+    int wait = s->mode == RX_WAITING;
+    rx_place(p->text[1], LV_ALIGN_TOP_MID, 0, wait ? y[5] : s->has_title ? y[0] : y[0] + 12, 250, wait ? f[2] : s->has_title ? f[0] : f[1]);
+    rx_wrap(p->text[1], wait ||
+        (!s->has_title && !s->text[2][0] && !s->text[3][0]));
+    rx_place(p->text[2], LV_ALIGN_TOP_MID, 0, wait ? y[6] : y[1], 238, NULL);
+    rx_wrap(p->text[2], 0);
+    rx_place(p->text[3], LV_ALIGN_TOP_MID, 0, wait ? y[7] : y[2], wait ? 230 : 218, NULL);
+    rx_wrap(p->text[3], wait);
+    rx_place(p->text[4], LV_ALIGN_TOP_MID, 0, y[3], 200, NULL);
+    rx_place(p->icon, LV_ALIGN_TOP_MID, 0, y[4], 0, NULL);
 }
 /* Keep saver song blocks below the rendered date, including a larger user font. */
 static int saver_song_y(lv_obj_t *date, int base){
@@ -517,7 +612,38 @@ static void hifi_cover(lv_obj_t *cover, lv_obj_t *note, int show, int loading){
     lv_obj_set_style_text_color(note, TC(ACCENT_PRIMARY), 0);
     lv_obj_center(note);
 }
-const theme_kit_t theme_kit_hifi = { .id = "hi-fi", .header = kit_edge_header, .style = hifi_style, .home = hifi_home,
+/* AirPlay receiving: the bezel ticks (the texture) stay unlit, an amber tracked tag, a machined play plate. */
+static void hifi_rx(const rx_parts_t *p, rx_state_t *s){
+    if(s->first){
+        lv_obj_set_style_arc_opa(p->arc, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_radius(p->frame, 6, 0);
+        lv_obj_set_style_border_width(p->frame, 1, 0);
+        lv_obj_set_style_border_color(p->frame, TC(BORDER_STRONG), 0);
+        lv_obj_set_style_border_opa(p->frame, LV_OPA_COVER, 0);
+        rx_label(p->text[0], TF(UI_12), TC(ACCENT_PRIMARY)); lv_obj_set_style_text_letter_space(p->text[0], 2, 0);
+        rx_label(p->text[1], TF(USER_20), TC(TEXT_PRIMARY)); rx_label(p->text[2], TF(USER_16), TC(TEXT_SECONDARY));
+        rx_label(p->text[3], TF(USER_14), TC(TEXT_MUTED));
+        rx_label(p->text[4], TF(UI_12), TC(TEXT_MUTED)); lv_obj_set_style_text_letter_space(p->text[4], 2, 0);
+        lv_obj_set_style_radius(p->key[1], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(p->key[1], TC(SURFACE_RAISED), 0);
+        lv_obj_set_style_border_width(p->key[1], 1, 0);
+        lv_obj_set_style_border_color(p->key[1], TC(BORDER_STRONG), 0);
+        lv_obj_set_style_bg_opa(p->key[1], LV_OPA_COVER, 0);
+        rx_label(p->elapsed, &diskos_hifi_seg_20, TC(ACCENT_PRIMARY)); rx_label(p->remain, &diskos_hifi_seg_20, TC(ACCENT_PRIMARY));
+        lv_obj_set_style_text_align(p->elapsed, LV_TEXT_ALIGN_RIGHT, 0); lv_obj_set_style_text_align(p->remain, LV_TEXT_ALIGN_LEFT, 0);
+        lv_label_set_long_mode(p->elapsed, LV_LABEL_LONG_CLIP); lv_label_set_long_mode(p->remain, LV_LABEL_LONG_CLIP);   /* never wrap a long time */
+        return;
+    }
+    int tm = s->show && s->mode == RX_RECEIVING;   /* the times in the segment face, no bar: "2:31   -1:32" under the keys */
+    rx_show(p->bar, 0); rx_show(p->elapsed, tm); rx_show(p->remain, tm);
+    if(s->mode == RX_OTHER) return;
+    if(tm){ rx_place(p->elapsed, LV_ALIGN_TOP_LEFT, 50, 318, 120, NULL); rx_place(p->remain, LV_ALIGN_TOP_LEFT, 190, 318, 120, NULL); }
+    if(s->mode == RX_PAUSED) theme_upper(s->text[4], sizeof s->text[4], s->text[4]);   /* PAUSED, as the display reads it */
+    rx_place(p->text[0], LV_ALIGN_TOP_MID, 0, 20, 160, NULL);
+    rx_rows(p, s, (const int[8]){ 193, 221, 240, 322, 84, 150, 184, 210 }, (const lv_font_t *const[3]){ TF(USER_20), TF(USER_16), TF(USER_20) });
+    rx_transport(p, 262, 50, 66);
+}
+const theme_kit_t theme_kit_hifi = { .id = "hi-fi", .header = kit_edge_header, .style = hifi_style, .home = hifi_home, .receiver = hifi_rx,
                                      .home_clock = hifi_clock,
                                      .nowplaying = hifi_np, .qs_tile = hifi_qs_tile, .saver = hifi_saver,
                                      .empty_state = hifi_empty, .np_cover_state = hifi_cover,
@@ -550,14 +676,18 @@ static void term_cursor_place(lv_obj_t *title){
     lv_obj_t *cur = term_cursor_for(lv_obj_get_parent(title));
     if(!cur) return;
     const lv_font_t *f = lv_obj_get_style_text_font(title, 0);
+    const char *text = lv_label_get_text(title), *last = strrchr(text, '\n');
+    int lines = 0; for(const char *p = text; *p; p++) if(*p == '\n') lines++;
     lv_point_t sz;
-    lv_text_get_size(&sz, lv_label_get_text(title), f, lv_obj_get_style_text_letter_space(title, 0),
+    lv_text_get_size(&sz, last ? last + 1 : text, f, lv_obj_get_style_text_letter_space(title, 0),
                      0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-    int room = lv_obj_get_width(title);
+    int room = lv_obj_get_content_width(title);
     if(sz.x > room) sz.x = room;
     int x = lv_obj_get_x(title) + (room + sz.x) / 2 + 3;
     if(x > 318) x = 318;
-    lv_obj_set_pos(cur, x, lv_obj_get_y(title) + (lv_obj_get_height(title) - 16) / 2);
+    int lh = lv_font_get_line_height(f);
+    lv_obj_set_pos(cur, x, lv_obj_get_y(title) + lv_obj_get_style_pad_top(title, 0) +
+                   lines * (lh + lv_obj_get_style_text_line_space(title, 0)) + (lh - 16) / 2);
 }
 static void term_cursor_resize(lv_event_t *e){ term_cursor_place(lv_event_get_target(e)); }
 static void term_cursor_tick(lv_timer_t *timer){
@@ -878,12 +1008,13 @@ static void term_np(const np_parts_t *p){
     }
     lv_obj_set_style_text_color(p->pp, TC(ACCENT_PRIMARY), 0);
     /* mode / fav / sleep as a row of keys */
-    lv_obj_t *k[3] = { p->mode, p->fav, p->sleep };
-    for(int i = 0; i < 3; i++){ lv_obj_set_size(k[i], 50, 40); term_key(k[i]); lv_obj_set_ext_click_area(k[i], 4); }
-    /* the moon replaces the heart for audiobooks (ui.c): they share the second slot */
-    lv_obj_align(p->mode, LV_ALIGN_TOP_MID, -32, 272);
-    lv_obj_align(p->fav, LV_ALIGN_TOP_MID, 32, 272);
-    lv_obj_align(p->sleep, LV_ALIGN_TOP_MID, 32, 272);
+    lv_obj_t *k[4] = { p->mode, p->fav, p->sleep, p->beam };
+    for(int i = 0; i < 4; i++){ lv_obj_set_size(k[i], 50, 40); term_key(k[i]); lv_obj_set_ext_click_area(k[i], 4); }
+    /* the moon replaces the heart for audiobooks (ui.c): they share the middle slot; Beam is the third key */
+    lv_obj_align(p->mode, LV_ALIGN_TOP_MID, -64, 272);
+    lv_obj_align(p->fav, LV_ALIGN_TOP_MID, 0, 272);
+    lv_obj_align(p->sleep, LV_ALIGN_TOP_MID, 0, 272);
+    lv_obj_align(p->beam, LV_ALIGN_TOP_MID, 64, 272);
 }
 static void term_qs(const qs_parts_t *p){
     lv_obj_t *prompt = term_text(p->root, "$ quick", TC(TEXT_SECONDARY), 0, 26);
@@ -976,7 +1107,88 @@ static void term_empty(kit_empty_kind_t kind, lv_obj_t *message){
         lv_obj_add_event_cb(message, term_prompt_deleted, LV_EVENT_DELETE, NULL);
     }
 }
-const theme_kit_t theme_kit_term = { .id = "terminal", .header = term_header, .style = term_style, .home = term_home,
+/* AirPlay receiving: the readout. "> airplay" is the source tag, key / value rows, a flat empty bar, boxed keys. */
+static lv_obj_t *g_rx_term_key[4], *g_rx_term_bar;
+static int g_rx_term_mode;
+static void term_rx(const rx_parts_t *p, rx_state_t *s){
+    if(s->first){
+        g_rx_term_mode = -1;
+        lv_obj_set_style_arc_opa(p->arc, LV_OPA_TRANSP, LV_PART_MAIN);
+        static const char *const K[4] = { "title", "artist", "album", "name" };
+        for(int i = 0; i < 4; i++) g_rx_term_key[i] = term_text(p->root, K[i], TC(TEXT_MUTED), 60, 0);
+        g_rx_term_bar = lv_bar_create(p->root);
+        lv_obj_set_size(g_rx_term_bar, 240, 14); lv_obj_align(g_rx_term_bar, LV_ALIGN_TOP_MID, 0, 164);
+        lv_obj_set_style_radius(g_rx_term_bar, 0, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(g_rx_term_bar, TC(SURFACE_SELECTED), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(g_rx_term_bar, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_width(g_rx_term_bar, 1, LV_PART_MAIN);
+        lv_obj_set_style_border_color(g_rx_term_bar, TC(TEXT_SECONDARY), LV_PART_MAIN);
+        lv_obj_clear_flag(g_rx_term_bar, LV_OBJ_FLAG_CLICKABLE);
+        rx_times_style(p, TF(UI_14), TC(TEXT_SECONDARY)); lv_obj_move_foreground(p->bar);   /* the fill sits inside the track's border */
+        rx_label(p->text[0], TF(UI_14), TC(TEXT_MUTED));
+        rx_label(p->text[1], TF(USER_16), TC(TEXT_PRIMARY)); rx_label(p->text[2], TF(USER_14), TC(TEXT_SECONDARY));
+        rx_label(p->text[3], TF(UI_12), TC(TEXT_SECONDARY)); rx_label(p->text[4], TF(UI_14), TC(TEXT_MUTED));
+        for(int i = 0; i < 5; i++) lv_obj_set_style_text_align(p->text[i], LV_TEXT_ALIGN_LEFT, 0);
+        for(int i = 0; i < 3; i++){
+            term_key(p->key[i]);
+            lv_obj_set_style_border_color(p->key[i], i == 1 ? TC(ACCENT_PRIMARY) : TC(TEXT_SECONDARY), 0);
+            lv_obj_set_style_text_color(p->label[i], i == 1 ? TC(ACCENT_PRIMARY) : TC(TEXT_PRIMARY), 0);
+            lv_obj_set_style_text_font(p->label[i], TF(UI_20), 0);
+        }
+        return;
+    }
+    int rx = s->mode == RX_RECEIVING || s->mode == RX_PAUSED, wait = s->mode == RX_WAITING;
+    rx_show(g_rx_term_bar, rx);
+    if(!rx || s->mode == RX_OTHER){ rx_show(p->bar, 0); rx_show(p->elapsed, 0); rx_show(p->remain, 0); }
+    for(int i = 0; i < 4; i++) rx_show(g_rx_term_key[i], i < 3 ? rx && (!i || s->text[i + 1][0]) : wait);
+    if(s->mode == RX_OTHER){   /* Default's centred placement again, once, for the states the readout does not own */
+        if(g_rx_term_mode){
+            for(int i = 0; i < 5; i++){
+                rx_place(p->text[i], LV_ALIGN_TOP_MID, 0, lv_obj_get_y(p->text[i]), i == 3 ? 230 : 280, NULL);
+                lv_obj_set_style_text_align(p->text[i], LV_TEXT_ALIGN_CENTER, 0);
+            }
+            g_rx_term_mode = 0;
+        }
+        return;
+    }
+    g_rx_term_mode = 1;
+    for(int i = 0; i < 5; i++){
+        if(lv_obj_get_style_text_align(p->text[i], 0) != LV_TEXT_ALIGN_LEFT)
+            lv_obj_set_style_text_align(p->text[i], LV_TEXT_ALIGN_LEFT, 0);
+    }
+    s->frame = s->icon = 0;                                   /* a readout: no art slot, no glyph */
+    char tag[48], pz[48];
+    theme_lower(tag, sizeof tag, s->text[0][0] ? s->text[0] : "AIRPLAY"); theme_lower(pz, sizeof pz, s->text[4]);
+    lv_snprintf(s->text[0], sizeof s->text[0], s->mode == RX_PAUSED ? "> %s [%s]" : "> %s", tag, pz);
+    lv_snprintf(s->text[4], sizeof s->text[4], "%s", pz);
+    if(wait){ theme_lower(s->text[1], sizeof s->text[1], s->text[1]); strcat(s->text[1], "_"); }   /* heading + block cursor */
+    int kh = lv_font_get_line_height(TF(UI_14));
+    rx_place(p->text[0], LV_ALIGN_TOP_LEFT, 60, wait ? 70 : 50, 250, NULL);
+    rx_place(p->text[4], LV_ALIGN_TOP_LEFT, 60, 184, 200, NULL);
+    const lv_font_t *vf[3] = { wait ? TF(UI_20) : TF(USER_16), TF(USER_14), wait ? TF(UI_12) : TF(USER_14) };
+    for(int i = 0; i < 3; i++){   /* rows: key + value on one baseline; waiting: heading, name row, hint */
+        int x = wait && i != 1 ? 60 : 124, w = wait ? (i == 1 ? 176 : 230) : 176;
+        int top = wait ? (i == 0 ? 104 : i == 1 ? 148 : 176) : 80 + 24 * i;
+        rx_place(p->text[i + 1], LV_ALIGN_TOP_LEFT, x, top + (wait && i != 1 ? 0 : kh - lv_font_get_line_height(vf[i])), w, vf[i]);
+        rx_wrap(p->text[i + 1], wait ? i == 2 :
+            i == 0 && !s->has_title &&
+            !s->text[2][0] && !s->text[3][0]);
+    }
+    lv_opa_t fo = s->mode == RX_PAUSED ? LV_OPA_50 : LV_OPA_COVER;
+    if(lv_obj_get_style_opa(p->bar, 0) != fo) lv_obj_set_style_opa(p->bar, fo, 0);
+    rx_fill(p, s, 61, 165, 238, 12, TC(ACCENT_PRIMARY)); rx_times(p, s, 60, 184, 240);   /* a real fill in the track, "2:31" / "-1:32" under it */
+    lv_obj_t *dim[4] = { p->text[1], p->text[2], p->text[3], g_rx_term_bar };   /* paused: the art-dimming rule, on text and bar */
+    for(int i = 0; i < 4; i++){
+        lv_opa_t o = s->mode == RX_PAUSED ? LV_OPA_70 : LV_OPA_COVER;
+        if(i < 3){ if(lv_obj_get_style_text_opa(dim[i], 0) != o) lv_obj_set_style_text_opa(dim[i], o, 0); }
+        else if(lv_obj_get_style_opa(dim[i], 0) != (s->mode == RX_PAUSED ? LV_OPA_50 : LV_OPA_COVER)) lv_obj_set_style_opa(dim[i], s->mode == RX_PAUSED ? LV_OPA_50 : LV_OPA_COVER, 0);
+    }
+    lv_color_t hc = wait ? TC(ACCENT_PRIMARY) : TC(TEXT_PRIMARY);
+    if(!lv_color_eq(lv_obj_get_style_text_color(p->text[1], 0), hc)) lv_obj_set_style_text_color(p->text[1], hc, 0);
+    for(int i = 0; i < 4; i++) lv_obj_set_pos(g_rx_term_key[i], 60, i < 3 ? 80 + 24 * i : 148);
+    for(int i = 0; i < 3; i++) rx_box(p->key[i], (i - 1) * 70, 216, 56, 38);
+}
+const theme_kit_t theme_kit_term = { .id = "terminal", .header = term_header, .title_placed = term_cursor_place, .style = term_style, .home = term_home, .receiver = term_rx,
                                      .home_clock = term_clock,
                                      .nowplaying = term_np, .quicksettings = term_qs, .qs_tile = term_qs_tile,
                                      .saver = term_saver, .empty_state = term_empty, .row_value = term_row_value,
@@ -1037,6 +1249,9 @@ static lv_obj_t *blue_number_of(lv_obj_t *row){
 static void blue_shift_left_half(lv_obj_t *row){           /* the row's left half moves for the number (text, icons, dots) */
     for(uint32_t i = 0; i < lv_obj_get_child_count(row); i++){
         lv_obj_t *c = lv_obj_get_child(row, (int32_t)i);
+        /* Right aligned values and controls stay anchored to the row's right edge. */
+        lv_align_t align = lv_obj_get_style_align(c, 0);
+        if(align == LV_ALIGN_TOP_RIGHT || align == LV_ALIGN_RIGHT_MID || align == LV_ALIGN_BOTTOM_RIGHT) continue;
         if(lv_obj_get_user_data(c) == (void *)&g_bnum_tag || lv_obj_get_x(c) > lv_obj_get_width(row) / 2) continue;
         lv_obj_set_x(c, lv_obj_get_x(c) + 26);
         lv_obj_add_flag(c, BLUE_SHIFTED);
@@ -1103,31 +1318,11 @@ static void blue_pass_end(void){
     for(int k = 0; k < g_bnum_n; k++) blue_renumber(g_bnum_pending[k]);   /* the pass that noted them has just ended */
     g_bnum_n = 0;
 }
-/* A drawing title: the wide tracking, tightened (then the next smaller face) only when the title would not fit the glass
- * at its row inside the rule's 10 px padding. Starts from the header face every time, so a shorter new title gets it
- * back. The box goes to its widest first: a long-dot label lays its text out in its CURRENT coords on each style
- * change, and new tracking in an old narrow box dotted "ADD TO PLAYLIST" down to "...". */
+/* Blueprint's face and tracking; page geometry is resolved by the shared header. */
 static void blue_title_fit(lv_obj_t *o, const char *text){
-    /* the glass at the title's row once it has one: kit_edge_header sets the text before it places the label (y 0,
-     * where the round screen is ~30 px wide) */
-    int32_t y = lv_obj_get_y(o);
-    int box = y >= 16 ? ui_round_width(y + 2, 10) : 250;
-    if(box > 250) box = 250;
-    const lv_font_t *f = TF(HEADER);
-    int ls = 3;
-    for(int k = 0; text && k < 12; k++){
-        lv_point_t sz; lv_text_get_size(&sz, text, f, ls, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-        if(sz.x <= box - 20) break;
-        if(ls > 0){ ls--; continue; }
-        const lv_font_t *sm = theme_title_smaller(f);
-        if(!sm) break;
-        f = sm; ls = 3;
-    }
-    lv_obj_set_style_max_width(o, box, 0);
-    lv_obj_set_width(o, box);
-    lv_obj_update_layout(o);
-    lv_obj_set_style_text_font(o, f, 0);
-    lv_obj_set_style_text_letter_space(o, ls, 0);
+    (void)text;
+    lv_obj_set_style_text_font(o, TF(HEADER), 0);
+    lv_obj_set_style_text_letter_space(o, 3, 0);
 }
 /* A top-layer title inherits the current screen's permanent figure number. */
 static int blue_figure(lv_obj_t *o){
@@ -1137,24 +1332,8 @@ static int blue_figure(lv_obj_t *o){
 }
 static void blue_title_form(lv_obj_t *o, const char *text, char *out, size_t cap){
     /* EQ has slot arrows in the header band. Its figure is drawn beside the title at a smaller face. */
-    if(blue_figure(o) == screen_figure_number(SCR_EQ)){ lv_snprintf(out, cap, "%s", text ? text : ""); return; }
     char full[192]; lv_snprintf(full, sizeof full, "fig.%d  %s", blue_figure(o), text ? text : "");
-    /* First fit the complete title by stepping down. If it still exceeds the round glass,
-     * omit the prefix so the original title keeps its full available width. */
-    const lv_font_t *f = TF(HEADER);
-    int fits = 0;
-    int32_t y = lv_obj_get_y(o);
-    int room = y >= 16 ? ui_round_width(y + 2, 10) : 250;
-    if(room > 250) room = 250;
-    room -= 20;  /* the rule's left and right padding */
-    for(int k = 0; k < 12; k++){
-        lv_point_t sz; lv_text_get_size(&sz, full, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-        if(sz.x <= room){ fits = 1; break; }
-        const lv_font_t *next = theme_title_smaller(f);
-        if(!next) break;
-        f = next;
-    }
-    lv_snprintf(out, cap, "%s", fits ? full : text);
+    lv_snprintf(out, cap, "%s", full);
 }
 static void blue_title(lv_obj_t *o, const char *text){
     char shown[192]; blue_title_form(o, text, shown, sizeof shown);
@@ -1181,8 +1360,6 @@ static void blue_row_decor(lv_obj_t *row, lv_obj_t *title){
     lv_obj_remove_event_cb(row, blue_row_draw);
     lv_obj_add_event_cb(row, blue_row_draw, LV_EVENT_DRAW_MAIN_END, NULL);
 }
-static lv_obj_t *g_blue_eq_fig;
-static lv_font_t g_blue_eq_font;
 static void blue_style(lv_obj_t *o, kit_role_t r){
     switch(r){
     case KIT_TITLE: {
@@ -1198,24 +1375,7 @@ static void blue_style(lv_obj_t *o, kit_role_t r){
         lv_obj_set_style_border_color(o, TC(ACCENT_PRIMARY), 0);
         lv_obj_set_y(o, lv_obj_get_y(o) - 3);
         lv_obj_align(o, LV_ALIGN_TOP_MID, 0, lv_obj_get_y(o));
-        if(lv_obj_get_parent(o) == screen_get_root(SCR_EQ)){
-            if(!g_blue_eq_font.get_glyph_dsc){ g_blue_eq_font = *TF(UI_12); g_blue_eq_font.fallback = TF(UI_14); }
-            lv_obj_set_style_text_font(o, &g_blue_eq_font, 0);
-            lv_obj_set_style_text_letter_space(o, 1, 0);
-            lv_obj_set_style_pad_bottom(o, 12, 0);  /* retain the common header box; ink ends above the arrows */
-            lv_obj_set_style_border_width(o, 0, 0);
-            lv_obj_set_size(o, LV_SIZE_CONTENT, 25);
-            lv_obj_align(o, LV_ALIGN_TOP_MID, 0, 37);
-            if(!g_blue_eq_fig){
-                g_blue_eq_fig = lv_label_create(lv_obj_get_parent(o));
-                char number[16]; lv_snprintf(number, sizeof number, "fig.%d", blue_figure(o));
-                lv_label_set_text(g_blue_eq_fig, number);
-                lv_obj_set_style_text_font(g_blue_eq_fig, TF(UI_12), 0);
-                lv_obj_set_style_text_color(g_blue_eq_fig, TC(DECOR_1), 0);
-                kit_keep(g_blue_eq_fig);
-            }
-            lv_obj_align(g_blue_eq_fig, LV_ALIGN_TOP_MID, 0, 18);
-        }
+
         break; }
     case KIT_ROW: blue_row(o); break;
     case KIT_ROW_CHEVRON:
@@ -1460,13 +1620,9 @@ static void blue_empty(kit_empty_kind_t kind, lv_obj_t *message){
         lv_obj_add_flag(message, LV_OBJ_FLAG_USER_2);
         lv_obj_set_style_pad_ver(message, 12, 0);
         if(kind == KIT_EMPTY_UPNEXT){
-            lv_obj_t *parent = lv_obj_get_parent(message);
-            lv_obj_update_layout(parent);
-            lv_area_t label, area;
-            lv_obj_get_coords(message, &label);
-            lv_obj_get_coords(parent, &area);
-            lv_obj_set_style_translate_y(message,
-                (area.y1 + area.y2 - label.y1 - label.y2) / 2, 0);
+            lv_obj_add_flag(message, LV_OBJ_FLAG_IGNORE_LAYOUT);
+            lv_obj_set_style_translate_y(message, 0, 0);
+            lv_obj_align(message, LV_ALIGN_CENTER, 0, 0);
         }
     }
     free(lv_obj_get_user_data(message));
@@ -1528,7 +1684,54 @@ static void blue_saver(const saver_parts_t *p){
     for(int i = 0; i < 8; i++) lv_obj_set_pos(bar[i], 116 + 16 * i, y);
     lv_obj_set_pos(bar[8], 116, y + 8);
 }
-const theme_kit_t theme_kit_blue = { .id = "blueprint", .header = kit_edge_header, .style = blue_style, .home = blue_home,
+/* AirPlay receiving: the drawing-sheet tag, a thin display-only ring, crop marks on the cover, a ringed play key. */
+static lv_obj_t *g_rx_blue_mark[4], *g_rx_blue_slot;
+static void blue_rx(const rx_parts_t *p, rx_state_t *s){
+    if(s->first){
+        lv_obj_set_size(p->arc, 336, 336); lv_obj_center(p->arc);
+        lv_obj_set_style_arc_width(p->arc, 3, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(p->arc, TC(BORDER_STRONG), LV_PART_MAIN);
+        lv_obj_set_style_arc_width(p->arc, 3, LV_PART_INDICATOR); lv_obj_set_style_arc_color(p->arc, TC(ACCENT_PRIMARY), LV_PART_INDICATOR);
+        rx_times_style(p, TF(UI_12), TC(TEXT_MUTED));
+        lv_obj_set_style_radius(p->frame, 0, 0);
+        lv_obj_set_style_border_width(p->frame, 1, 0);
+        lv_obj_set_style_border_color(p->frame, TC(ACCENT_PRIMARY), 0);
+        lv_obj_set_style_border_opa(p->frame, LV_OPA_COVER, 0);
+        for(int i = 0; i < 2; i++){   /* registration marks outside the cover's top corners (the lower ones would meet the title) */
+            int x = i ? 264 + 10 : 106 - 10, y = 44 - 10;
+            g_rx_blue_mark[2 * i] = blue_line(p->root, x - 7, y, 15, 1, TC(DECOR_1));
+            g_rx_blue_mark[2 * i + 1] = blue_line(p->root, x, y - 7, 1, 15, TC(DECOR_1));
+        }
+        static lv_point_precise_t box[5] = { {0, 0}, {88, 0}, {88, 88}, {0, 88}, {0, 0} };   /* the empty art slot, dashed */
+        g_rx_blue_slot = lv_line_create(p->root);
+        lv_line_set_points(g_rx_blue_slot, box, 5); lv_obj_set_pos(g_rx_blue_slot, 136, 62);
+        lv_obj_set_style_line_width(g_rx_blue_slot, 1, 0); lv_obj_set_style_line_color(g_rx_blue_slot, TC(BORDER_STRONG), 0);
+        lv_obj_set_style_line_dash_width(g_rx_blue_slot, 4, 0); lv_obj_set_style_line_dash_gap(g_rx_blue_slot, 3, 0);
+        rx_label(p->text[0], TF(UI_12), TC(ACCENT_PRIMARY)); lv_obj_set_style_text_letter_space(p->text[0], 1, 0);
+        rx_label(p->text[1], TF(USER_20), TC(TEXT_PRIMARY)); rx_label(p->text[2], TF(USER_16), TC(TEXT_SECONDARY));
+        rx_label(p->text[3], TF(USER_14), TC(TEXT_MUTED)); rx_label(p->text[4], TF(UI_12), TC(TEXT_MUTED));
+        lv_obj_set_style_radius(p->key[1], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(p->key[1], TC(CANVAS), 0);
+        lv_obj_set_style_bg_opa(p->key[1], LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(p->key[1], 2, 0);
+        lv_obj_set_style_border_color(p->key[1], TC(DECOR_1), 0);
+        lv_obj_set_style_text_color(p->label[1], TC(DECOR_1), 0);
+        lv_obj_set_style_text_color(p->label[0], TC(ACCENT_PRIMARY), 0); lv_obj_set_style_text_color(p->label[2], TC(ACCENT_PRIMARY), 0);
+        return;
+    }
+    int rx = s->mode == RX_RECEIVING || s->mode == RX_PAUSED, wait = s->mode == RX_WAITING;
+    for(int i = 0; i < 4; i++) rx_show(g_rx_blue_mark[i], rx);
+    rx_show(g_rx_blue_slot, wait);
+    rx_ring(p, s); rx_show(p->bar, 0);   /* the thin outer ring is the progress; no bar */
+    rx_times(p, s, 117, 316, 126);   /* inside the ring: its inner edge is y 334 at the outer label ends */
+    if(s->mode == RX_OTHER) return;
+    if(wait) lv_snprintf(s->text[0], sizeof s->text[0], "AIRPLAY");
+    char tag[96]; lv_snprintf(tag, sizeof tag, "|-- %s --|", s->text[0]); lv_snprintf(s->text[0], sizeof s->text[0], "%s", tag);
+    rx_place(p->text[0], LV_ALIGN_TOP_MID, 0, 19, 200, NULL);
+    rx_rows(p, s, (const int[8]){ 191, 219, 241, 328, 80, 156, 186, 210 }, (const lv_font_t *const[3]){ TF(USER_20), TF(USER_16), TF(USER_20) });
+    rx_transport(p, 264, 48, 62);
+}
+const theme_kit_t theme_kit_blue = { .id = "blueprint", .header = kit_edge_header, .style = blue_style, .home = blue_home, .receiver = blue_rx,
                                      .title_fit = blue_title_fit,
                                      .home_clock = blue_clock,
                                      .nowplaying = blue_np, .np_cover_state = blue_cover, .empty_state = blue_empty,
@@ -1648,10 +1851,11 @@ static int stone_empty_center(lv_obj_t *message){
     return a.y1 + lv_obj_get_style_pad_top(parent, 0) + lv_obj_get_content_height(parent)/2;
 }
 static void stone_empty_at(lv_obj_t *message, int center){
+    /* Anchor to the viewport so a taller header can resize it without stale offsets. */
+    int offset = center - stone_empty_center(message);
+    lv_obj_add_flag(message, LV_OBJ_FLAG_IGNORE_LAYOUT);
     lv_obj_set_style_translate_y(message, 0, 0);
-    lv_obj_update_layout(message);
-    lv_area_t a; lv_obj_get_coords(message, &a);
-    lv_obj_set_style_translate_y(message, center - (a.y1 + a.y2)/2, 0);
+    lv_obj_align(message, LV_ALIGN_CENTER, 0, offset);
 }
 static void stone_empty(kit_empty_kind_t kind, lv_obj_t *message){
     if(!message) return;
@@ -1824,6 +2028,40 @@ static void stone_np(const np_parts_t *p){
     lv_obj_align(p->next, LV_ALIGN_TOP_MID, 70, 274);
     np_sides_on_cover(p, 0);                                 /* times stay at 318: the play pill ends at 310 */
 }
+/* AirPlay receiving: a thick display-only track, the cover in a soft circle, the AIRPLAY chip, the mint play pill. */
+static void stone_rx(const rx_parts_t *p, rx_state_t *s){
+    if(s->first){
+        lv_obj_set_style_arc_width(p->arc, 12, LV_PART_MAIN); lv_obj_set_style_arc_rounded(p->arc, true, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(p->arc, TC(SURFACE_RAISED), LV_PART_MAIN);
+        lv_obj_set_style_arc_opa(p->arc, LV_OPA_TRANSP, LV_PART_INDICATOR);   /* no progress: a round cap at 0 would be a dot */
+        lv_obj_set_style_arc_width(p->arc, 12, LV_PART_INDICATOR); lv_obj_set_style_arc_rounded(p->arc, true, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(p->arc, TC(ACCENT_PRIMARY), LV_PART_INDICATOR);
+        lv_obj_move_foreground(p->icon);                  /* the glyph sits on the quiet circle */
+        lv_obj_set_width(p->text[0], LV_SIZE_CONTENT);
+        rx_label(p->text[0], TF(UI_12), TC(ACCENT_PRIMARY)); lv_obj_set_style_text_letter_space(p->text[0], 1, 0);
+        lv_obj_set_style_bg_color(p->text[0], TC(SURFACE), 0); lv_obj_set_style_bg_opa(p->text[0], LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(p->text[0], LV_RADIUS_CIRCLE, 0); lv_obj_set_style_pad_hor(p->text[0], 12, 0);
+        lv_obj_set_style_pad_ver(p->text[0], 1, 0);
+        rx_label(p->text[1], TF(USER_20), TC(TEXT_PRIMARY)); rx_label(p->text[2], TF(USER_16), TC(TEXT_SECONDARY));
+        rx_label(p->text[3], TF(USER_14), TC(TEXT_MUTED)); rx_label(p->text[4], TF(UI_12), TC(TEXT_MUTED));
+        stone_pill(p->key[1], TC(ACCENT_PRIMARY));
+        lv_obj_set_style_text_color(p->label[1], TC(ON_ACCENT), 0);
+        return;
+    }
+    int wait = s->mode == RX_WAITING;
+    rx_show(p->text[0], s->mode != RX_OTHER && !wait);   /* the mock-up's Waiting has the heading only */
+    rx_ring(p, s); rx_show(p->bar, 0); rx_show(p->elapsed, 0); rx_show(p->remain, 0);   /* the ring is the progress; the times are text[4] */
+    if(s->mode == RX_OTHER) return;
+    if(s->show && s->mode == RX_RECEIVING) lv_snprintf(s->text[4], sizeof s->text[4], "%s / %s", s->elapsed, s->remain);
+    s->frame = 1;                                         /* the cover circle, or the quiet one holding the glyph */
+    rx_bg(p->frame, wait ? TC(SURFACE_RAISED) : TC(ART_PLACEHOLDER));
+    if(lv_obj_get_style_radius(p->frame, 0) != LV_RADIUS_CIRCLE) lv_obj_set_style_radius(p->frame, LV_RADIUS_CIRCLE, 0);   /* the styling pass rounds it less */
+    rx_place(p->text[0], LV_ALIGN_TOP_MID, 0, 22, 0, NULL);
+    rx_rows(p, s, (const int[8]){ 194, 224, 242, 314, 96, 204, 232, 256 }, (const lv_font_t *const[3]){ TF(USER_20), TF(USER_16), TF(USER_20) });
+    if(wait) rx_place(p->text[3], LV_ALIGN_TOP_MID, 0, 256, 270, NULL);   /* the hint on one line, as in the mock-up */
+    rx_transport(p, 266, 44, 70);
+    rx_box(p->key[1], 0, 266, 64, 44);
+}
 static void stone_qs_tile(lv_obj_t *c, lv_obj_t *g, lv_obj_t *cap, int on, int toggle){
     (void)toggle;
     lv_obj_set_size(c, 70, 50);
@@ -1899,7 +2137,7 @@ static void stone_saver(const saver_parts_t *p){
     stone_song_layout(p);
 }
 const theme_kit_t theme_kit_stone = { .id = "stone", .style = stone_style, .home = stone_home, .home_clock = stone_clock,
-                                      .nowplaying = stone_np, .qs_tile = stone_qs_tile, .saver = stone_saver,
+                                      .nowplaying = stone_np, .receiver = stone_rx, .qs_tile = stone_qs_tile, .saver = stone_saver,
                                       .saver_clock = stone_saver_clock, .np_progress = stone_progress,
                                       .empty_state = stone_empty, .np_cover_state = stone_cover };
 
@@ -1923,17 +2161,8 @@ static void bauh_title(lv_obj_t *label, const char *text){
 }
 static lv_obj_t *bauh_header(lv_obj_t *root, const char *title, lv_event_cb_t back_cb){
     lv_obj_t *t = kit_edge_header(root, title, back_cb);
-    /* the cap: a full-width block the round screen cuts into an arc; the title sits in its lower part. 60 px: the
-     * screens' own content starts at y 64 (their first rows, a toggle card), so the cap ends clear of it */
-    enum { CAP_H = 60 };
-    lv_obj_set_pos(t, 0, 0); lv_obj_set_size(t, 360, CAP_H);
     lv_obj_set_style_bg_opa(t, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_top(t, CAP_H - lv_font_get_line_height(TF(HEADER)) - 2, 0);
-    int ty = CAP_H - lv_font_get_line_height(TF(HEADER)) - 2;  /* the title's top row inside the cap */
-    lv_obj_set_style_pad_hor(t, (360 - ui_round_width(ty + 4, 12)) / 2, 0);   /* the text stays on the glass */
-    lv_obj_set_style_text_font(t, TF(HEADER), 0);         /* fitted again below, to the cap's own width */
-    theme_title_text(t, title);                           /* set last, from the original title: the label lays it out
-                                                           * at its final size (a long-dot label edits its own copy) */
+    theme_title_text(t, title);
     return t;
 }
 static void bauh_block(lv_obj_t *o, lv_color_t bg){
@@ -2009,7 +2238,8 @@ static void bauh_row_decor(lv_obj_t *row, lv_obj_t *title){
     }
     int kind = lv_obj_get_index(row) % 3;
     lv_color_t c = kind == 0 ? TC(ACCENT_PRIMARY) : kind == 1 ? TC(DECOR_2) : TC(DECOR_1);
-    bauh_shape(row, 8, (lv_obj_get_height(row) - 8)/2, 8, 8, kind, c);
+    lv_obj_t *mark = bauh_shape(row, 8, 0, 8, 8, kind, c);
+    lv_obj_align(mark, LV_ALIGN_LEFT_MID, 8, 0);
     lv_obj_add_event_cb(row, bauh_row_press, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(row, bauh_row_press, LV_EVENT_RELEASED, NULL);
     lv_obj_add_event_cb(row, bauh_row_press, LV_EVENT_PRESS_LOST, NULL);
@@ -2207,9 +2437,10 @@ static void bauh_np(const np_parts_t *p){
     lv_obj_set_style_text_align(p->remain, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_add_flag(p->sep, LV_OBJ_FLAG_HIDDEN);
     /* shuffle and heart (or moon) in the free top of the right column, fully on the glass */
-    lv_obj_set_size(p->mode, 40, 36); lv_obj_align(p->mode, LV_ALIGN_TOP_LEFT, 196, 34);   /* y 34: the heart's box */
-    lv_obj_set_size(p->fav, 40, 36);  lv_obj_align(p->fav, LV_ALIGN_TOP_LEFT, 244, 34);    /* still ends inside the */
-    lv_obj_set_size(p->sleep, 40, 36); lv_obj_align(p->sleep, LV_ALIGN_TOP_LEFT, 244, 34); /* glass (chord x 285)  */
+    lv_obj_set_size(p->mode, 38, 36); lv_obj_align(p->mode, LV_ALIGN_TOP_LEFT, 186, 36);   /* y 36: the heart's box; three keys of 38 */
+    lv_obj_set_size(p->fav, 38, 36);  lv_obj_align(p->fav, LV_ALIGN_TOP_LEFT, 227, 36);    /* with Beam (18) in the third, all of them  */
+    lv_obj_set_size(p->sleep, 38, 36); lv_obj_align(p->sleep, LV_ALIGN_TOP_LEFT, 227, 36); /* inside the glass (the last ends at x 306) */
+    lv_obj_set_size(p->beam, 38, 36); lv_obj_align(p->beam, LV_ALIGN_TOP_LEFT, 268, 36);
     lv_obj_add_flag(p->dots[0], LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(p->dots[1], LV_OBJ_FLAG_HIDDEN);
 }
 static void bauh_cover(lv_obj_t *cover, lv_obj_t *note, int show, int loading){
@@ -2220,6 +2451,58 @@ static void bauh_cover(lv_obj_t *cover, lv_obj_t *note, int show, int loading){
     }
     if(show && !loading) lv_obj_add_flag(note, LV_OBJ_FLAG_HIDDEN);
     else if(show){ lv_obj_remove_flag(note, LV_OBJ_FLAG_HIDDEN); lv_obj_center(note); }
+}
+/* AirPlay receiving: the split kept. Art half on the left (blue field + red triangle while waiting), the red rule, the
+ * column on the right with AIRPLAY where the shuffle/heart row is, a red play disc, an empty bar. */
+static lv_obj_t *g_rx_bauh_rule, *g_rx_bauh_bar, *g_rx_bauh_tri;
+static int g_rx_bauh_own;
+static void bauh_rx(const rx_parts_t *p, rx_state_t *s){
+    if(s->first){
+        g_rx_bauh_own = 0;
+        lv_obj_set_style_arc_opa(p->arc, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_radius(p->frame, 0, 0);
+        lv_image_set_scale(p->art, 623);   /* the 148 px art fills the 360 px height; the frame clips its right part */
+        g_rx_bauh_tri = bauh_shape(p->frame, 28, 110, 120, 140, 2, TC(ACCENT_PRIMARY));   /* 2 px narrower than Now Playing's, so the two stay tellable apart */
+        g_rx_bauh_rule = bauh_shape(p->root, 176, 0, 5, 360, 1, TC(ACCENT_PRIMARY));
+        g_rx_bauh_bar = bauh_shape(p->root, 194, 264, 116, 8, 1, TC(SURFACE_STRONG));
+        rx_label(p->text[0], TF(UI_12), TC(ACCENT_PRIMARY)); lv_obj_set_style_text_letter_space(p->text[0], 2, 0);
+        rx_label(p->text[1], TF(UI_20), TC(TEXT_PRIMARY)); rx_label(p->text[2], TF(USER_16), TC(TEXT_SECONDARY));
+        rx_label(p->text[3], TF(USER_14), TC(TEXT_MUTED)); rx_label(p->text[4], TF(UI_12), TC(TEXT_MUTED));
+        bauh_block(p->key[1], TC(ACCENT_PRIMARY)); lv_obj_set_style_radius(p->key[1], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_text_color(p->label[1], TC(ON_ACCENT), 0);
+        rx_times_style(p, TF(UI_12), TC(TEXT_MUTED)); lv_obj_move_foreground(p->bar);   /* above the track */
+        return;
+    }
+    int rx = s->mode == RX_RECEIVING || s->mode == RX_PAUSED, wait = s->mode == RX_WAITING;
+    rx_show(g_rx_bauh_rule, rx || wait); rx_show(g_rx_bauh_bar, rx); rx_show(g_rx_bauh_tri, wait);
+    if(s->mode == RX_OTHER){ rx_show(p->bar, 0); rx_show(p->elapsed, 0); rx_show(p->remain, 0); rx_recenter(p, &g_rx_bauh_own); return; }
+    g_rx_bauh_own = 1;
+    s->frame = 1; s->icon = 0;                            /* the triangle is the waiting picture */
+    rx_bg(p->frame, wait ? TC(DECOR_1) : TC(ART_PLACEHOLDER));
+    rx_frame(p->frame, 0, 0, 176, 360);
+    for(int i = 0; i < 5; i++) if(lv_obj_get_style_text_align(p->text[i], 0) != LV_TEXT_ALIGN_LEFT) lv_obj_set_style_text_align(p->text[i], LV_TEXT_ALIGN_LEFT, 0);
+    lv_opa_t dim = s->mode == RX_PAUSED ? LV_OPA_50 : LV_OPA_COVER;
+    if(lv_obj_get_style_opa(g_rx_bauh_bar, 0) != dim) lv_obj_set_style_opa(g_rx_bauh_bar, dim, 0);
+    if(lv_obj_get_style_opa(p->bar, 0) != dim) lv_obj_set_style_opa(p->bar, dim, 0);
+    rx_fill(p, s, 194, 264, 116, 8, TC(ACCENT_PRIMARY)); rx_times(p, s, 194, 276, 116);
+    if(wait) lv_snprintf(s->text[0], sizeof s->text[0], "AIRPLAY");
+    const lv_font_t *tf = wait || s->has_title ? TF(UI_20) : TF(USER_16);
+    rx_place(p->text[0], LV_ALIGN_TOP_LEFT, 194, 34, 120, NULL);
+    if(wait) rx_place(p->text[1], LV_ALIGN_TOP_LEFT, 194, 70, 120, tf);
+    else rx_place(p->text[1], LV_ALIGN_BOTTOM_LEFT, 194, -238, 120, tf);   /* the title stands on the artist, one or two lines */
+    int lh = lv_font_get_line_height(tf), cap = wait ? LV_COORD_MAX : 2 * lh;
+    if(lv_obj_get_style_max_height(p->text[1], 0) != cap) lv_obj_set_style_max_height(p->text[1], cap, 0);
+    if(wait) rx_wrap(p->text[1], 1);
+    else{   /* one line or two, then an ellipsis; the box is exactly that tall (ui.c leaves a capped label alone) */
+        lv_point_t sz; lv_text_get_size(&sz, s->text[1], tf, 0, 0, 120, LV_TEXT_FLAG_NONE);
+        int h = sz.y > lh ? cap : lh;
+        if(lv_label_get_long_mode(p->text[1]) != LV_LABEL_LONG_DOT) lv_label_set_long_mode(p->text[1], LV_LABEL_LONG_DOT);
+        if(lv_obj_get_style_height(p->text[1], 0) != h) lv_obj_set_height(p->text[1], h);
+    }
+    rx_place(p->text[2], LV_ALIGN_TOP_LEFT, 194, wait ? 124 : 126, 120, NULL); rx_wrap(p->text[2], 0);
+    rx_place(p->text[3], LV_ALIGN_TOP_LEFT, 194, 148, 118, NULL); rx_wrap(p->text[3], wait);
+    rx_place(p->text[4], LV_ALIGN_TOP_LEFT, 194, 276, 116, NULL);
+    rx_box(p->key[0], 32, 199, 44, 44); rx_box(p->key[1], 87, 194, 54, 54); rx_box(p->key[2], 142, 199, 44, 44);
 }
 static void bauh_empty_draw(lv_event_t *e){
     lv_obj_t *o = lv_event_get_target(e);
@@ -2297,7 +2580,7 @@ static void bauh_saver(const saver_parts_t *p){
     lv_obj_move_foreground(panel);
 }
 const theme_kit_t theme_kit_bauh = { .id = "bauhaus", .header = bauh_header, .style = bauh_style, .home = bauh_home,
-                                     .home_clock = bauh_clock, .nowplaying = bauh_np, .qs_tile = bauh_qs_tile,
+                                     .home_clock = bauh_clock, .nowplaying = bauh_np, .receiver = bauh_rx, .qs_tile = bauh_qs_tile,
                                      .saver = bauh_saver, .title = bauh_title, .row_decor = bauh_row_decor,
                                      .np_cover_state = bauh_cover, .empty_state = bauh_empty,
                                      .saver_mer_apart = 2 };   /* the saver's PM beside the numerals, as on Home */
@@ -2316,7 +2599,7 @@ static void zine_rect(lv_layer_t *layer, int x1, int y1, int x2, int y2, lv_colo
 }
 static void zine_title_draw(lv_event_t *e){
     lv_obj_t *o = lv_event_get_target(e);
-    if(lv_obj_get_y(o) >= 100) return; /* the Now Playing song title is not a screen header */
+    if(lv_obj_get_user_data(o) != (void *)&theme_title_tag && lv_obj_get_y(o) >= 100) return;
     lv_area_t a; lv_obj_get_coords(o, &a);
     lv_point_t text;
     lv_text_get_size(&text, lv_label_get_text(o), lv_obj_get_style_text_font(o, 0),
@@ -2329,24 +2612,7 @@ static void zine_title_draw(lv_event_t *e){
     zine_rect(lv_event_get_layer(e), x, y + 2, x + w - 1, a.y2 - 2, TC(DECOR_1));
     zine_rect(lv_event_get_layer(e), x + 4, y, x + w - 5, a.y2, TC(DECOR_1));
 }
-static void zine_title(lv_obj_t *o, const char *text){
-    int box = lv_obj_get_style_width(o, 0); /* final style width; layout may still report the old 360 px */
-    int room = box > 0 && box != LV_SIZE_CONTENT && !LV_COORD_IS_PCT(box) ? box - 12 : 0;
-    if(room > 0){
-        const lv_font_t *f = lv_obj_get_style_text_font(o, 0);
-        for(int k = 0; k < 6; k++){
-            lv_point_t size;
-            lv_text_get_size(&size, text, f, lv_obj_get_style_text_letter_space(o, 0),
-                             0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-            if(size.x <= room) break;
-            const lv_font_t *smaller = theme_title_smaller(f);
-            if(!smaller || smaller == f) break;
-            f = smaller;
-        }
-        lv_obj_set_style_text_font(o, f, 0);
-    }
-    lv_label_set_text(o, text);
-}
+static void zine_title(lv_obj_t *o, const char *text){ lv_label_set_text(o, text); }
 static void zine_row_scroll(lv_event_t *e){
     lv_obj_t *row = lv_event_get_user_data(e);
     lv_obj_add_flag(row, LV_OBJ_FLAG_USER_1);
@@ -2398,6 +2664,7 @@ static void zine_row_decor(lv_obj_t *row, lv_obj_t *title){
     lv_obj_add_event_cb(row, zine_row_event, LV_EVENT_ALL, NULL);
     lv_obj_add_event_cb(row, zine_row_draw, LV_EVENT_DRAW_POST, title);
 }
+static void zine_ink_type(lv_obj_t *o);
 static void zine_scrap(lv_obj_t *o, lv_color_t bg){      /* a stamped paper scrap with an ink edge */
     kit_keep(o);
     lv_obj_set_style_radius(o, 0, 0);
@@ -2408,9 +2675,13 @@ static void zine_scrap(lv_obj_t *o, lv_color_t bg){      /* a stamped paper scra
     lv_obj_set_style_border_opa(o, LV_OPA_COVER, 0);
     lv_obj_set_style_translate_x(o, 2, LV_STATE_PRESSED);
     lv_obj_set_style_translate_y(o, 2, LV_STATE_PRESSED);
+    zine_ink_type(o);
+}
+static void zine_ink_type(lv_obj_t *o){
     for(uint32_t i = 0; i < lv_obj_get_child_count(o); i++){       /* ink type on the scrap */
         lv_obj_t *c = lv_obj_get_child(o, (int32_t)i);
-        if(lv_obj_check_type(c, &lv_label_class)) lv_obj_set_style_text_color(c, zine_ink(), 0);
+        if(ui_dialog_part_of(c) == UI_DLG_VIEWPORT || ui_dialog_part_of(c) == UI_DLG_CONTENT) zine_ink_type(c);   /* a dialog's body */
+        else if(lv_obj_check_type(c, &lv_label_class)) lv_obj_set_style_text_color(c, zine_ink(), 0);
         /* drawn glyph marks (the playlist menu dots) are small filled objects: ink them too, or they vanish on paper */
         else if(lv_obj_check_type(c, &lv_obj_class) && lv_obj_get_style_width(c, 0) <= 6 && lv_obj_get_style_height(c, 0) <= 6
                 && lv_obj_get_style_bg_opa(c, 0) > LV_OPA_50) lv_obj_set_style_bg_color(c, zine_ink(), 0);
@@ -2432,10 +2703,13 @@ static void zine_row(lv_obj_t *o){
     }
 }
 static void zine_style(lv_obj_t *o, kit_role_t r){
+    if(ui_dialog_part_of(o) == UI_DLG_VIEWPORT)
+        lv_obj_set_style_bg_color(o, zine_ink(), LV_PART_SCROLLBAR);
     switch(r){
     case KIT_TITLE:
-        lv_obj_set_style_text_color(o, lv_obj_get_y(o) < 100 ? TC(DECOR_2) : TC(ACCENT_PRIMARY), 0);
-        if(lv_obj_get_y(o) < 100){
+        int header = lv_obj_get_user_data(o) == (void *)&theme_title_tag || lv_obj_get_y(o) < 100;
+        lv_obj_set_style_text_color(o, header ? TC(DECOR_2) : TC(ACCENT_PRIMARY), 0);
+        if(header){
             lv_obj_remove_event_cb(o, zine_title_draw);
             lv_obj_add_event_cb(o, zine_title_draw, LV_EVENT_DRAW_MAIN_BEGIN, NULL);
         }
@@ -2610,13 +2884,14 @@ static void zine_home(const home_parts_t *p){
     lv_label_set_text(p->hint, ">>");
     lv_obj_set_style_text_font(p->hint, TF(UI_12), 0);
 }
-static void zine_tape(lv_obj_t *root, int x, int y){
+static lv_obj_t *zine_tape(lv_obj_t *root, int x, int y){
     lv_obj_t *t = lv_obj_create(root);
     lv_obj_remove_style_all(t);
     lv_obj_clear_flag(t, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_size(t, 40, 12); lv_obj_set_pos(t, x, y);
     lv_obj_set_style_bg_color(t, TC(DECOR_1), 0);
     lv_obj_set_style_bg_opa(t, LV_OPA_90, 0);
+    return t;
 }
 static void zine_np(const np_parts_t *p){
     own_backgrounds();
@@ -2632,7 +2907,16 @@ static void zine_np(const np_parts_t *p){
     lv_obj_set_style_text_color(p->title, TC(ACCENT_PRIMARY), 0);
     lv_obj_align(p->title, LV_ALIGN_TOP_MID, 0, 190);
     lv_obj_align(p->artist, LV_ALIGN_TOP_MID, 0, 222);
-    lv_obj_add_flag(p->album, LV_OBJ_FLAG_HIDDEN);          /* the artist line says it; the album is on Song Info */
+    lv_obj_add_flag(p->album, LV_OBJ_FLAG_HIDDEN);          /* music albums stay on Song Info; book status uses the paper strip */
+    /* Chapter status and the beam destination share Zine's paper strip at the cover's foot. */
+    lv_obj_set_width(p->album, 208);
+    lv_obj_set_style_text_color(p->album, zine_ink(), 0);
+    lv_obj_set_style_pad_hor(p->album, 6, 0);
+    lv_obj_set_style_text_align(p->album, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_bg_color(p->album, zine_paper(), 0);
+    lv_obj_set_style_bg_opa(p->album, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_ver(p->album, 2, 0);
+    lv_obj_align(p->album, LV_ALIGN_TOP_MID, 0, 152);
     lv_obj_t *bar = lv_bar_create(p->root);                 /* the highlighter stroke is the seek bar */
     lv_obj_set_size(bar, 200, 10);
     lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 246);
@@ -2664,7 +2948,69 @@ static void zine_np(const np_parts_t *p){
     lv_obj_set_size(p->mode, 40, 36); lv_obj_align(p->mode, LV_ALIGN_TOP_MID, -118, 136);
     lv_obj_set_size(p->fav, 40, 36);  lv_obj_align(p->fav, LV_ALIGN_TOP_MID, 118, 136);
     lv_obj_set_size(p->sleep, 40, 36); lv_obj_align(p->sleep, LV_ALIGN_TOP_MID, 118, 136);
+    lv_obj_set_size(p->beam, 40, 36); lv_obj_align(p->beam, LV_ALIGN_TOP_MID, 118, 94);    /* 18: above the heart: below it the title runs */
     lv_obj_add_flag(p->dots[0], LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(p->dots[1], LV_OBJ_FLAG_HIDDEN);
+}
+/* AirPlay receiving: AIRPLAY on a strip of yellow tape, the cover taped on, the glitch title, an empty highlighter bar,
+ * paper keys; Waiting is a taped note card holding the glyph. No album line (Zine's own Now Playing has none). */
+static lv_obj_t *g_rx_zine_tape[2], *g_rx_zine_bar;
+static int g_rx_zine_own;
+static void zine_rx(const rx_parts_t *p, rx_state_t *s){
+    if(s->first){
+        g_rx_zine_own = 0;
+        lv_obj_set_style_arc_opa(p->arc, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_radius(p->frame, 0, 0);
+        lv_obj_move_foreground(p->icon);                  /* the glyph sits on the note card */
+        for(int i = 0; i < 2; i++) g_rx_zine_tape[i] = zine_tape(p->root, 0, 0);
+        g_rx_zine_bar = bauh_shape(p->root, 80, 246, 200, 10, 1, TC(BORDER_STRONG));
+        lv_obj_set_width(p->text[0], LV_SIZE_CONTENT);
+        rx_label(p->text[0], TF(UI_12), TC(DECOR_2)); lv_obj_set_style_text_letter_space(p->text[0], 2, 0);
+        lv_obj_set_style_bg_color(p->text[0], TC(DECOR_1), 0); lv_obj_set_style_bg_opa(p->text[0], LV_OPA_COVER, 0);
+        lv_obj_set_style_pad_hor(p->text[0], 8, 0); lv_obj_set_style_pad_ver(p->text[0], 1, 0);
+        lv_obj_set_style_transform_pivot_x(p->text[0], LV_PCT(50), 0); lv_obj_set_style_transform_pivot_y(p->text[0], LV_PCT(50), 0);
+        lv_obj_set_style_transform_rotation(p->text[0], -20, 0);   /* stuck on a little crooked */
+        rx_label(p->text[1], TF(HEADER), TC(ACCENT_PRIMARY)); rx_label(p->text[2], TF(USER_16), TC(TEXT_SECONDARY));
+        rx_label(p->text[3], TF(USER_14), TC(TEXT_MUTED)); rx_label(p->text[4], TF(UI_12), TC(TEXT_SECONDARY));
+        for(int i = 0; i < 3; i++){
+            zine_scrap(p->key[i], i == 1 ? TC(ACCENT_PRIMARY) : zine_paper());
+            lv_obj_set_style_text_font(p->label[i], TF(UI_20), 0);
+        }
+        lv_obj_set_style_text_color(p->label[1], TC(ON_ACCENT), 0);
+        rx_times_style(p, TF(UI_12), TC(TEXT_SECONDARY)); lv_obj_move_foreground(p->bar);
+        return;
+    }
+    int rx = s->mode == RX_RECEIVING || s->mode == RX_PAUSED, wait = s->mode == RX_WAITING;
+    rx_show(p->text[0], rx || wait); rx_show(g_rx_zine_bar, rx);
+    rx_show(g_rx_zine_tape[0], rx || wait); rx_show(g_rx_zine_tape[1], rx);
+    if(s->mode == RX_OTHER){ rx_show(p->bar, 0); rx_show(p->elapsed, 0); rx_show(p->remain, 0); rx_recenter(p, &g_rx_zine_own); return; }
+    g_rx_zine_own = 1;
+    s->frame = 1;                                         /* the taped cover, or the note card */
+    rx_show(p->text[3], wait);                            /* the album stays off the page */
+    rx_bg(p->frame, wait ? zine_paper() : TC(ART_PLACEHOLDER));
+    if(lv_obj_get_style_bg_opa(p->frame, 0) != LV_OPA_COVER) lv_obj_set_style_bg_opa(p->frame, LV_OPA_COVER, 0);   /* the styling pass clears it */
+    if(!lv_color_eq(lv_obj_get_style_text_color(p->text[1], 0), TC(ACCENT_PRIMARY))) lv_obj_set_style_text_color(p->text[1], TC(ACCENT_PRIMARY), 0);
+    if(lv_obj_get_style_border_width(p->frame, 0) != (wait ? 2 : 0)){
+        lv_obj_set_style_border_width(p->frame, wait ? 2 : 0, 0); lv_obj_set_style_border_color(p->frame, TC(DECOR_2), 0);
+    }
+    for(int i = 0; i < 2; i++){                           /* the glyph is ink on the card */
+        lv_obj_t *l = lv_obj_get_child(p->icon, i);
+        lv_color_t c = wait ? zine_ink() : TC(ACCENT_PRIMARY);
+        if(!lv_color_eq(lv_obj_get_style_line_color(l, 0), c)) lv_obj_set_style_line_color(l, c, 0);
+    }
+    if(wait){ lv_snprintf(s->text[0], sizeof s->text[0], "AIRPLAY"); theme_upper(s->text[1], sizeof s->text[1], s->text[1]); }
+    rx_frame(p->frame, wait ? 130 : 106, wait ? 40 : 34, wait ? 100 : 148, wait ? 100 : 148);
+    rx_place(g_rx_zine_tape[0], LV_ALIGN_TOP_LEFT, wait ? 136 : 112, wait ? 34 : 28, 0, NULL);
+    rx_place(g_rx_zine_tape[1], LV_ALIGN_TOP_LEFT, 210, 176, 0, NULL);
+    lv_opa_t dim = s->mode == RX_PAUSED ? LV_OPA_50 : LV_OPA_COVER;
+    if(lv_obj_get_style_opa(g_rx_zine_bar, 0) != dim) lv_obj_set_style_opa(g_rx_zine_bar, dim, 0);
+    if(lv_obj_get_style_opa(p->bar, 0) != dim) lv_obj_set_style_opa(p->bar, dim, 0);
+    rx_fill(p, s, 80, 246, 200, 10, TC(ACCENT_PRIMARY)); rx_times(p, s, 80, 258, 200);
+    rx_place(p->text[0], LV_ALIGN_TOP_MID, 0, 12, 0, NULL);
+    rx_rows(p, s, (const int[8]){ 190, 222, 222, 258, 66, 154, 216, 238 }, (const lv_font_t *const[3]){ TF(HEADER), TF(USER_16), TF(HEADER) });
+    for(int i = 0; i < 5; i++) if(lv_obj_get_style_text_align(p->text[i], 0) != (i == 4 ? LV_TEXT_ALIGN_LEFT : LV_TEXT_ALIGN_CENTER)) lv_obj_set_style_text_align(p->text[i], i == 4 ? LV_TEXT_ALIGN_LEFT : LV_TEXT_ALIGN_CENTER, 0);
+    rx_place(p->text[4], LV_ALIGN_TOP_LEFT, 80, 258, 200, NULL);
+    rx_transport(p, 280, 44, 66);
+    rx_box(p->key[1], 0, 280, 56, 44);
 }
 static void zine_qs_tile(lv_obj_t *c, lv_obj_t *g, lv_obj_t *cap, int on, int toggle){
     (void)toggle;
@@ -2792,7 +3138,7 @@ static void zine_saver(const saver_parts_t *p){
     zine_song_layout(p);
 }
 const theme_kit_t theme_kit_zine = { .id = "zine", .header = kit_edge_header, .style = zine_style, .home = zine_home,
-                                     .home_clock = zine_clock, .nowplaying = zine_np, .qs_tile = zine_qs_tile,
+                                     .home_clock = zine_clock, .nowplaying = zine_np, .receiver = zine_rx, .qs_tile = zine_qs_tile,
                                      .saver = zine_saver, .empty_state = zine_empty, .np_cover_state = zine_cover,
                                      .row_decor = zine_row_decor, .title = zine_title, .back_text = "<<" };
 
@@ -2927,6 +3273,35 @@ static void some_saver(const saver_parts_t *p){
     if(p->date){ lv_obj_align(p->date, LV_ALIGN_TOP_MID, 0, y + 63 + 12); lv_obj_update_layout(p->date); }
     if(p->weather && p->date) lv_obj_align(p->weather, LV_ALIGN_TOP_MID, 0, lv_obj_get_y(p->date) + 28);
 }
-const theme_kit_t theme_kit_something = { .id = "something", .style = some_style, .nowplaying = some_np,
+/* AirPlay receiving: the dotted ring as a display-only track, Doto title, the red filled play circle. */
+#define SOME_RX_DOTS 128
+static void some_rx(const rx_parts_t *p, rx_state_t *s){
+    if(s->first){
+        lv_obj_set_style_arc_opa(p->arc, LV_OPA_TRANSP, LV_PART_MAIN);
+        for(int i = 0; i < SOME_RX_DOTS; i++){
+            double a = 6.283185307179586 * i / SOME_RX_DOTS;
+            lv_obj_set_style_radius(blue_line(p->root, 178 + (int)lround(174 * cos(a)), 178 + (int)lround(174 * sin(a)), 4, 4,
+                                              TC(CONTROL_TRACK)), LV_RADIUS_CIRCLE, 0);
+        }
+        lv_obj_set_style_radius(p->frame, 0, 0);
+        rx_label(p->text[0], TF(DATE), TC(ACCENT_PRIMARY)); rx_label(p->text[1], TF(HEADER), TC(TEXT_PRIMARY));
+        rx_label(p->text[2], TF(USER_16), TC(TEXT_SECONDARY)); rx_label(p->text[3], TF(USER_14), TC(TEXT_MUTED));
+        rx_label(p->text[4], TF(UI_12), TC(TEXT_MUTED));
+        lv_obj_set_style_radius(p->key[1], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(p->key[1], TC(ACCENT_PRIMARY), 0);
+        lv_obj_set_style_bg_opa(p->key[1], LV_OPA_COVER, 0);
+        lv_obj_set_style_text_color(p->label[1], TC(ON_ACCENT), 0);
+        lv_obj_set_style_text_color(p->label[0], TC(TEXT_PRIMARY), 0);
+        lv_obj_set_style_text_color(p->label[2], TC(TEXT_PRIMARY), 0);
+        return;
+    }
+    if(s->mode == RX_OTHER) return;
+    if(s->show && s->mode == RX_RECEIVING) lv_snprintf(s->text[4], sizeof s->text[4], "%s / %s", s->elapsed, s->remain);   /* "2:31 / -1:32" */
+    if(s->mode == RX_WAITING) theme_upper(s->text[1], sizeof s->text[1], s->text[1]);   /* the theme's title case */
+    rx_place(p->text[0], LV_ALIGN_TOP_MID, 0, 16, 200, NULL);
+    rx_rows(p, s, (const int[8]){ 194, 224, 242, 328, 76, 138, 222, 246 }, (const lv_font_t *const[3]){ TF(HEADER), TF(USER_18), TF(HEADER) });
+    rx_transport(p, 264, 52, 70);
+}
+const theme_kit_t theme_kit_something = { .id = "something", .style = some_style, .nowplaying = some_np, .receiver = some_rx,
                                           .empty_state = some_empty, .np_cover_state = some_cover,
                                           .saver = some_saver, .saver_clock = some_saver_clock };

@@ -1,9 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
+#include "device_names_ui.h"
 #include "theme.h"
 #include "theme_kit.h"
 #include "folderbrowser.h"
+#include "custom_picker_ui.h"
+#include "custom_saver_overlay.h"
 #include "books.h"
 #include "anim.h"
 #include "config.h"
@@ -50,11 +53,15 @@ static const unsigned char s_figure[SCR_COUNT] = {
     [SCR_QSCONFIG] = 25, [SCR_COLORPICK] = 26, [SCR_DATETIME] = 27,
     [SCR_WIFI] = 28, [SCR_WIFI_INFO] = 29, [SCR_BT] = 30,
     [SCR_BT_INFO] = 31, [SCR_WORKMODE] = 32, [SCR_LASTFM] = 33,
-    [SCR_DEBUG] = 34,
+    [SCR_DEBUG] = 34, [SCR_CASTPICK] = 40, [SCR_CUSTOM_PICKER] = 35, [SCR_CUSTOM_PAGE] = 36,
+    [SCR_CUSTOM_OVERLAYS] = 37, [SCR_CUSTOM_FONT] = 38, [SCR_CUSTOM_PREVIEW] = 39, [SCR_DEVICE_NAMES] = 41,
 };
 int screen_figure_number(int which){
     return which >= 0 && which < SCR_COUNT ? s_figure[which] : 0;
 }
+/* the screens among which the Custom presentation draft lives; leaving them by ANY route (header Back, swipe, Home, drawer, saver) drops it.
+ * A plain dim or screen-off without the saver leaves the screen current, so it keeps the draft (slice 17d rule). */
+static int custom_area(int s){ return s == SCR_CUSTOM_PAGE || s == SCR_CUSTOM_OVERLAYS || s == SCR_CUSTOM_FONT || s == SCR_CUSTOM_PICKER || s == SCR_CUSTOM_PREVIEW; }
 static int s_stack[16];
 static int s_sp = 0;
 #define PUSH_MS 300   /* entrance (cubic ease-out: covers distance fast, settles gently) */
@@ -145,6 +152,25 @@ static void anim_done_push(lv_anim_t *a)
 
 static void screen_refresh_entry(int to)
 {
+
+    lv_obj_t *nw = (to >= 0 && to < SCR_COUNT) ? s_roots[to] : NULL;
+    lv_obj_t *od = (from >= 0 && from < SCR_COUNT) ? s_roots[from] : NULL;
+
+    /* Any screen change dismisses transient lv_layer_top popups (e.g. the duplicate-add
+     * confirm dialog) so they can't survive onto another screen and act on stale state. */
+    npmenu_close_transients();
+    ui_np_close_overlays();   /* dismiss the sleep-timer popover so it can't float onto another screen */
+    if (custom_area(from) && !custom_area(to)) custom_ov_draft_discard();
+    if (from == SCR_CUSTOM_PREVIEW && to != from) custom_preview_leave();   /* every way off the Preview: STOP */
+    if (from == SCR_CUSTOM_PICKER && to != from) custom_picker_leave();   /* every way off the image list: timer and scan end */
+    if (from == SCR_SAVER && to != SCR_SAVER) saver_leave();   /* every way off the saver: wake, screen off, Back, a screen_show; deletes Custom (slice 14) */
+
+    /* Re-sync screens built once, on EVERY entry incl. back-navigation (screen_back also
+     * routes through here - screen_show alone missed the back case, leaving stale labels
+     * e.g. after editing Custom EQ / a setting detail page). */
+    if (from == SCR_CASTPICK && to != from) cast_ui_leave();   /* 17a: every exit stops discovery */
+    if(from == SCR_NPHUB && to != from) nphub_poll_sync(0);
+    if (to == SCR_CASTPICK && to != from) cast_ui_enter();
     if (to == SCR_SETTINGS) settings_refresh_list();
     else if (to == SCR_SETLIST) setlist_refresh();          /* one category's rows, rebuilt per entry */
     else if (to == SCR_SETTING_DETAIL) setting_detail_refresh();  /* stay live if changed elsewhere (e.g. drawer EQ) */
@@ -155,6 +181,11 @@ static void screen_refresh_entry(int to)
     else if (to == SCR_TUNE)  tune_refresh();
     else if (to == SCR_UPNEXT) upnext_refresh();   /* the live queue, read on every entry */
     else if (to == SCR_DATETIME) datetime_refresh();   /* starts from the current time on every entry */
+    else if (to == SCR_CUSTOM_PAGE) settings_custom_refresh();   /* the draft survives the picker; saved-image state is read fresh */
+    else if (to == SCR_CUSTOM_OVERLAYS) settings_overlays_refresh();   /* from the draft, which the Custom page owns */
+    else if (to == SCR_CUSTOM_FONT) settings_font_refresh();
+    else if (to == SCR_CUSTOM_PREVIEW) custom_preview_enter();   /* reads the draft; never begins one explicitly (a read begins one only if none exists) */
+    else if (to == SCR_CUSTOM_PICKER) custom_picker_enter();   /* a fresh scan of CustomCover on every entry */
     else if (to == SCR_NPHUB) nphub_refresh();   /* book-aware hub (Chapters for audiobooks) */
     else if (to == SCR_NOWPLAYING) ui_np_enter();
     else if (to == SCR_SAVER) saver_show_sync();
@@ -327,28 +358,84 @@ void screen_show(int which)
     transition(from, which, dir);
 }
 
+/* Explicit returns (e.g. a queue selection) finish a detour rather than pushing
+ * another copy of its destination. Ordinary screen_show keeps its forward
+ * semantics: repeated screen IDs may represent different browsing contexts. */
+void screen_return_to(int which)
+{
+    if (which < 0 || which >= SCR_COUNT) return;
+    if (which == s_current) { screen_show(which); return; }
+    for (int i = s_sp - 1; i >= 0; i--) {
+        if (s_stack[i] != which) continue;
+        int from = s_current;
+        s_sp = i;
+        s_current = which;
+        transition(from, which, -1);
+        return;
+    }
+    screen_show(which);
+}
+
 /* Pop the nav stack (swipe / back gesture). Home is the root: no-op. */
 void screen_back(void)
 {
     if (s_current == SCR_HOME || s_current == SCR_MODELOCK) return;
-    while (s_sp > 0) {
-        int prev = s_stack[--s_sp];
-        if (prev == SCR_MODELOCK && !modelock_is_active()) continue;
-        if (prev == SCR_QUICK || prev == SCR_SAVER) continue;
-        if (prev >= 0 && prev < SCR_COUNT && prev != s_current) {
-            int from = s_current;
-            s_current = prev;
-            transition(from, prev, -1);
-            return;
-        }
+    if (s_current == SCR_CUSTOM_PICKER && custom_picker_back()) return;
+    if (s_sp <= 0) return;
+    int from = s_current;
+    int prev = s_stack[--s_sp];
+    if(from == SCR_BT_INFO) bt_info_close();
+    s_current = prev;
+    transition(from, prev, -1);
+}
+
+/* Home swipe: close every screen above Home in one step. The current screen goes the way a Back takes it (its
+ * leave hooks run in transition) and Home is revealed directly, so no screen in between is drawn. Screens further
+ * down already ran their leave hooks when they were covered. Library reopens at its top level. Refused like Back
+ * while the image list applies a picture. Returns 1 when it went Home. */
+int screen_home(void)
+{
+    if (s_current == SCR_HOME) return 0;
+    if (s_current == SCR_CUSTOM_PICKER && custom_picker_busy()) return 0;
+    int bt_info = s_current == SCR_BT_INFO;
+    for (int i = 0; i < s_sp; i++) if (s_stack[i] == SCR_BT_INFO) bt_info = 1;
+    if (bt_info) bt_info_close();
+    library_reset_top();
+    int from = s_current;
+    s_sp = 0;
+    s_current = SCR_HOME;
+    transition(from, SCR_HOME, -1);
+    return 1;
+}
+
+/* Something visible on the top layer that takes touch owns the screen (the same rule the update check uses; toasts and
+ * the touch dot take none). */
+int screen_modal_open(void)
+{
+    lv_obj_t *top = lv_layer_top();
+    uint32_t n = lv_obj_get_child_count(top);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t *o = lv_obj_get_child(top, (int32_t)i);
+        if (!lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) && lv_obj_has_flag(o, LV_OBJ_FLAG_CLICKABLE)) return 1;
     }
-    /* Overlay or screen dismissed with empty stack: return to active lockmode or Home */
-    int fallback = modelock_is_active() ? SCR_MODELOCK : SCR_HOME;
-    if (s_current != fallback) {
-        int from = s_current;
-        s_current = fallback;
-        transition(from, fallback, -1);
+    return 0;
+}
+
+/* The press landed on a control that owns a drag of its own: a slider, an arc or roller, or a container that scrolls
+ * sideways (the Custom EQ strip). Such a press keeps today's time-limited Back rule: a fast slide still goes Back, a
+ * slow one is the control's. */
+int screen_on_drag_control(int x, int y)
+{
+    lv_point_t p = { x, y };
+    lv_obj_t *o = lv_indev_search_obj(lv_layer_top(), &p);
+    if (!o) o = lv_indev_search_obj(lv_screen_active(), &p);
+    for (; o; o = lv_obj_get_parent(o)) {
+        if (lv_obj_check_type(o, &lv_slider_class) || lv_obj_check_type(o, &lv_arc_class) ||
+            lv_obj_check_type(o, &lv_roller_class)) return 1;
+        if (lv_obj_has_flag(o, LV_OBJ_FLAG_SCROLLABLE) && (lv_obj_get_scroll_dir(o) & LV_DIR_HOR) &&
+            (lv_obj_get_scroll_left(o) > 0 || lv_obj_get_scroll_right(o) > 0)) return 1;
     }
+    return 0;
 }
 
 lv_obj_t *screen_get_root(int which)
@@ -651,6 +738,13 @@ void screens_init(void)
     s_roots[SCR_ALBUMWALL] = screen_make_root(parent);
     s_roots[SCR_UPNEXT] = screen_make_root(parent);
     s_roots[SCR_DATETIME] = screen_make_root(parent);
+    s_roots[SCR_CASTPICK] = screen_make_root(parent);
+    s_roots[SCR_CUSTOM_PICKER] = screen_make_root(parent);
+    s_roots[SCR_CUSTOM_PAGE] = screen_make_root(parent);
+    s_roots[SCR_CUSTOM_OVERLAYS] = screen_make_root(parent);
+    s_roots[SCR_CUSTOM_FONT] = screen_make_root(parent);
+    s_roots[SCR_CUSTOM_PREVIEW] = screen_make_root(parent);
+    s_roots[SCR_DEVICE_NAMES] = screen_make_root(parent);
     s_roots[SCR_MODELOCK] = screen_make_root(parent);
     s_roots[SCR_USAGE] = screen_make_root(parent);
     s_roots[SCR_WEBUI] = screen_make_root(parent);
@@ -694,6 +788,13 @@ void screens_init(void)
     chapters_create(s_roots[SCR_CHAPTERS]);
     upnext_create(s_roots[SCR_UPNEXT]);
     datetime_create(s_roots[SCR_DATETIME]);
+    cast_ui_create(s_roots[SCR_CASTPICK]);
+    custom_picker_create(s_roots[SCR_CUSTOM_PICKER]);
+    settings_custom_create(s_roots[SCR_CUSTOM_PAGE]);
+    settings_overlays_create(s_roots[SCR_CUSTOM_OVERLAYS]);
+    settings_font_create(s_roots[SCR_CUSTOM_FONT]);
+    custom_preview_create(s_roots[SCR_CUSTOM_PREVIEW]);
+    dnui_create(s_roots[SCR_DEVICE_NAMES]);
     apps_create(s_roots[SCR_APPS]);
     nphub_create(s_roots[SCR_NPHUB]);
     plpick_create(s_roots[SCR_PLPICK]);
@@ -711,6 +812,7 @@ void screens_init(void)
 }
 
 void screen_set_anim(int on){ s_anim = on ? 1 : 0; }
+int screen_anim_on(void){ return s_anim; }
 
 void ui_setup_scrollbar(lv_obj_t *list)
 {

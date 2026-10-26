@@ -4,6 +4,8 @@
 #include "theme.h"
 #include "musicdb.h"   /* mdb_is_book_path: this page doubles as "Book details" for an audiobook */
 #include "scanner.h"   /* scan_read_narrator */
+#include "playback.h"   /* playback_source: Cast rows */
+#include "ui.h"
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -197,7 +199,7 @@ static void si_probe(const char *path, int track, si_tech_t *t){
         else if(!strcasecmp(ext, "dsf")) si_probe_dsf(fd, t);
         close(fd);
     }
-    mdb_song_genre(path, track, t->genre, (int)sizeof t->genre);
+    if(mdb_song_genre(path, track, t->genre, (int)sizeof t->genre)<0) return;
     t->ok = 1;
 }
 
@@ -215,6 +217,9 @@ static void *si_worker(void *arg){
         pthread_mutex_lock(&g_si_mu); snprintf(path, sizeof path, "%s", g_si_path); track = g_si_track; gen = g_si_gen; pthread_mutex_unlock(&g_si_mu);
         si_probe(path, track, &t);
         pthread_mutex_lock(&g_si_mu);
+        if(gen == g_si_gen && !t.ok){
+            g_si_running=0; pthread_mutex_unlock(&g_si_mu); return NULL; /* retry without publishing absent data */
+        }
         if(gen == g_si_gen){ g_si_res = t; g_si_res_gen = gen; g_si_applied = 0; g_si_running = 0; pthread_mutex_unlock(&g_si_mu); return NULL; }
         pthread_mutex_unlock(&g_si_mu);                 /* the track changed while reading: go again for the new one */
     }
@@ -313,9 +318,11 @@ void songinfo_set(const track_state_t *st)
     /* which CUE/ISO track is playing: the queue row (a2 pos_id) names it; re-asked only when the row or file changes */
     static char tk_path[256]; static int tk_pos = -1, tk_track;
     if(tk_pos != st->pos_id || strcmp(tk_path, st->path) != 0){
+        if(!mdb_ui_read_begin()) return;   /* keep tech rows, retry this identity next tick */
         int trk = 0;
         tk_track = mdb_song_subtrack(st->path, st->pos_id, &trk, NULL, NULL) ? trk : 0;
         tk_pos = st->pos_id; snprintf(tk_path, sizeof tk_path, "%s", st->path);
+        mdb_ui_read_end();
     }
     int have = si_poll(st->path, tk_track, &tech, &changed);
     static si_tech_t cur;                                  /* this track's worker result so far (zeros until it lands) */
@@ -325,9 +332,14 @@ void songinfo_set(const track_state_t *st)
     char fmt[16]; si_fmt_format(fmt, sizeof fmt, st->path, st->is_dsd, cur.dsd_hz, st->sample_rate);
     ui_label_set_changed(g_val[F_FORMAT], fmt);
 
+    /* Sample Rate is the LOCAL player's own output rate (a2 frame). A Cast track is decoded by the receiver, which reports no rate, and the
+     * view clears it: the row is hidden while casting rather than showing the previous local track's rate or a bare dash. The other rows
+     * describe the file, which Cast serves byte for byte (cast_http.c pread), so they stay true. */
+    int casting = playback_source() != PB_SRC_LOCAL;
     char rate[24];
     si_fmt_rate(rate, sizeof rate, (st->is_dsd && cur.dsd_hz > 0) ? cur.dsd_hz : st->sample_rate);
     ui_label_set_changed(g_val[F_RATE], rate);
+    si_show(g_cell[F_RATE], !casting);
 
     char vb[24];
     if(cur.genre[0]){ ui_label_set_changed(g_val[F_GENRE], cur.genre); si_show(g_cell[F_GENRE], 1); }
@@ -356,7 +368,7 @@ void songinfo_set(const track_state_t *st)
     ui_label_set_changed(g_val[F_FILE], base[0]?base:"-");
 
     /* Audiobook: relabel to "Book details" and turn the Album slot into reading progress. */
-    int book = mdb_is_book_path(st->path);
+    int book = ui_view_is_book(st->path);   /* never the book page for a Cast track */
     if(ui_label_input_changed(g_header, book ? "Book details" : "Song Info")) theme_title_text(g_header, book ? "Book details" : "Song Info");
     ui_label_set_changed(g_key[F_ARTIST],   book ? "Author" : "Artist");
     ui_label_set_changed(g_key[F_ALBUM],    book ? "Progress" : "Album");
@@ -376,18 +388,12 @@ void songinfo_set(const track_state_t *st)
         ui_label_set_changed(g_val[F_ALBUM], st->album[0]?st->album:"-");   /* restore album for music */
     }
 
-    /* Narrated by: only for a book that actually names a narrator (composer tag); load once per book. */
-    if(book){
-        static char narr_path[512]; static char narr[128];
-        if(strcmp(narr_path, st->path) != 0){
-            if(!scan_read_narrator(st->path, narr, sizeof narr)) narr[0] = 0;
-            snprintf(narr_path, sizeof narr_path, "%s", st->path);
-        }
-        if(narr[0]){ ui_label_set_changed(g_val[F_NARRATOR], narr); si_show(g_cell[F_NARRATOR], 1); }
-        else       { si_show(g_cell[F_NARRATOR], 0); }
-    } else {
-        si_show(g_cell[F_NARRATOR], 0);
-    }
+    /* Narrator uses the same snapshot installed for Now Playing on this update. */
+    const bookmeta_snapshot *meta = ui_bookmeta_snapshot(st);
+    const char *narr = book && meta && meta->state == BOOKMETA_COMPLETE &&
+        meta->result.narrator == BOOK_META_OK ? meta->narrator : "";
+    ui_label_set_changed(g_val[F_NARRATOR], narr);
+    si_show(g_cell[F_NARRATOR], narr[0] != 0);
 }
 
 lv_obj_t *songinfo_scroller(void){ return g_info_list; }

@@ -30,6 +30,8 @@ int  artcache_lookup(const char *track, char *key_out, int cap);
 int  artcache_get_thumb(const char *track, const char *thumb_out);
 int  artcache_get_cover(const char *track, const char *cover_out);   /* just the 148px cover (Album Wall) */
 int  artcache_cover_path(const char *track, char *out, int cap);     /* native path of the cached cover (no copy) */
+/* Worker-only candidate path. Does not open or validate the BMP; caller must do both. */
+int  artcache_cover_candidate(const char *track, char *out, int cap);
 
 /* Monotonic counter bumped each time a NEW cover is written to the cache (any decoder). The cover
  * flow polls this to re-bake placeholder albums the moment their art becomes available. */

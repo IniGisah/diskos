@@ -24,17 +24,81 @@ CFLAGS := -Os -pipe -std=gnu11 -static -pthread -D_GNU_SOURCE -DLV_CONF_INCLUDE_
 # Device-test builds only: make clean && make EXTRA_CFLAGS=-DDISKOS_TEST_OUTPUTS (shows SPDIF Output)
 CFLAGS += $(EXTRA_CFLAGS)
 CFLAGS += -I$(NUI)/third_party/freetype-2.13.3/include
+TLS_DIR := $(NUI)/third_party
+DEP_OUT ?= $(abspath $(APP)/../../scratch/native-deps)
+TLS_LIBS = $(addprefix $(DEP_OUT)/$(TLS_ARCH)/lib,mbedtls.a mbedx509.a mbedcrypto.a)
+SENDER_LIBS = $(addprefix $(DEP_OUT)/$(TLS_ARCH)/lib,monocypher.a plist.a speexdsp.a)
+TLS_ARCH ?= mipsel
+TLS_FLAGS = -I$(TLS_DIR)/mbedtls-3.6.7/include -I$(TLS_DIR)/mbedconfig -DMBEDTLS_CONFIG_FILE='"airplay_mbedtls_config.h"'
+CFLAGS += -I$(DEP_OUT)/src/freetype-2.13.3/include -I$(TLS_DIR)/monocypher-4.0.2/src -I$(TLS_DIR)/monocypher-4.0.2/src/optional -I$(TLS_DIR)/libplist-2.6.0/include -I$(TLS_DIR)/dr_libs-dfe8377631000664666519fdb83da193fd8037f4 -I$(TLS_DIR)/speexdsp-1.2.1/include/speex -I$(TLS_DIR)/speexconfig
+CFLAGS += $(TLS_FLAGS) -DPB_VALIDATE_UTF8=1 -I$(TLS_DIR)/nanopb-0.4.9.1 -I$(TLS_DIR)/cast
 # --gc-sections drops every provably-unreferenced function/data section at link (unused LVGL fonts,
 # widgets, draw backends, sqlite fns) with NO behavior change - only unreachable symbols are removed.
 LDFLAGS := -static -pthread -Wl,--gc-sections
-LDLIBS  := $(NUI)/third_party/out/mipsel/libfreetype.a -lm -lrt
+LDLIBS  := $(DEP_OUT)/mipsel/libfreetype.a $(TLS_LIBS) $(SENDER_LIBS) -lm -lrt
 
 LVGL_SRCS := $(sort $(shell find $(LVGL)/src -name "*.c"))   # sorted: find order depends on the disk, link order must not
-APP_SRCS  := $(APP)/main.c $(APP)/usage.c $(APP)/modelock.c $(APP)/sdio.c $(APP)/fontft.c $(APP)/font_cjk_extra_16.c $(APP)/playstate.c $(APP)/fb_pan.c $(APP)/ipc.c $(APP)/ui.c $(APP)/art.c $(APP)/screenmgr.c $(APP)/home.c $(APP)/library.c $(APP)/musicdb.c $(APP)/settings.c $(APP)/power.c $(APP)/controls.c $(APP)/config.c $(APP)/anim.c $(APP)/search.c $(APP)/saver.c $(APP)/quicksettings.c $(APP)/songinfo.c $(APP)/npmenus.c $(APP)/eqcustom.c $(APP)/apps.c $(APP)/kbinput.c $(APP)/playlistview.c $(APP)/folderbrowser.c $(APP)/books.c $(APP)/upnext.c $(APP)/datetime.c $(APP)/i18n.c $(APP)/i18n_tables.c $(APP)/theme.c $(APP)/theme_kit.c $(APP)/theme_defs.c $(APP)/theme_kits.c $(APP)/theme_validate.c $(APP)/theme_store.c $(APP)/artcache.c $(APP)/colorpick.c $(APP)/albumwall.c $(APP)/debug_ui.c $(APP)/webui.c $(APP)/modes.c $(APP)/wifi.c $(APP)/bt.c $(APP)/weather.c $(APP)/lyrics.c $(APP)/netart.c $(APP)/toast.c $(APP)/lastfm.c $(APP)/lastfm_ui.c $(APP)/splash.c $(APP)/md5.c $(APP)/scanner.c $(APP)/opustitle.c $(APP)/opustitle_worker.c $(APP)/system.c $(APP)/ota.c $(APP)/fwcaps.c $(APP)/font_icons_28.c $(APP)/font_icons_20.c $(APP)/font_weather16.c $(APP)/font_intl_14.c $(APP)/font_intl_16.c $(APP)/font_intl_18.c $(APP)/font_intl_20.c $(APP)/font_mono_14.c $(APP)/font_mono_16.c $(APP)/font_mono_18.c $(APP)/font_mono_20.c $(APP)/font_mono_24.c $(APP)/font_mono_bold_12.c $(APP)/font_dot_18.c $(APP)/font_dot_28.c $(APP)/font_bauh_bold_22.c $(APP)/font_bauh_bold_32.c $(APP)/font_bauh_clk_140.c $(APP)/font_bauh_clk_96.c $(APP)/font_bauh_ui_12.c $(APP)/font_bauh_ui_14.c $(APP)/font_bauh_ui_16.c $(APP)/font_bauh_ui_18.c $(APP)/font_bauh_ui_20.c $(APP)/font_bauh_ui_24.c $(APP)/font_blue_clk_56.c $(APP)/font_blue_sans_14.c $(APP)/font_blue_sans_16.c $(APP)/font_blue_sans_18.c $(APP)/font_blue_sans_20.c $(APP)/font_hifi_seg_20.c $(APP)/font_hifi_seg_64.c $(APP)/font_hifi_ui_12.c $(APP)/font_hifi_ui_14.c $(APP)/font_hifi_ui_16.c $(APP)/font_hifi_ui_18.c $(APP)/font_hifi_ui_20.c $(APP)/font_hifi_ui_24.c $(APP)/font_stone_clk_64.c $(APP)/font_stone_ui_12.c $(APP)/font_stone_ui_14.c $(APP)/font_stone_ui_16.c $(APP)/font_stone_ui_18.c $(APP)/font_stone_ui_20.c $(APP)/font_stone_ui_24.c $(APP)/font_term_clk_72.c $(APP)/font_term_ui_12.c $(APP)/font_term_ui_14.c $(APP)/font_term_ui_16.c $(APP)/font_term_ui_18.c $(APP)/font_term_ui_20.c $(APP)/font_term_ui_24.c $(APP)/font_zine_bold_16.c $(APP)/font_zine_bold_20.c $(APP)/font_zine_clk_50.c $(APP)/font_zine_glitch_26.c $(APP)/font_zine_ui_12.c $(APP)/font_zine_ui_14.c $(APP)/font_zine_ui_16.c $(APP)/font_zine_ui_18.c $(APP)/font_zine_ui_20.c $(APP)/font_zine_ui_24.c $(APP)/font_brand_disk_32.c $(APP)/font_brand_os_32.c
+APP_SRCS  := $(APP)/main.c $(APP)/webui.c $(APP)/modelock.c $(APP)/usage.c $(APP)/remote_discovery.c $(APP)/remote_browse.c $(APP)/audio_decode.c $(APP)/audio_convert.c $(APP)/audio_feed.c $(APP)/audio_timeline.c $(APP)/airplay_crypto.c $(APP)/airplay_tlv.c $(APP)/airplay_store.c $(APP)/airplay_pair.c $(APP)/airplay_rtsp.c $(APP)/airplay_rtp.c $(APP)/airplay_raop.c $(APP)/airplay_plist.c $(APP)/airplay_ipc.c $(APP)/airplay_session.c $(APP)/airplay_remote.c $(APP)/airplay_events.c $(APP)/airplay_mrp.c $(APP)/airplay_worker.c $(APP)/airplay_queue.c $(APP)/airplay_sender.c $(APP)/airplay_pin.c $(APP)/remote_tls.c $(APP)/cast_wire.c $(APP)/cast_messages.c $(APP)/cast_session.c $(APP)/cast_discovery.c $(APP)/cast_http.c $(APP)/cast_handoff.c $(APP)/cast_bridge.c $(APP)/cast_art.c $(APP)/cast_queue.c $(APP)/cast_ctl.c $(APP)/cast_ctlw.c $(APP)/cast_format.c $(APP)/cast_ui.c $(TLS_DIR)/cast/cast_channel.pb.c $(TLS_DIR)/nanopb-0.4.9.1/pb_encode.c $(TLS_DIR)/nanopb-0.4.9.1/pb_decode.c $(TLS_DIR)/nanopb-0.4.9.1/pb_common.c $(APP)/sdio.c $(APP)/fontft.c $(APP)/font_cjk_extra_16.c $(APP)/playstate.c $(APP)/playback.c $(APP)/fb_pan.c $(APP)/ipc.c $(APP)/receiver.c $(APP)/receiver_progress.c $(APP)/ui.c $(APP)/art.c $(APP)/screenmgr.c $(APP)/home.c $(APP)/library.c $(APP)/musicdb.c $(APP)/custom_saver_db.c $(APP)/custom_saver_apply.c $(APP)/custom_saver_picker.c $(APP)/custom_picker_ui.c $(APP)/custom_preview.c $(APP)/custom_saver_overlay.c $(APP)/settings.c $(APP)/power.c $(APP)/controls.c $(APP)/config.c $(APP)/anim.c $(APP)/search.c $(APP)/saver.c $(APP)/quicksettings.c $(APP)/songinfo.c $(APP)/npmenus.c $(APP)/eqcustom.c $(APP)/apps.c $(APP)/kbinput.c $(APP)/playlistview.c $(APP)/folderbrowser.c $(APP)/books.c $(APP)/upnext.c $(APP)/datetime.c $(APP)/i18n.c $(APP)/i18n_tables.c $(APP)/theme.c $(APP)/theme_kit.c $(APP)/theme_defs.c $(APP)/theme_kits.c $(APP)/theme_validate.c $(APP)/theme_store.c $(APP)/artcache.c $(APP)/colorpick.c $(APP)/albumwall.c $(APP)/debug_ui.c $(APP)/modes.c $(APP)/wifi.c $(APP)/bt.c $(APP)/bt_codec_observe.c $(APP)/bt_prepare.c $(APP)/weather.c $(APP)/lyrics.c $(APP)/netart.c $(APP)/toast.c $(APP)/lastfm.c $(APP)/lastfm_ui.c $(APP)/splash.c $(APP)/shutdown_anim.c $(APP)/md5.c $(APP)/scanner.c $(APP)/opustitle.c $(APP)/opustitle_worker.c $(APP)/system.c $(APP)/ota.c $(APP)/fwcaps.c $(APP)/font_icons_28.c $(APP)/font_icons_20.c $(APP)/font_weather16.c $(APP)/font_intl_14.c $(APP)/font_intl_16.c $(APP)/font_intl_18.c $(APP)/font_intl_20.c $(APP)/font_mono_14.c $(APP)/font_mono_16.c $(APP)/font_mono_18.c $(APP)/font_mono_20.c $(APP)/font_mono_24.c $(APP)/font_mono_bold_12.c $(APP)/font_dot_18.c $(APP)/font_dot_28.c $(APP)/font_bauh_bold_22.c $(APP)/font_bauh_bold_32.c $(APP)/font_bauh_clk_140.c $(APP)/font_bauh_clk_96.c $(APP)/font_bauh_ui_12.c $(APP)/font_bauh_ui_14.c $(APP)/font_bauh_ui_16.c $(APP)/font_bauh_ui_18.c $(APP)/font_bauh_ui_20.c $(APP)/font_bauh_ui_24.c $(APP)/font_blue_clk_56.c $(APP)/font_blue_sans_14.c $(APP)/font_blue_sans_16.c $(APP)/font_blue_sans_18.c $(APP)/font_blue_sans_20.c $(APP)/font_hifi_seg_20.c $(APP)/font_hifi_seg_64.c $(APP)/font_hifi_ui_12.c $(APP)/font_hifi_ui_14.c $(APP)/font_hifi_ui_16.c $(APP)/font_hifi_ui_18.c $(APP)/font_hifi_ui_20.c $(APP)/font_hifi_ui_24.c $(APP)/font_stone_clk_64.c $(APP)/font_stone_ui_12.c $(APP)/font_stone_ui_14.c $(APP)/font_stone_ui_16.c $(APP)/font_stone_ui_18.c $(APP)/font_stone_ui_20.c $(APP)/font_stone_ui_24.c $(APP)/font_term_clk_72.c $(APP)/font_term_ui_12.c $(APP)/font_term_ui_14.c $(APP)/font_term_ui_16.c $(APP)/font_term_ui_18.c $(APP)/font_term_ui_20.c $(APP)/font_term_ui_24.c $(APP)/font_zine_bold_16.c $(APP)/font_zine_bold_20.c $(APP)/font_zine_clk_50.c $(APP)/font_zine_glitch_26.c $(APP)/font_zine_ui_12.c $(APP)/font_zine_ui_14.c $(APP)/font_zine_ui_16.c $(APP)/font_zine_ui_18.c $(APP)/font_zine_ui_20.c $(APP)/font_zine_ui_24.c $(APP)/font_brand_disk_32.c $(APP)/font_brand_os_32.c $(APP)/bookmeta.c $(APP)/ota_policy.c $(APP)/procrun.c $(APP)/names.c $(APP)/btalias.c $(APP)/device_names.c $(APP)/device_names_ui.c $(APP)/names_reset.c $(APP)/radio_cfg.c $(APP)/radio_bt.c $(APP)/radio_wifi.c $(APP)/ui_dialog.c
 # bundled SQLite amalgamation (compiled in-process; replaces popen sqlite3 CLI)
 SQLITE_FLAGS := -Os -pipe -static -ffunction-sections -fdata-sections -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION \
   -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DQS=0 -DSQLITE_OMIT_DEPRECATED $(REPRO_FLAGS) $(FP_FLAGS)
-OBJS := $(LVGL_SRCS:.c=.o) $(APP_SRCS:.c=.o) $(APP)/sqlite3.o
+OBJS := $(patsubst $(TLS_DIR)/%.o,$(DEP_OUT)/$(TLS_ARCH)/objects/%.o,$(LVGL_SRCS:.c=.o) $(APP_SRCS:.c=.o) $(APP)/sqlite3.o)
+
+# AirPlay proof build (slice P1, private): `make AIRPLAY_PROOF=1 airplay-proof` builds out/airplay-proof/mq_ui.airplay-proof and the helper.
+# App objects go to out/airplay-proof/ (so main.o of the production build is never rebuilt with the proof flag); LVGL, third-party and
+# SQLite objects carry no proof flag and are shared. The flag is refused for every other goal, and via EXTRA_CFLAGS for all of them.
+# Nothing in packaging references these outputs.
+AP_OUT := $(APP)/out/airplay-proof
+AP_HELPER_ROOT ?= $(abspath $(APP)/../../tools/airplay-proof)
+AP_HELPER_CROSS ?= $(abspath $(APP)/../../toolchain/build/mipsel-n2008-cxx-musl-cross/bin/mipsel-linux-musl-)
+AP_ON := $(strip $(AIRPLAY_PROOF)$(DISKOS_AIRPLAY_PROOF))
+ifneq ($(findstring DISKOS_AIRPLAY_PROOF,$(EXTRA_CFLAGS)),)
+$(error the AirPlay proof flag goes through AIRPLAY_PROOF=1 airplay-proof only, never EXTRA_CFLAGS)
+endif
+# Bluetooth experiments must not populate the ordinary production object paths.
+ifneq ($(findstring DISKOS_TEST_BT_PREPARE,$(EXTRA_CFLAGS)),)
+ifneq ($(MAKECMDGOALS),airplay-proof)
+$(error use the isolated bt-prepare target; combined experiments use AIRPLAY_PROOF=1 airplay-proof)
+endif
+endif
+ifneq ($(AP_ON),)
+ifneq ($(MAKECMDGOALS),airplay-proof)
+$(error AIRPLAY_PROOF is set: only the airplay-proof target may be built with it, never the production target)
+endif
+else ifneq ($(filter airplay-proof,$(MAKECMDGOALS)),)
+$(error airplay-proof needs AIRPLAY_PROOF=1)
+endif
+AP_LOCAL_SRCS := $(filter-out $(TLS_DIR)/%,$(APP_SRCS))
+AP_OBJS   := $(patsubst $(APP)/%.c,$(AP_OUT)/%.o,$(AP_LOCAL_SRCS) $(APP)/airplay_probe.c)
+AP_SHARED := $(filter-out $(AP_LOCAL_SRCS:.c=.o),$(OBJS))
+.PHONY: airplay-proof ap-helper-force
+ap-helper-force:
+airplay-proof: check-theme $(AP_OUT)/mq_ui.airplay-proof $(AP_OUT)/diskos_airplay_probe
+$(AP_OUT)/%.o: $(APP)/%.c
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DDISKOS_AIRPLAY_PROOF -c $< -o $@
+$(AP_OUT)/mq_ui.airplay-proof: $(AP_OBJS) $(AP_SHARED) $(DEP_OUT)/mipsel/libfreetype.a $(TLS_LIBS)
+	$(CC) $(LDFLAGS) -o $@ $(AP_OBJS) $(AP_SHARED) $(LDLIBS)
+	$(CROSS)strip $@ || true
+	@ls -l $@
+$(AP_OUT)/diskos_airplay_probe: ap-helper-force
+	CROSS="$(AP_HELPER_CROSS)" sh "$(AP_HELPER_ROOT)/build.sh" mipsel
+	mkdir -p $(dir $@)
+	cp "$(AP_HELPER_ROOT)/out/mipsel-n2008-cxx/diskos_airplay_probe" "$@"
+	@ls -l $@
+
+# Standalone Bluetooth experiment: isolated objects and binary, as for the AirPlay proof.
+BT_OUT := $(APP)/out/bt-prepare
+BT_OBJS := $(patsubst $(APP)/%.c,$(BT_OUT)/%.o,$(AP_LOCAL_SRCS))
+BT_SHARED := $(filter-out $(AP_LOCAL_SRCS:.c=.o),$(OBJS))
+.PHONY: bt-prepare
+bt-prepare: check-theme $(BT_OUT)/mq_ui.bt-prepare
+$(BT_OUT)/%.o: $(APP)/%.c
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DDISKOS_TEST_BT_PREPARE -c $< -o $@
+$(BT_OUT)/mq_ui.bt-prepare: $(BT_OBJS) $(BT_SHARED) $(DEP_OUT)/mipsel/libfreetype.a $(TLS_LIBS)
+	$(CC) $(LDFLAGS) -o $@ $(BT_OBJS) $(BT_SHARED) $(LDLIBS)
+	$(CROSS)strip $@ || true
 
 # Every on-screen colour is a theme role (theme.h); theme.c is the only place RGB becomes a colour. The link fails if
 # any other app source (.c, or any header in the tree) builds a colour itself: an LVGL colour constructor, palette,
@@ -52,15 +116,37 @@ check-theme:
 	@if grep -n -E '\b(lv_font_montserrat_[0-9]+|font_icons_[0-9]+)\b' $(THEME_SRCS) $(filter-out $(APP)/lv_conf.h,$(THEME_HDRS)) | grep -v 'LV_FONT_DECLARE'; then \
 	  echo "check-theme: FAIL - use a font role (TF(...)) instead"; exit 1; fi
 
-FT_INPUTS := $(shell find $(NUI)/third_party/freetype-2.13.3/include $(NUI)/third_party/freetype-2.13.3/src $(NUI)/third_party/ftconfig -type f) $(NUI)/third_party/build-freetype.sh
-$(NUI)/third_party/out/mipsel/libfreetype.a: $(FT_INPUTS)
-	CROSS="$(CROSS)" sh $(NUI)/third_party/build-freetype.sh mipsel
+DEPS_RUNNER := $(APP)/tools/build-native-deps.py
+DEPS_ARGS := --app "$(APP)" --third-party "$(TLS_DIR)" --output "$(DEP_OUT)"
 
-mq_ui: $(OBJS) $(NUI)/third_party/out/mipsel/libfreetype.a
+$(APP)/fontft.o: $(DEP_OUT)/mipsel/libfreetype.a
+
+$(DEP_OUT)/mipsel/libfreetype.a:
+	CROSS="$(CROSS)" python3 $(DEPS_RUNNER) mipsel freetype $(DEPS_ARGS)
+
+TLS_INPUTS := $(shell find $(TLS_DIR)/mbedtls-3.6.7/include $(TLS_DIR)/mbedtls-3.6.7/library $(TLS_DIR)/mbedconfig -type f) $(TLS_DIR)/build-mbedtls.sh $(TLS_DIR)/vendor-build-common.sh $(APP)/airplay_mbedtls_config.h $(APP)/tools/build-native-deps.py
+$(TLS_LIBS) &: $(TLS_INPUTS)
+	CROSS="$(CROSS)" python3 $(DEPS_RUNNER) $(TLS_ARCH) mbedtls $(DEPS_ARGS)
+$(DEP_OUT)/$(TLS_ARCH)/libmonocypher.a:
+	CROSS="$(CROSS)" python3 $(DEPS_RUNNER) $(TLS_ARCH) monocypher $(DEPS_ARGS)
+$(DEP_OUT)/$(TLS_ARCH)/libplist.a:
+	CROSS="$(CROSS)" python3 $(DEPS_RUNNER) $(TLS_ARCH) libplist $(DEPS_ARGS)
+$(DEP_OUT)/$(TLS_ARCH)/libspeexdsp.a:
+	CROSS="$(CROSS)" python3 $(DEPS_RUNNER) $(TLS_ARCH) speexdsp $(DEPS_ARGS)
+.PHONY: tls-host
+tls-host:
+	$(MAKE) --no-print-directory TLS_ARCH=host $(subst /mipsel/,/host/,$(TLS_LIBS))
+
+# Embedded stock-library helper (see the diskos-audiodec rules at the end).
+AUDIODEC_TOOL := $(APP)/tools/embed_audiodec.py
+AUDIODEC_RAW := $(APP)/audio_stock_image.raw
+AUDIODEC_OBJ := $(APP)/audio_stock_image.o
+mq_ui: $(SENDER_LIBS) $(OBJS) $(AUDIODEC_OBJ) $(DEP_OUT)/mipsel/libfreetype.a $(TLS_LIBS)
 	@$(MAKE) --no-print-directory check-theme
-	$(CC) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
+	$(CC) $(LDFLAGS) -o $@ $(OBJS) $(AUDIODEC_OBJ) $(LDLIBS)
 	cp -f $@ $@.debug                 # unstripped twin for crash symbolication (not shipped)
 	$(CROSS)strip $@ || true
+	python3 -I -B $(AUDIODEC_TOOL) verify $@ diskos-audiodec $(AUDIODEC_RAW) || { rm -f $@; exit 1; }
 	@ls -l $@
 	@{ echo "artifact: $(notdir $@)"; \
 	   echo "md5: $$(md5sum $@ | cut -d' ' -f1)"; \
@@ -120,9 +206,47 @@ checkpunct:   # device punctuation scrub of app sources (em/en dash, ellipsis, c
 $(APP)/sqlite3.o: $(APP)/sqlite3.c
 	$(CC) $(SQLITE_FLAGS) -c $< -o $@
 
+$(DEP_OUT)/$(TLS_ARCH)/objects/%.o: $(TLS_DIR)/%.c
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJS) $(OBJS:.o=.d) mq_ui mq_ui.debug mq_ui.manifest ipodos-ui diskos-bootprobe diskos-artdec
+	rm -rf $(AP_OUT) $(BT_OUT)
+	rm -f $(OBJS) $(OBJS:.o=.d) mq_ui mq_ui.debug mq_ui.manifest ipodos-ui diskos-bootprobe diskos-artdec diskos-audiodec
+	rm -f $(AUDIODEC_RAW) $(AUDIODEC_RAW).part $(AUDIODEC_OBJ)
 -include $(OBJS:.o=.d)
+-include $(AP_OBJS:.o=.d)
+-include $(BT_OBJS:.o=.d)
+
+# Separate dynamically linked PCM exporter; the UI retains its static musl ABI.
+# Build hosts supply the read-only stock fixture and verified header archive.
+STOCK_SYSROOT ?= $(abspath $(APP)/../../scratch/fixtures/v257)
+STOCK_AV_HEADERS ?= $(abspath $(APP)/../../vendor-src/ffmpeg/ffmpeg-4.2.2.tar.xz)
+# Validate production inputs even when the helper is already up to date.
+ifeq ($(strip $(MAKECMDGOALS)),)
+STOCK_CHECK_GOALS := mq_ui
+else
+STOCK_CHECK_GOALS := $(filter mq_ui diskos-audiodec,$(MAKECMDGOALS))
+endif
+ifneq ($(STOCK_CHECK_GOALS),)
+STOCK_HEADER_CHECK := $(shell STOCK_AV_HEADERS="$(STOCK_AV_HEADERS)" sh "$(TLS_DIR)/build-stock-audiodec.sh" --verify-only 2>&1 || echo "Header archive verification failed")
+ifneq ($(strip $(STOCK_HEADER_CHECK)),)
+$(error $(STOCK_HEADER_CHECK))
+endif
+endif
+mq_ui: diskos-audiodec
+# The helper travels inside the signed mq_ui (owner decision 2026-10-22): its finished ELF is the read-only
+# .diskos_audiodec section, with a generated length and SHA-256. mq_ui never executes a pathname: before each
+# start it writes a private copy, verifies it and executes that copy (audio_stock_process.h). Only the two
+# objects that start the helper are built for it; the post-strip check above proves the exact bytes are carried.
+$(AUDIODEC_RAW): diskos-audiodec $(AUDIODEC_TOOL)
+	python3 -I -B $(AUDIODEC_TOOL) image diskos-audiodec $@
+$(AUDIODEC_OBJ): $(APP)/audio_stock_image.S $(AUDIODEC_RAW)
+	$(CC) -c -DAUDIO_STOCK_IMAGE_RAW='"$(AUDIODEC_RAW)"' $< -o $@
+$(APP)/audio_decode.o $(APP)/airplay_sender.o: CFLAGS += -DAUDIO_STOCK_EMBEDDED=1
+diskos-audiodec: $(APP)/tools/diskos_audiodec.c $(APP)/tools/audio_stock_start.S $(APP)/audio_stock_wire.h $(TLS_DIR)/build-stock-audiodec.sh
+	STOCK_APP="$(APP)" STOCK_SYSROOT="$(STOCK_SYSROOT)" STOCK_AV_HEADERS="$(STOCK_AV_HEADERS)" STOCK_AUDIO_OUT="$(DEP_OUT)/stock-audiodec" sh "$(TLS_DIR)/build-stock-audiodec.sh"
+	cp "$(DEP_OUT)/stock-audiodec/diskos-audiodec" "$@"

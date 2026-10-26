@@ -8,6 +8,8 @@
 #include "i18n.h"
 #include "musicdb.h"
 #include "ipc.h"
+#include "playback.h"   /* playback_display_state: the Cast view */
+#include "cast_ui.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,9 +29,14 @@ static char g_artist[160];
 static char g_path[256];
 static int  g_fav, g_have, g_pos_id;
 static lv_obj_t *g_fav_lbl;
+static lv_obj_t *dim_row;   /* the Favourite row currently dimmed while casting (cleared when the panel is rebuilt) */
 
 static void fav_refresh(void){   /* every playback update: the text only when it changed */
     ui_label_set_changed(g_fav_lbl, tr(g_fav ? "Remove from Favourites" : "Add to Favourites"));
+    /* Favourite is refused while casting (ui_set_favorite, 14e2b): the row is shown dimmed, the tap says why, and nothing changes. */
+    lv_obj_t *row = g_fav_lbl ? lv_obj_get_parent(g_fav_lbl) : NULL; int cast = playback_source() != PB_SRC_LOCAL;
+    if(cast && row && dim_row != row){ lv_obj_set_style_opa(row, LV_OPA_50, 0); dim_row = row; }
+    else if(!cast && dim_row){ if(dim_row == row) lv_obj_set_style_opa(row, LV_OPA_COVER, 0); dim_row = NULL; }
 }
 void npmenu_set(const track_state_t *st, int playing, const void *thumb_src){
     (void)playing; (void)thumb_src;
@@ -96,7 +103,9 @@ static void ctx_album_cb(lv_event_t *e){
      * metadata album string, which may not match the DB and show an empty list */
     char dbal[160], dbar[160];
     const char *album = g_album;
-    if(mdb_song_meta_by_path(g_path, dbal, sizeof dbal, dbar, sizeof dbar) && dbal[0]) album = dbal;
+    int found=mdb_song_meta_by_path(g_path, dbal, sizeof dbal, dbar, sizeof dbar);
+    if(found<0){ ui_toast("Library busy - try again"); return; }
+    if(found>0 && dbal[0]) album = dbal;
     if(!album[0]){ ui_toast("No album info"); return; }
     library_open_album(album); screen_show(SCR_LIBRARY);
 }
@@ -104,7 +113,9 @@ static void ctx_artist_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
     char dbal[160], dbar[160];
     const char *src = g_artist;
-    if(mdb_song_meta_by_path(g_path, dbal, sizeof dbal, dbar, sizeof dbar) && dbar[0]) src = dbar;
+    int found=mdb_song_meta_by_path(g_path, dbal, sizeof dbal, dbar, sizeof dbar);
+    if(found<0){ ui_toast("Library busy - try again"); return; }
+    if(found>0 && dbar[0]) src = dbar;
     if(!src[0]){ ui_toast("No artist info"); return; }
     char a[160]; first_artist(src, a, sizeof a);
     library_open_artist(a); screen_show(SCR_LIBRARY);
@@ -112,9 +123,10 @@ static void ctx_artist_cb(lv_event_t *e){
 static void plpick_reload(void);
 static void ctx_addpl_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+    if(ui_receiver_active()){ ui_toast("Return to Local first"); return; }
     if(!g_path[0]){ ui_toast("No song to add"); return; }   /* nothing playing/loaded */
     /* read the player's pos_id NOW (not the value cached at the last refresh): a track change since then would name the wrong row */
-    track_state_t now; ipc_get_state(&now);
+    track_state_t raw, now; ipc_get_state(&raw); playback_display_state(&now, &raw);   /* 15b: the Cast track (pos_id 0) while casting, else raw */
     if(now.have_track && strcmp(now.path, g_path) == 0) g_pos_id = now.pos_id; else g_pos_id = 0;
     plpick_set_song(g_path, g_pos_id, now.have_track ? now.title : "");   /* add the current track (just that CUE/ISO track if it is one) */
     plpick_reload();                  /* refresh list + clear any old toast */
@@ -122,8 +134,9 @@ static void ctx_addpl_cb(lv_event_t *e){
 }
 static void ctx_fav_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+    if(ui_receiver_active()){ ui_toast("Return to Local first"); return; }   /* the retained local song is not what is playing */
+    if(!ui_set_favorite(!g_fav)) return;   /* refused while casting: leave the row and the state alone */
     g_fav = !g_fav;                   /* optimistic; player confirms on next a2 */
-    ui_set_favorite(g_fav);
     fav_refresh();
     ui_toast(g_fav ? "Added to Favourites" : "Removed from Favourites");   /* match Now Playing */
 }
@@ -131,7 +144,7 @@ void npmenu_create(lv_obj_t *root){
     panel_header(root, "Options");
     lv_obj_t *list = panel_list(root);
     lv_obj_t *favrow = menu_row(list, "Add to Favourites", ctx_fav_cb, NULL);
-    g_fav_lbl = lv_obj_get_child(favrow, 0);
+    g_fav_lbl = lv_obj_get_child(favrow, 0); dim_row = NULL;
     fav_refresh();
     menu_row(list, "Add to Playlist", ctx_addpl_cb,  NULL);
     menu_row(list, "Song Info",       ctx_info_cb,   NULL);
@@ -152,9 +165,12 @@ static lv_obj_t *g_pick_toast;
 void plpick_set_song(const char *path, int pos_id, const char *title){
     snprintf(g_pick_path, sizeof g_pick_path, "%s", path?path:"");
     g_pick_col[0] = g_pick_val[0] = 0; free(g_pick_ids); g_pick_ids = NULL; g_pick_nids = 0;
+    g_pick_sub=0;g_pick_unsure=1;
+    if(!mdb_ui_read_begin()) return;   /* unknown identity must never become a plain-file add */
     g_pick_sub = g_pick_path[0] && mdb_song_subtrack_verified(g_pick_path, pos_id, title, &g_pick_track, NULL, NULL);
     /* the path alone names several tracks and none was established: never add them all */
     g_pick_unsure = g_pick_path[0] && !g_pick_sub && mdb_song_multi(g_pick_path);
+    mdb_ui_read_end();
 }
 void plpick_set_group(const char *col, const char *val){
     g_pick_path[0] = 0; g_pick_sub = 0; g_pick_unsure = 0; free(g_pick_ids); g_pick_ids = NULL; g_pick_nids = 0;
@@ -176,9 +192,13 @@ static int pick_has_song(long pid){
 }
 /* add the pending song or group; returns rows added (a group adds many, a song 0 or 1) */
 static int pick_add_to(long pid){
-    if(g_pick_path[0])
-        return g_pick_sub ? mdb_playlist_add_subtrack(pid, g_pick_path, g_pick_track, NULL) : mdb_playlist_add_song(pid, g_pick_path);
-    if(g_pick_nids > 0){ int r = mdb_playlist_add_ids(pid, g_pick_ids, g_pick_nids); return r < 0 ? 0 : r; }
+    if(g_pick_path[0]){
+        int failed=0;
+        int n=g_pick_sub ? mdb_playlist_add_subtrack(pid, g_pick_path, g_pick_track, &failed)
+                         : mdb_playlist_add_song_ex(pid, g_pick_path, &failed);
+        return failed ? -1 : n;
+    }
+    if(g_pick_nids > 0) return mdb_playlist_add_ids(pid, g_pick_ids, g_pick_nids);
     return mdb_playlist_add_group(pid, g_pick_col, g_pick_val);
 }
 
@@ -203,6 +223,7 @@ static int pick_refuse_unsure(void){
     return 1;
 }
 static void pick_added_toast(int n, const char *one, const char *fail){
+    if(n<0){ pick_toast("Couldn't add - try again"); return; }
     if(g_pick_path[0]){ pick_toast(n ? one : fail); return; }
     if(n > 0){ char m[40]; snprintf(m, sizeof m, "Added %d songs", n); pick_toast(m); }
     else pick_toast("Nothing new to add");
@@ -217,10 +238,10 @@ static void dup_close(void){ if(g_dup_dlg){ lv_obj_del(g_dup_dlg); g_dup_dlg=NUL
 void npmenu_close_transients(void){ dup_close(); }
 static void dup_add_cb(lv_event_t *e){
     if(lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
-    dup_close();
     /* "Add anyway" on a KNOWN duplicate: the song is in the playlist either way, so
      * "Kept in playlist" is accurate; only invalidate the scope if the row actually changed. */
-    if(g_pick_path[0]) pick_add_to(g_dup_pid);
+    if(g_pick_path[0] && pick_add_to(g_dup_pid)<0){ pick_toast("Couldn't add - try again"); return; }
+    dup_close();
     pick_toast("Kept in playlist");
 }
 static void dup_cancel_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) dup_close(); }
@@ -268,12 +289,18 @@ static void pick_add_cb(lv_event_t *e){
     int n = pick_add_to(pid);
     pick_added_toast(n, "Added to playlist", "Couldn't add");
 }
+static long g_new_pid;
+static const char *pick_new_save(const char *name){
+    if(!name || !name[0]) return "Enter a name";
+    if(pick_refuse_unsure()) return "Track unknown - try again";
+    g_new_pid=mdb_playlist_create(name);
+    if(g_new_pid<=0){ ui_toast("Couldn't create playlist - try again"); return "Try saving again"; }
+    return NULL;
+}
 static void pick_newname_done(const char *name){
     if(!name || !name[0]) return;
-    if(pick_refuse_unsure()) return;   /* before creating a playlist that would stay empty */
-    long pid = mdb_playlist_create(name);
+    long pid=g_new_pid;
     plpick_reload();
-    if(pid <= 0){ pick_toast("Couldn't create"); return; }
     if(pick_have()){
         int n = pick_add_to(pid);
         pick_added_toast(n, "Created + added", "Created (song not added)");
@@ -281,9 +308,9 @@ static void pick_newname_done(const char *name){
         pick_toast("Playlist created");
 }
 static void pick_new_cb(lv_event_t *e){
-    if(lv_event_get_code(e)==LV_EVENT_CLICKED) kbinput_open("Playlist name", "", pick_newname_done);
+    if(lv_event_get_code(e)==LV_EVENT_CLICKED) kbinput_open_validated("Playlist name", "", pick_newname_done, pick_new_save);
 }
-static void plpick_reload(void){
+static void plpick_reload_read(void){
     if(!g_pick_list) return;
     if(g_pick_timer){ lv_timer_delete(g_pick_timer); g_pick_timer = NULL; }
     if(g_pick_toast) lv_obj_add_flag(g_pick_toast, LV_OBJ_FLAG_HIDDEN);
@@ -299,6 +326,11 @@ static void plpick_reload(void){
     for(int i=0;i<n;i++)
         menu_row(g_pick_list, names[i], pick_add_cb, (void*)(intptr_t)ids[i]);
     free(names); free(ids);
+}
+static void plpick_reload(void){
+    if(!mdb_ui_read_begin()){ ui_toast("Library busy - reopen to refresh"); return; }
+    plpick_reload_read();
+    mdb_ui_read_end();
 }
 void plpick_create(lv_obj_t *root){
     panel_header(root, "Add to Playlist");
@@ -334,14 +366,63 @@ static void hub_fsart_cb(lv_event_t *e){
 static void hub_chapters_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) chapters_open(); }
 static void hub_upnext_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) upnext_open(); }
 
-static lv_obj_t *g_hub_list;
+static void hub_local_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) ui_receiver_return(); }   /* asks "Confirm exit?" while receiving, then goes to Now Playing */
+static void hub_source_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) modes_open(); }
+static lv_obj_t *g_hub_list, *g_hub_header, *g_hub_dots[2];
+static lv_color_t g_hub_color;
+/* 17b: the first row of Options is Beam (decision 65, frames 2 and 3 of the r3 mockups): the value is where the sound goes, "This Disc" or the receiver being beamed to
+ * (accent). It is there with or without Wi-Fi: the picker explains a missing connection itself. A tap opens the picker, in its beaming state while a session exists. */
+static void hub_beam_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) cast_ui_open(); }
+static char g_beam_shown[96];   /* the value the row shows now: 18, hub_tm_cb rebuilds the page when the session changes it */
+static int beam_on(void){ return ui_cast_phase() != 0 && *ui_cast_device(); }
+static const char *beam_value(void){ return beam_on() ? ui_cast_device() : tr("This Disc"); }
+static void beam_row(lv_obj_t *list){
+    lv_obj_t *r = menu_row(list, "Beam", hub_beam_cb, NULL);
+    int on = beam_on();
+    lv_obj_t *g = lv_label_create(r);   /* 18: the Beam glyph leads the row (r3 frames 2 and 3); the word moves right of it */
+    lv_label_set_text(g, BEAM_GLYPH);
+    lv_obj_set_style_text_font(g, TF(ICON_20), 0);
+    lv_obj_set_style_text_color(g, TC(TEXT_PRIMARY), 0);
+    lv_obj_set_pos(g, 14, 19);
+    lv_obj_move_to_index(g, 0);
+    lv_obj_t *w = lv_obj_get_child(r, 1);   /* the word: a fixed box, so a theme that narrows icon rows (Bauhaus) cannot wrap it */
+    lv_obj_set_x(w, 42); lv_obj_set_width(w, 100); lv_label_set_long_mode(w, LV_LABEL_LONG_DOT);
+    kit_row_layout(r, KIT_ROW_ICON);
+    lv_obj_t *v = lv_label_create(r);
+    snprintf(g_beam_shown, sizeof g_beam_shown, "%s", beam_value());
+    lv_label_set_text(v, beam_value());
+    lv_label_set_long_mode(v, LV_LABEL_LONG_DOT); lv_obj_set_width(v, 130); lv_obj_set_style_text_align(v, LV_TEXT_ALIGN_RIGHT, 0);
+    static lv_font_t value_font;
+    value_font = *TF(UI_12);
+    value_font.fallback = ui_font_cjk(12);
+    lv_obj_set_style_text_font(v, &value_font, 0);
+    lv_obj_set_style_text_color(v, on ? ui_current_accent() : TC(TEXT_MUTED), 0);
+    lv_obj_align(v, LV_ALIGN_RIGHT_MID, -14, 0);
+}
 /* (Re)populate the hub for the current track. Books get Chapters and drop the music-only entries
  * (Lyrics / Go to Album / Go to Artist / Add to Playlist) that make no sense for a single audiobook. */
 static void nphub_populate(void){
     if(!g_hub_list) return;
     lv_obj_clean(g_hub_list);
-    track_state_t st; ipc_get_state(&st);
-    int book = st.path[0] && mdb_is_book_path(st.path);
+    int rx = ui_receiver_active();
+    for(int i=0;i<2;i++) if(g_hub_dots[i]){
+        if(rx) lv_obj_add_flag(g_hub_dots[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_remove_flag(g_hub_dots[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    theme_title_text(g_hub_header, tr(rx ? "AIRPLAY" : "Options"));
+    lv_obj_set_pos(g_hub_list, rx ? 60 : 46, rx ? 108 : 76);
+    lv_obj_set_size(g_hub_list, rx ? 240 : 280, rx ? 144 : 250);
+    lv_obj_set_style_text_color(g_hub_header, rx ? theme_preset_color(0, THEME_CLR_ACCENT_PRIMARY) : g_hub_color, 0);
+    if(rx){
+        lv_obj_t *row = menu_row(g_hub_list, "Return to Local", hub_local_cb, NULL);
+        lv_obj_set_width(row, 240);
+        row = menu_row(g_hub_list, "Source", hub_source_cb, NULL);
+        lv_obj_set_width(row, 240);
+        return;
+    }
+    track_state_t raw, st; ipc_get_state(&raw); playback_display_state(&st, &raw);   /* 15b: the Cast track never gets the book menu */
+    int book = st.path[0] && ui_view_is_book(st.path);
+    beam_row(g_hub_list);
     if(book){
         /* navigate, understand the book, then the rest - the order the listener reaches for most first */
         menu_row(g_hub_list, "Chapters",        hub_chapters_cb, NULL);
@@ -359,15 +440,49 @@ static void nphub_populate(void){
         menu_row(g_hub_list, "Add to Playlist", ctx_addpl_cb,  NULL);
     }
 }
-void nphub_refresh(void){ nphub_populate(); }   /* called on each SCR_NPHUB show (screenmgr) */
+/* 18 (carry-over L1): the Beam row's value follows the session while Options is open (a lost connection, the sleep timer, the Disc starting to play).
+ * A timer exists only while the page is shown on a lit screen (nphub_poll_sync: started on show and wake, deleted on leave and while dark); it
+ * compares the shown value with the live one and rebuilds the page only on a change. */
+static lv_timer_t *g_hub_tm;
+#ifdef DISKOS_HOST
+int nphub_host_ticks;   /* host probe: timer callbacks so far */
+int nphub_host_timer_live(void){ return g_hub_tm != NULL; }
+#endif
+static void hub_tm_cb(lv_timer_t *t){
+#ifdef DISKOS_HOST
+    nphub_host_ticks++;
+#endif
+    if(screen_current() != SCR_NPHUB){ lv_timer_delete(t); g_hub_tm = NULL; return; }
+    if(!g_hub_list || ui_receiver_active() || !strcmp(g_beam_shown, beam_value())) return;   /* the receiver page has no Beam row */
+    nphub_populate();
+    kit_pass(lv_screen_active());
+}
+int ui_screen_backlight_on(void);
+
+void nphub_poll_sync(int visible){
+    if(!visible || screen_current() != SCR_NPHUB){
+        if(g_hub_tm){
+            lv_timer_delete(g_hub_tm);
+            g_hub_tm = NULL;
+        }
+        return;
+    }
+    if(!g_hub_tm)
+        g_hub_tm = lv_timer_create(hub_tm_cb, 250, NULL);
+}
+
+void nphub_refresh(void){   /* called on each SCR_NPHUB show (screenmgr) */
+    nphub_populate();
+    nphub_poll_sync(ui_screen_backlight_on());
+}
 
 void nphub_create(lv_obj_t *root){
-    panel_header(root, "Options");
+    g_hub_header = panel_header(root, "Options");
+    g_hub_color = lv_obj_get_style_text_color(g_hub_header, 0);
     g_hub_list = panel_list(root);
-    nphub_populate();
     /* page dots - the hub is the right page (Now Playing is the left) */
     for(int i=0;i<2;i++){
-        lv_obj_t *dot = lv_obj_create(root);
+        lv_obj_t *dot = g_hub_dots[i] = lv_obj_create(root);
         lv_obj_remove_style_all(dot);
         lv_obj_set_size(dot, 7, 7);
         lv_obj_align(dot, LV_ALIGN_BOTTOM_MID, i==0 ? -8 : 8, -10);
@@ -375,6 +490,7 @@ void nphub_create(lv_obj_t *root){
         lv_obj_set_style_bg_color(dot, (i==1 ? TC(PAGE_DOT_ACTIVE) : TC(PAGE_DOT_INACTIVE)), 0);
         lv_obj_set_style_bg_opa(dot, i==1 ? LV_OPA_COVER : LV_OPA_60, 0);
     }
+    nphub_populate();
 }
 
 /* ---- tuning menu (SCR_TUNE): Play Mode + Equalizer cyclers --------------- */
@@ -397,6 +513,7 @@ void tune_refresh(void){
 }
 
 static void cyc_apply(const char *key, const char *const *opts, int n, void *valobj, int dir){
+    if(!strcmp(key,"work_mode") && ui_receiver_in_use()){ ui_toast("Return to Local first"); return; }   /* cfg would change under a receiver */
     int base = cfg_get_int(key, 0); if(base < 0 || base >= n) base = 0;   /* normalize a corrupt stored value BEFORE stepping (no signed overflow, no OOB) */
     int v = base + dir;
     if(v<0) v=n-1; else if(v>=n) v=0;

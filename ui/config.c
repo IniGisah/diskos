@@ -211,14 +211,20 @@ void cfg_begin(void){
     g_snap_n = g_n; g_snap_dirty = g_dirty; g_txn = 1; g_txn_err = 0;
 }
 int cfg_commit(void){
-    if(!g_txn) return cfg_flush();          /* no open batch -> behave like a plain flush */
+    if(!g_txn) return cfg_flush();
     g_txn = 0;
-    if(g_txn_err){                          /* a set failed mid-batch -> roll the WHOLE store back to the snapshot */
-        if(g_snap_n > 0) memcpy(g_cfg, g_snap, (size_t)g_snap_n * sizeof g_cfg[0]);
-        g_n = g_snap_n; g_dirty = g_snap_dirty; g_save_err = 1;
-        return -1;
+    if(!g_txn_err){
+        g_renamed = 0;
+        int rc = rewrite();
+        if(rc == 0) return 0;
+        if(g_renamed) return -2;
     }
-    return rewrite();
+    if(g_snap_n > 0)
+        memcpy(g_cfg, g_snap, (size_t)g_snap_n * sizeof g_cfg[0]);
+    g_n = g_snap_n;
+    g_dirty = g_snap_dirty;
+    g_save_err = 1;
+    return -1;
 }
 
 const char *cfg_get_str(const char *key, const char *def){

@@ -7,7 +7,9 @@ import os,subprocess,tempfile
 app=Path(__file__).resolve().parents[1]
 s=(app/'main.c').read_text();hint=s[s.index('static int      g_pp_hint'):s.index('/* set absolute volume')]
 scan=s[s.index('void ui_rescan_library(void)'):s.index('/* Poll for scan completion')]
-s=(app/'ui.c').read_text();action=s[s.index('int ui_transport_command('):s.index('static void transport_cb(')]
+s=(app/'ui.c').read_text();start=s.index('int ui_transport_command(')
+local_start=s.index('static int transport_local(',start)
+action=s[start:s.index('\n}',local_start)+2]
 headers=r'''
 #include <assert.h>
 #include <stdio.h>
@@ -27,6 +29,8 @@ static int modes_output_busy(void){ return 0; }   /* no output switch in flight:
 static int source_mode = 0, dac_connected = 1;
 static int ui_get_source_mode(void){ return source_mode; }
 static int ui_usb_dac_connected(void){ return dac_connected; }
+static int ui_receiver_active(void){ return 0; }   /* Local transport under test: no receiver owns playback */
+static int ui_receiver_transport(const char *c){ (void)c; return -1; }
 static int cancel_ok=1,cancels; static int scanner_cancel(void){ cancels++; return cancel_ok; }   /* Rescan during a scan = Stop */
 typedef struct { char path[40]; long position_ms,duration_ms; } track_state_t;
 static track_state_t state;
@@ -52,6 +56,9 @@ static int scanner_active(void){return scan_busy;}
 static int sd_io_allowed(void){return sd_allowed;}
 static int scanner_start(void){scans++;return scan_fail?-1:0;}
 int ui_pp_icon_playing(int real);
+#define PB_E_NOSINK (-2)   /* LOCAL source: the facade calls the local function unchanged */
+static int transport_local(const char *cmd);
+static int playback_command(const char *c,int (*f)(const char *)){return f(c);}
 '''
 tests=r'''
 int main(void){

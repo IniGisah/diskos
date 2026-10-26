@@ -11,7 +11,9 @@ int         cfg_set_int(const char *key, int v);   /* 0 ok, -1 save failed */
 int         cfg_set_int_deferred(const char *key, int v);  /* in-memory only; follow with cfg_flush() */
 int         cfg_flush(void);                        /* one atomic rewrite/fsync of pending sets */
 void        cfg_begin(void);                        /* start an atomic multi-key batch (snapshots the store) */
-int         cfg_commit(void);                       /* persist the batch, or roll it ALL back on any set failure; 0 ok, -1 failed */
+int cfg_commit(void); /* open batch: 0 durable; -1 snapshot restored;
+                      * -2 file replaced, durability unconfirmed, memory follows file.
+                      * Without a batch, behaves like cfg_flush(). */
 const char *cfg_get_str(const char *key, const char *def);
 int         cfg_set_str(const char *key, const char *v);   /* 0 ok, -1 save failed */
 int         cfg_set_str_deferred(const char *key, const char *v);  /* in-memory only; follow with cfg_flush() */

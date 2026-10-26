@@ -10,7 +10,7 @@
 </h1>
 
 <p align="center">
-  A round-screen music interface for the FiiO Snowsky Disc, built on its stock audio engine.
+  A round-screen music interface for the FiiO Snowsky Disc, with local playback through its stock audio engine.
 </p>
 
 <p align="center">
@@ -38,39 +38,53 @@
 ## At a glance
 
 - **Device:** FiiO Snowsky Disc.
-- **Release described here:** diskOS and installer 1.4-custom (based on upstream 1.2.1); beta.
-- **Stock firmware supported:** V2.09, V2.28, V2.40, and V2.57.
+- **Release described here:** diskOS and installer 1.5-custom (based on upstream 1.2.2); beta.
+- **Stock firmware supported:** V2.09, V2.28, V2.40, and V2.57. AirPlay receiving needs V2.40 or V2.57.
 - **Hosts:** Linux x86-64 (Debian, Ubuntu, Arch, CachyOS, Fedora); macOS Apple Silicon release package. Intel Macs can build the native tools. Windows 10/11 x64 release ZIP.
 - **Flash time:** about 20 minutes, including the firmware check and verification.
 - **Going back:** restore the saved stock image, boot the stock UI once, or set stock as the default UI.
 
-## Custom Fork Enhancements (v1.4-custom vs. Upstream 1.2.1)
+## Custom Fork Enhancements (v1.5-custom vs. Upstream 1.2.2)
 
-This fork is rebased onto upstream **v1.2.1** and includes significant stability, power, audio, and performance enhancements:
+This fork is rebased onto upstream **v1.2.2** and combines all upstream Beam (Cast/AirPlay), AirPlay Receiving, and device names features with our custom stability, power, audio, and performance enhancements:
 
-- **Graceful Shutdown Animation & Safe Power-Off**: Reverse boot splash animation on `lv_layer_top` (contracting disc, warming hub, Archivo wordmark, orbiting spectra during storage flush/sync, and dissolve to solid black with display backlight rail cut); hardware power button long-press (3-5s) safe shutdown listener via `x2000_key` and stock `aa03` (`POWER_KEY_EVENT_REPORT`) IPC frames; user-facing "Shut down" action under Settings > System; fixed `pw_elapsed` timing to prevent false sync timeouts.
-- **Web UI & Remote Control**: Embedded HTTP/WebSocket server (`diskos-webd`) on port 8080 providing browser-based remote playback control, real-time volume/seek, queue jump, MicroSD file browsing, track selection, folder creation, and direct music uploads over Wi-Fi, with seamless on-device management under Apps > Web Server and zero-reflash MicroSD installation. See **[Web UI documentation](docs/WEBUI.md)**.
-- **Startup Splash & Player Readiness**: Polished boot splash with looping light orbit phase until `mq_player` is ready, with 12s backstop; transport commands and queue jumps guarded by readiness checks; in-process SQLite `WORK_MODE` reset replacing forked subprocesses.
-- **Navigation & Drawer Restoration**: Isolated Quick Settings from back-stack history returning cleanly to the active screen; restored interactive drawer drag; auto-scrollbars and scroller getters for all scrollable screens; touch-theft guards for non-overflowing lists, hidden search results, and Library A-Z grid.
-- **Hardware Sleep & Wake Stability**: Resolves the screen-off false wake loop and touch freeze on timed auto-sleep; synchronizes `mq_player` power state via Linux evdev (`KEY_POWER`) injection for reliable single-press physical power button wake; implements stock CST816T deep sleep sequencing (0mA) with optional "Touch to Wake" toggle under Settings > Display.
-- **Battery & Power Management**: Real-time battery ADC fuel gauge tracking (`voltage_now`); automated critical low-battery shutdown; interactive 24-hour circular usage dial (`SCR_USAGE`) in Apps; Quick Settings live clock and direct battery shortcut.
-- **External USB DAC Host Mode (Mode 4)**: USB Audio output to external USB DACs over USB-C OTG (V2.40/V2.57) with hotplug netlink uevent handling and disconnect queue-burn protection.
-- **Mode Lockdown Screens (`SCR_MODELOCK`)**: Full-screen dedicated status interfaces for USB DAC, Bluetooth Receiver (with AVRCP transport controls and synchronized volume), and USB Storage, with safe edge-swipe navigation.
-- **Audio & Bluetooth Refinements**: Hierarchical Bluetooth codec fallback (`LDAC` -> `AAC` -> `SBC`); live active codec badge on Song Info; BlueALSA subprocess hardening.
-- **UI Performance & Ergonomics**: 14-slot row virtualization in library lists eliminating scrolling stutter on large libraries; folder-scoped playback and shuffle; fast-scroll A-Z index popup; expanded Japanese Kanji/Kana CJK font support (3,724 glyphs).
+- **Upstream v1.2.2 Features Integrated**:
+  - **Beam to Cast and AirPlay**: Send music from the Disc's card to Google Cast devices and Apple AirPlay speakers and TVs. The Disc's display and controls serve as the remote.
+  - **AirPlay Receiving**: Use the Disc as a Wi-Fi AirPlay speaker from an iPhone, iPad, or Mac with synchronized volume and metadata display.
+  - **Device Names**: Rename the Disc for network display and Bluetooth pairing, with per-device Bluetooth nicknames.
+  - **Custom Image Screensavers**: Load custom full-screen artwork from `CustomCover/` on the SD card with interactive preview.
+  - **Modernized Audio Restoration**: Reconnect state machine with generation-tracked asynchronous audio restoration (`ui_reapply_audio` / `audio_restore_tick`).
 
-Read the **[v1.4-custom release notes](docs/RELEASE_NOTES_1.4_CUSTOM.md)** for detailed technical descriptions and diffs.
+- **Harmonized Settings Hierarchy**:
+  - **Web Server**: Under **Settings > Network > Web Server** (also accessible from the Apps tile).
+  - **Battery Usage History**: Under **Settings > Battery & Power > Usage History** (also in Apps and Quick Settings).
+  - **Touch to Wake**: Under **Settings > Display > Touch to Wake**.
+  - **Shut down**: Under **Settings > Device > Shut down** with safety confirmation modal.
+
+- **Preserved diskOS Custom Capabilities**:
+  - **Graceful Shutdown Animation & Safe Power-Off**: Reverse boot splash animation on `lv_layer_top` (contracting disc, warming hub, Archivo wordmark, orbiting spectra during storage flush/sync, and dissolve to solid black with display backlight rail cut); hardware power button long-press (3-5s) safe shutdown listener via `x2000_key` and stock `aa03` (`POWER_KEY_EVENT_REPORT`) IPC frames; user-facing "Shut down" action under Settings > Device.
+  - **Web UI & Remote Control**: Embedded HTTP/WebSocket server (`diskos-webd`) on port 8080 providing browser-based remote playback control, real-time volume/seek, queue jump, MicroSD file browsing, track selection, folder creation, and direct music uploads over Wi-Fi, with seamless on-device management under Apps > Web Server and zero-reflash MicroSD installation. See **[Web UI documentation](docs/WEBUI.md)**.
+  - **Startup Splash & Player Readiness**: Polished boot splash with looping light orbit phase until `mq_player` is ready, with 12s backstop; transport commands and queue jumps guarded by readiness checks; in-process SQLite `WORK_MODE` reset replacing forked subprocesses.
+  - **Navigation & Drawer Ergonomics**: Isolated Quick Settings from back-stack history returning cleanly to the active screen; interactive drawer drag; auto-scrollbars and scroller getters for all scrollable screens; touch-theft guards for non-overflowing lists, hidden search results, and Library A-Z grid.
+  - **Hardware Sleep & Wake Stability**: Resolves screen-off false wake loop and touch freeze on timed auto-sleep; synchronizes `mq_player` power state via Linux evdev (`KEY_POWER`) injection for reliable single-press physical power button wake; implements stock CST816T deep sleep sequencing (0mA) with optional "Touch to Wake" toggle under Settings > Display.
+  - **Battery & Power Management**: Real-time battery ADC fuel gauge tracking (`voltage_now`); automated critical low-battery shutdown; interactive 24-hour circular usage dial (`SCR_USAGE`) in Apps; Quick Settings live clock and direct battery shortcut.
+  - **External USB DAC Host Mode (Mode 4)**: USB Audio output to external USB DACs over USB-C OTG (V2.40/V2.57) with hotplug netlink uevent handling and disconnect queue-burn protection.
+  - **Mode Lockdown Screens (`SCR_MODELOCK`)**: Full-screen dedicated status interfaces for USB DAC, Bluetooth Receiver (with AVRCP transport controls and synchronized volume), and USB Storage, with safe edge-swipe navigation.
+  - **Audio & Bluetooth Refinements**: Hierarchical Bluetooth codec fallback (`LDAC` -> `AAC` -> `SBC`); live active codec badge on Song Info; BlueALSA subprocess hardening.
+  - **UI Performance & Ergonomics**: 14-slot row virtualization in library lists eliminating scrolling stutter on large libraries; folder-scoped playback and shuffle; fast-scroll A-Z index popup; expanded Japanese Kanji/Kana CJK font support (3,724 glyphs).
+
+Read the **[v1.5-custom release notes](docs/RELEASE_NOTES_1.5_CUSTOM.md)** for detailed technical descriptions and diffs.
 
 ## See diskOS
 
 <table>
 <tr>
-<td align="center"><img src="docs/tour/now-playing.png" width="220" alt="Now Playing"><br><sub>Now Playing</sub></td>
-<td align="center"><img src="docs/tour/up-next.png" width="220" alt="Up Next"><br><sub>Up Next</sub></td>
-<td align="center"><img src="docs/tour/lyrics-timed.png" width="220" alt="Timed lyrics"><br><sub>Timed lyrics</sub></td>
+<td align="center"><img src="docs/tour/beam-picker.png" width="220" alt="The Beam picker listing Cast and AirPlay TVs"><br><sub>Beam to a speaker or TV</sub></td>
+<td align="center"><img src="docs/tour/beam-now-playing.png" width="220" alt="Now Playing while beaming to Bedroom TV"><br><sub>Now Playing while beaming</sub></td>
+<td align="center"><img src="docs/tour/airplay-receiving.png" width="220" alt="AirPlay Receiving with the sender's song and artwork"><br><sub>AirPlay Receiving</sub></td>
 </tr>
 <tr>
-<td align="center"><img src="docs/tour/song-info.png" width="220" alt="Song Info"><br><sub>Song Info</sub></td>
+<td align="center"><img src="docs/tour/lyrics-timed.png" width="220" alt="Timed lyrics"><br><sub>Timed lyrics</sub></td>
 <td align="center"><img src="docs/tour/cover-flow.png" width="220" alt="Cover Flow"><br><sub>Album cover flow</sub></td>
 <td align="center"><img src="docs/tour/keyboard.png" width="220" alt="Search keyboard"><br><sub>Search and keyboard</sub></td>
 </tr>
@@ -109,6 +123,11 @@ Control playback, browse tracks, and manage your MicroSD card wirelessly from an
 - Ogg Opus files (.opus, .oga, and .ogg) are indexed with tags and available lengths
   and played through the stock player.
 - Home's now-playing border shows playback progress in the halo theme.
+- Beam plays the Disc's music on Cast and AirPlay speakers and TVs on your Wi-Fi, from the
+  Beam button on Now Playing, the Options page or an optional Quick Settings tile.
+  Playback controls, volume keys and the volume dial control the receiver. If Beam
+  cannot start, the reason stays on screen with guidance for trying again.
+- AirPlay Receiving (V2.40 and V2.57) lets an iPhone or Mac play to the Disc; pick it as a source.
 - [Up Next](docs/TOUR.md#up-next) shows the player's queue and lets you jump within it.
 - [Lyrics and Song Info](docs/TOUR.md#song-info-and-lyrics) show words and available file details.
 - [Library and cover flow](docs/TOUR.md#library) offer several ways to browse indexed music.
@@ -119,30 +138,50 @@ Control playback, browse tracks, and manage your MicroSD card wirelessly from an
 
 ### For tinkering
 
-- [Display settings](docs/TOUR.md#settings-display) let you change theme, type size, and artwork behavior.
+- [Display settings](docs/TOUR.md#settings-display) let you change theme and type size.
 - [Quick Settings](docs/TOUR.md#quick-settings) lets you choose the controls in the pull-down drawer.
-- [System settings](docs/TOUR.md#settings-system) include Debug Mode for temporary SSH access and Old tags
+- [Device settings](docs/TOUR.md#settings-device) include Debug Mode for temporary SSH access.
+- [Library settings](docs/TOUR.md#settings-library) include Tag Encoding
   (Auto by default / Western / Cyrillic); use Rescan Library after changing legacy tag or CUE-sheet decoding.
+- [Screensaver](docs/TOUR.md#screensaver-and-screen-off) can show your own JPG, PNG, BMP or
+  animated GIF from the CustomCover folder on the SD card, with optional time, date, battery,
+  now-playing and weather overlays.
+- [Network settings](docs/TOUR.md#settings-network) can rename the Disc and its Bluetooth name,
+  and give paired devices nicknames. The Disc's network name needs a full flash of 1.2.2.
+- Settings > Device > Automatic Update Checks (off by default) announces new releases; it never
+  installs anything without your tap.
+- Swipe up from the bottom edge of the screen to go straight Home.
 - [Updates and startup](docs/TOUR.md#updates-startup-and-power) explain keyed app updates and boot behavior.
 - [Stock UI choices](docs/TOUR.md#safety-and-stock-ui) give you an interface fallback; [restore](docs/INSTALL.md#restore-stock-and-recover) removes the diskOS image.
 
 ## Before you install
 
-You need a FiiO Snowsky Disc, its matching unmodified official FiiO firmware ZIP, a reliable
-USB cable and about 20 uninterrupted minutes. Linux and macOS need Python 3.8 or newer;
-the Windows release ZIP includes its runtime and tools. The installer builds the
+You need a FiiO Snowsky Disc, a reliable USB cable and about 20 uninterrupted minutes for flashing.
+Choose the firmware version already on your Disc and press **Get firmware**; the installer downloads
+and verifies the matching official FiiO ZIP and fills in its path. A saved verified copy or
+**Browse...** lets you prepare offline. Linux and source checkouts need Python 3.8 or newer;
+the macOS app and Windows release ZIP include their runtime and tools. The installer builds the
 root filesystem image on your computer; this project does not distribute FiiO's root filesystem.
 Back up your music, keep a separate copy of the saved stock image, and read the [full requirements](docs/INSTALL.md#requirements).
 
-For 1.2.0 users, see [Update, restore, recover](#update-restore-recover) for the signed app
-update and fixes that require a **full flash** with the complete 1.2.1 installer.
+For 1.2.1 users, see [Update, restore, recover](#update-restore-recover) for the signed app
+update and changes that require a **full flash** with the complete 1.2.2 installer.
 The installer checks the selected firmware and the Disc before it writes.
 If it refuses a firmware archive, use a matching unmodified official ZIP.
 Read the on-screen message before retrying a failed flash.
 
 ## Install
 
-### Linux and macOS
+Reinstalling starts the diskOS version included in this installer and clears
+downloaded diskOS updates. Your settings and music are kept.
+
+### macOS
+
+Download the Apple Silicon release archive, extract it and open **diskOS Installer.app**.
+No Python, Homebrew or extra libraries are needed. Follow the [macOS steps](docs/INSTALL.md#macos)
+for first-run Gatekeeper approval, mask-ROM mode and flashing.
+
+### Linux and source checkouts
 
 Run setup from the extracted release package, then start the graphical installer:
 
@@ -151,7 +190,10 @@ Run setup from the extracted release package, then start the graphical installer
 ./diskos-installer gui
 ```
 
-Select the official firmware ZIP and normally choose **Public**; **Dev** is under **Advanced**.
+Under **Which firmware is on your Disc?**, select its version, then press **Get firmware**.
+Wait for the verified message and filled path, then normally choose **Public**; **Dev** is under **Advanced**.
+**Browse...** accepts a matching official ZIP you already have. See [Get firmware](docs/INSTALL.md#get-firmware)
+and the [privacy disclosure](docs/PRIVACY.md#the-installer-this-repo).
 Power off the Disc, hold **Volume Down**, and connect USB to enter flash (mask-ROM) mode;
 the screen stays black. The Ready checklist shows items needing attention and flash-mode help;
 USB access is checked before flashing. Select **Install diskOS...**, then tick
@@ -173,15 +215,17 @@ options for your own build, and error codes. Do not run the installer with `sudo
 
 Use **Windows 10/11 x64**:
 
-1. Extract the complete **diskos-installer-windows-x86_64.zip** from the 1.2.1 release.
+1. Extract the complete **diskos-installer-windows-x86_64.zip** from the 1.2.2 release.
    Open **diskos-installer.exe**; keep `_internal`, **RECOVERY.txt**, and all files together.
    The program is not code-signed. Windows SmartScreen may show "Windows protected your PC"
    on first run; if it does, select **More info**, then **Run anyway**.
-2. Power off the Disc, hold **Volume Down**, and connect USB; the screen stays black.
+2. Read the firmware version on the Disc, then power it off. Hold **Volume Down** and
+   connect USB; the screen stays black.
 3. If the Ready checklist offers **Set up USB driver...**, select it, confirm WinUSB
    setup, and approve the administrator prompt. A ready WinUSB driver needs no setup.
    If Windows requests a restart, restart and check again.
-4. Select your matching official firmware ZIP and **Public**, then **Install diskOS...**.
+4. Select the firmware version already on your Disc and press **Get firmware** (or **Browse...**
+   for a matching ZIP). Once verified, choose **Public**, then **Install diskOS...**.
    Tick the acknowledgement and select **Begin flash (~20 min)**; keep the computer
    awake and cable connected until verification succeeds, then power-cycle the Disc.
    During flashing, Windows may show an empty console window for the flash tool.
@@ -192,22 +236,24 @@ and [RECOVERY.txt](RECOVERY.txt) for errors and recovery.
 
 ## Update, restore, recover
 
-From 1.2.0, Settings > System > Update diskOS can install the signed 1.2.1 app update
+From 1.2.1, Settings > System > Update diskOS can install the signed 1.2.2 app update
 over Wi-Fi if updates are allowed. Fresh installs and older versions use the installer.
 It updates only the diskOS app, not stock firmware or the whole image, and does not change
-how old a saved app update the system image allows. A fresh install or full flash with the
-complete 1.2.1 installer stops saved app updates older than that limit taking over at boot.
-The shutdown fix and the additional boot-script update fixes also require a full flash;
-see the [release notes](docs/RELEASE_NOTES_1.2.1.md).
-The 1.2.1 release image includes the diskOS release key by default. Turn updates off
-on the Disc, or untick **Allow diskOS updates over Wi-Fi** when flashing. See [upgrading](docs/INSTALL.md#upgrading-to-121).
+how old a saved app update the system image allows. A full flash with the complete 1.2.2
+installer starts the diskOS version inside that installer and clears downloaded diskOS updates;
+settings and music are kept. The network name hook, the per-flash identity and the boot-script
+update-retention fix also require a full flash;
+see the [release notes](docs/RELEASE_NOTES_1.2.2.md).
+The 1.2.2 release image includes the diskOS release key by default. Turn updates off
+on the Disc, or untick **Allow diskOS updates over Wi-Fi** when flashing. See [upgrading](docs/INSTALL.md#upgrading-to-122).
 
-To use the stock interface without reflashing, set **Settings > System > Default UI > Stock**.
+To use the stock interface without reflashing, set **Settings > Device > Default UI > Stock**.
 Holding **Volume Up** from power-on boots the other interface once: Stock when diskOS is the
 default, or diskOS when Stock is the default. To remove the diskOS image, select
 **Restore stock firmware...** in the installer, or run `restore-stock`. It uses the saved stock
-image and offers a firmware ZIP picker only when no saved image is found. A damaged saved backup
-may require `restore-stock --firmware`; see the guide below. A failed flash may need
+image after validating it. If it is missing or unusable, the GUI offers the same version dropdown,
+**Get firmware** and **Browse...** flow to rebuild stock firmware. The command line accepts
+`restore-stock --firmware` for rebuilding from a local ZIP. A failed flash may need
 mask-ROM reflashing. Read [restore and recovery](docs/INSTALL.md#restore-stock-and-recover)
 before you need it.
 
@@ -220,22 +266,27 @@ Windows ZIP, for the full recovery steps, saved backup locations, and error code
 
 ## Current limitations
 
-Last.fm remains Beta. In 1.2.1+, Wi-Fi skips the extra startup wait on V2.57 when Bluetooth is
+Last.fm remains Beta. Wi-Fi skips the extra startup wait on V2.57 when Bluetooth is
 saved off; other startup cases can still take about a minute. If no IP appears, reconnect in
-Settings > Network > Wi-Fi. On the first boot after installing, a "Player didn't respond" message may
-appear once; it is harmless.
+Settings > Network > Wi-Fi.
 An indexed file format may still fail to play on the Disc.
 Some mono FLAC, MP3, and Opus files can play slowed down in the stock player. Now Playing
 may still retain the old track after a mono Opus file advances into another mono Opus file.
 The stock player and connected headphones also affect some audio and Bluetooth choices.
 Browse Files supports folder-scoped queues and folder shuffle play. On V2.09,
 playlist and book playback may fail; on V2.57, the Custom EQ editor is view-only.
+Beam to Cast supports MP3, AAC, Opus, Ogg Vorbis, and 16- or 24-bit FLAC and PCM WAV up to 96
+kHz, in mono or stereo. Google Home Mini receivers accept FLAC up to 48 kHz. AirPlay decodes
+mono or stereo MP3, FLAC and PCM WAV at 8-384 kHz and converts AAC, ALAC, Opus, Ogg Vorbis, WMA,
+APE and DSD. Unsupported files, CUE tracks and audiobooks cannot be beamed. See the [Beam
+guide](docs/TOUR.md#beam) for controls and limits. Hebrew letters show, but right-to-left
+ordering is not corrected.
 Read the [tour's limits](docs/TOUR.md#limits) and [privacy disclosure](docs/PRIVACY.md).
 This project is not affiliated with or endorsed by FiiO, Snowsky, or Ingenic.
 
 ## How it works
 
-diskOS replaces the stock interface while keeping the stock player and audio engine.
+diskOS replaces the stock interface while keeping the stock player and audio engine for local playback. Beam plays through the selected receiver.
 The installer extracts your official FiiO firmware locally, saves a stock image for restore,
 and adds diskOS to a new root filesystem image. It flashes that image over the Disc's mask-ROM
 USB mode and verifies the written blocks. A boot hook starts the diskOS UI; the stock UI remains

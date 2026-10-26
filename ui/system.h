@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
-/* System rows S21-S27: About device, "Update from SD Card" (information only), "check for diskOS updates", diskOS
+/* System rows S21-S27: About device, "Stock Update Guide" (information only), "check for diskOS updates", diskOS
  * settings reset. diskOS never starts a firmware update: stock's local update (mq_player udisk_upgrade 0x42b6a4:
  * unzip <mount>/SNOWSKY_DISC_update_images, then /etc/ota_bin/network_main_os_update_recovery.sh) replaces the whole
  * rootfs including diskOS, so the row only finds the zip, shows its version and explains the way to install it
@@ -39,6 +39,7 @@ extern const sys_paths_t SYS_DEV_PATHS;
 typedef struct { char label[20]; char value[64]; } sys_about_row_t;
 /* Fills up to `max` rows; returns the count. `diskos_id` is the diskOS version+build text (settings.c read_about). */
 int  sys_about_collect(const sys_paths_t *p, const char *diskos_id, sys_about_row_t *rows, int max);
+void sys_battery_text(const sys_paths_t *p, int with_temp, char *buf, size_t n);   /* "74%, Good, 2 cycles[, 30.5 C]" */
 int  sys_is_mounted(const char *mounts, const char *dir);   /* 1 = dir is a mount point in mounts */
 int  sys_kv(const char *text, const char *key, char *out, size_t n);   /* KEY=value line lookup; 0 found */
 void sys_fw_label(int ver, char *buf, size_t n);                        /* 257 -> "V2.57", <= 0 -> "--" */
@@ -67,6 +68,18 @@ int  sys_reset_settings(void);           /* 0 ok, -1 nothing changed, -2 file ch
 void system_about_open(int v);
 void system_update_sd_open(int v);
 void system_check_update_open(int v);
+/* UI thread only. The scheduler supplies eligibility and reserves the cooldown.
+ * Start returns 1 when launched, 0 when busy/blocked or thread creation failed.
+ * Cancel on opt-out, Allow off, Wi-Fi loss, screen-off, playback or export.
+ * Cancellation retains the slot, drops late results and never joins running work. */
+int system_ota_check_auto(void);
+int system_ota_available(void); /* durable, newer, not explicitly dismissed */
+void system_ota_auto_init(void);
+void system_ota_auto_poll(void);
+void system_ota_auto_changed(int v);
+int ui_screen_backlight_on(void); /* main.c: backlight state without waking the screen */
+int ui_ota_idle(void); /* main.c: lit, idle navigation, local media, no transition */
+void system_ota_check_cancel_auto(void);
 void system_ota_allow_changed(int v);  /* row hook: OFF with a staged update asks to discard it (switch stays ON until Discard) */
 void settings_row_values_refresh(void);  /* settings.c: re-read every visible row value */
 void system_reset_open(int v);

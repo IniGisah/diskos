@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
-/* datetime.c - Settings > System > Set Date & Time (SCR_DATETIME): day / month / year and hour / minute rollers,
+/* datetime.c - Settings > Device > Set Date & Time (SCR_DATETIME): day / month / year and hour / minute rollers,
  * then Set: the system clock (settimeofday) and the battery-backed RTC (hwclock -w, off the UI thread). Parity with
- * stock, whose UI sets the time itself the same way. The time zone is chosen separately (Settings > Time Zone). */
+ * stock, whose UI sets the time itself the same way. The time zone is chosen separately (Settings > Device > Time Zone). */
 #include "theme.h"
 #include "theme_kit.h"
 #include "screens.h"

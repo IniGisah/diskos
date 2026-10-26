@@ -6,6 +6,10 @@
 #define MDB_MAX_SONGS   1500
 #define MDB_MAX_GROUPS  600
 #define MDB_STR         160
+/* UI-only list snapshot. Failure keeps the prior display; retry on reopen. */
+int mdb_ui_read_begin(void);
+void mdb_ui_read_end(void);
+
 
 /* Audiobook feature gate. The audiobook mode (Books view, chapters, resume, sleep timer,
  * chapter-bound ring) is OUT OF SCOPE for the FW2.40 parity release and is not yet device-
@@ -41,16 +45,18 @@ typedef struct {
 /* Load the whole library once (one sqlite3 call). Safe to call repeatedly;
  * reloads. Returns song count. */
 int mdb_load(void);
+int mdb_refresh_external(void); /* requested UI-thread check; 1 if catalogue changed */
+int mdb_catalog_changed(void); /* last successful replacement changed catalogue */
 int mdb_load_failed(void);   /* 1 if the last mdb_load hit a DB error (BUSY/IOERR/OOM), not just empty */
 
 int               mdb_song_count(void);
 const mdb_song_t *mdb_song(int i);
 /* On-demand absolute file path for a song ID (queries the DB). 1 on success. */
-int               mdb_song_path(int id, char *out, int cap);
-int               mdb_song_id_by_path(const char *path);   /* SONG.ID for an absolute path; 0 if not indexed */
+int               mdb_song_path(int id, char *out, int cap); /* 1 found, 0 absent, -1 retry (output kept) */
+int               mdb_song_id_by_path(const char *path);   /* SONG.ID; 0 if not indexed, -1 if read failed */
 /* On-demand ALBUM for a song ID. 1 if a non-empty album was found. */
 int               mdb_song_album(int id, char *out, int cap);
-int               mdb_song_meta_by_path(const char *path, char *album, int acap, char *artist, int arcap);
+int               mdb_song_meta_by_path(const char *path, char *album, int acap, char *artist, int arcap); /* 1 found, 0 absent, -1 retry (outputs kept) */
 /* 1-based position of a song within the player's rebuilt list for a given
  * list_type (0=all,2=artist,3=album,10=genre) + name, matching mq_player's
  * exact ORDER BY so a tap lands on the exact track. Returns >=1. */
@@ -92,8 +98,8 @@ static inline int mdb_id_cmp(const void *a, const void *b){
 int  mdb_plan_materialize(mdb_plan_t *plan);   /* type 5: write the reserved slot, adopt the player's real order */
 int  mdb_plan_pos(const mdb_plan_t *plan, int song_id);                           /* 1-based position, 0 = not in it */
 void mdb_plan_free(mdb_plan_t *plan);
-int  mdb_subtrack_count(const char *path, int iso_only);   /* CUE/ISO rows under one PATH (iso_only: IS_ISO rows only) */
-int  mdb_subtrack_plan(const char *const *paths, int npaths, mdb_plan_t *plan);   /* type-5 plan of their tracks, TRACK order; 1 = built (caller frees) */
+int  mdb_subtrack_count(const char *path, int iso_only);   /* CUE/ISO count; -1 = retry (iso_only: IS_ISO rows only) */
+int  mdb_subtrack_plan(const char *const *paths, int npaths, mdb_plan_t *plan);   /* type-5 plan, TRACK order; 1 built, 0 absent, -1 retry (caller frees built plan) */
 int  mdb_folder_plan(const char *dir, const char *const *files, int nfiles, mdb_plan_t *plan);   /* type-5 plan for all audio files in a folder */
 
 /* Queue (was Up Next): the player's live queue (read-only; the stock player owns it).
@@ -124,7 +130,43 @@ typedef struct {
 int mdb_queue(int shuffle, int cur_pos_id, const char *cur_path, mdb_qrow_t *out, int cap, int *cur_idx, int *more);
 int mdb_upnext(int shuffle, int cur_pos_id, const char *cur_path, mdb_qrow_t *out, int cap, int *more);
 int mdb_queue_row_valid(int base_id, int ord, const char *path);   /* re-check a jump target right before sending: 1/0/-1 */
+/* Cast queue snapshot: the live queue (identity = LIST_SONG_0.ID, one per occurrence, so a song queued twice is two ids)
+ * read in ONE read transaction. base[] = LIST_SONG_0 IDs ascending (the base order); shuf[] (shuffle only) = LIST_SONG_3
+ * POS_IDs in play order, captured as stored and accepted only as an exact permutation of base[]; flags[] bit0 = IS_CUE,
+ * bit1 = IS_ISO; cur = index into base[] of the current occurrence. Returns n > 0 (caller frees with mdb_qsnap_free) or:
+ * MDB_UPNEXT_EMPTY / _ERROR / _NOTFOUND (shuffle list not an exact permutation) / _BUSY, MDB_QSNAP_AMBIGUOUS (the current
+ * row is missing or matched by several rows) or MDB_QSNAP_TOO_LARGE (more than cap rows; nothing is truncated). */
+#define MDB_QSNAP_AMBIGUOUS (-4)
+#define MDB_QSNAP_TOO_LARGE (-5)
+typedef struct { int n, cur; int *base, *shuf; unsigned char *flags; } mdb_qsnap_t;
+int  mdb_queue_snapshot(int shuffle, int cur_pos_id, const char *cur_path, int cap, mdb_qsnap_t *out);
+void mdb_qsnap_free(mdb_qsnap_t *s);
+/* Display rows (base_id, title, artist, path, dur_ms; ord is left 0) for the given LIST_SONG_0 IDs, in one read transaction.
+ * flags (optional) gets each row's IS_CUE/IS_ISO bits. Returns n, MDB_UPNEXT_NOTFOUND if any id is gone, or _ERROR/_BUSY. */
+int  mdb_queue_rows(const int *ids, int n, mdb_qrow_t *out, unsigned char *flags);
+/* Cast selection source (read-only; nothing here writes or takes a reserved slot). mdb_list_song_ids: the SONG.IDs of stock
+ * list type 1/2/3/10 (+ name) or 8 (the {"style","album"} payload) in the player's queue order; returns the full count (ids
+ * written up to cap), -1 on error or an unsupported type. Plans need no helper (ui_play_plan: plan->ids); favourites
+ * use mdb_favorite_ids (an 836-byte mdb_song_t per row is too much for a long list). mdb_song_rows: display rows for SONG.IDs (album included),
+ * flags bit0 = IS_CUE, bit1 = IS_ISO; out may be NULL for a flags-only check. Returns n, MDB_UPNEXT_NOTFOUND if any id is gone,
+ * or _ERROR/_BUSY. */
+typedef struct {
+    int  id, dur_ms;         /* SONG.ID; DURATION in ms (0 = unknown) */
+    char title[MDB_STR];     /* TITLE, else NAME, else the file name */
+    char artist[MDB_STR];
+    char album[MDB_STR];
+    char path[256];
+} mdb_srow_t;
+int  mdb_list_song_ids(int list_type, const char *name, int *ids, int cap);
+int  mdb_song_rows(const int *ids, int n, mdb_srow_t *out, unsigned char *flags);
+/* Cast playlist source (slice 14g). A playlist occurrence is a CUSTOM_PLAYLIST row (its ID), NOT a SONG row: a playlist can name a path the library
+ * does not have. mdb_playlist_rows: the CUSTOM_PLAYLIST.IDs of playlist pid in the Playlist screen's own order (ORDER BY ID, as mdb_playlist_songs),
+ * duplicates kept; returns the full count (ids written up to cap, ids may be NULL to count), -1 on error. mdb_playlist_rows_get: like mdb_song_rows
+ * but keyed by CUSTOM_PLAYLIST.ID (srow.id = that ID; title TITLE, else NAME, else the file name). */
+int  mdb_playlist_rows(long pid, int *ids, int cap);
+int  mdb_playlist_rows_get(const int *ids, int n, mdb_srow_t *out, unsigned char *flags);
 int mdb_sysconfig_play_mode(void);                                 /* the player's saved PLAY_MODE 0..4, -1 unreadable */
+int mdb_sysconfig_bt_codec(void);                                  /* stock BT_CODEC 0..4, -1 unreadable */
 int  ui_play_plan(mdb_plan_t *plan, int song_id);   /* main.c: play song_id through the plan (1 = sent) */
 int  mdb_artist_class_type(void);                          /* player Artist grouping: 0 ARTIST, 1 album artist, -1 unknown */
 void mdb_set_artist_mode(int album_artist);                 /* Artists view: 0 = by ARTIST (collabs split), 1 = by album artist */
@@ -148,7 +190,7 @@ typedef struct {
 } book_t;
 int  mdb_total_song_count(void);                            /* full SONG count incl. audiobooks (buffer sizing / empty check) */
 int  mdb_is_book_path(const char *path);                    /* 1 if this path is an audiobook (.m4b) */
-int  mdb_song_genre(const char *path, int track, char *out, int cap);   /* GENRE of the song row for `path` (sub-track `track` > 0, else the first row); 1 = found. Safe off the UI thread */
+int  mdb_song_genre(const char *path, int track, char *out, int cap);   /* GENRE of the song row for `path` (sub-track `track` > 0, else the first row); 1 = found, 0 = absent, -1 = retry. Safe off the UI thread */
 int  mdb_books(book_t *out, int max);                       /* list audiobooks, continue-listening first */
 int  mdb_book_progress(const char *key, char *member_out, int member_cap, long *position_ms, int *completed_out, long *updated_out); /* 1 if bookmark */
 int  mdb_book_save(const char *key, const char *member_path, long position_ms, int completed);  /* 1=written, 0=failed (caller should retry, not advance its throttle) */
@@ -172,9 +214,10 @@ int  mdb_search(const char *q, const mdb_song_t **out, int cap);
 
 /* Favourites (MY_LOVE) and playlists (PLAY_LIST). Both may be empty. */
 int  mdb_favorites(mdb_song_t *out, int cap, int stock_order);   /* stock_order: the player's type-6 queue order */
+int  mdb_favorite_ids(int *song_ids, int *love_ids, int cap);   /* Cast: stock-order favourites that still have a SONG row, ids only; the count, -1 on error or more than cap */
 int  mdb_favorite_count(void);                                   /* MY_LOVE music rows (may exceed SONG); -1 = error */
 int  mdb_love_path(int love_id, char *out, int cap);              /* MY_LOVE.PATH for a MY_LOVE.ID; 1 = found */
-void mdb_record_play(const char *path);            /* bump PLAY_STATS on a new track */
+int mdb_record_play(const char *path);            /* bump PLAY_STATS; 0 = failed, retry */
 int  mdb_stats_count(int by_recent);
 int  mdb_mostplayed(mdb_song_t *out, int cap);     /* songs by play count desc */
 int  mdb_recent(mdb_song_t *out, int cap);         /* songs by last-played desc */
@@ -194,7 +237,7 @@ int  mdb_playlist_add_subtrack(long pid, const char *path, int track, int *hard_
 int  mdb_playlist_add_ids(long pid, const int *ids, int n);   /* add exactly these SONG.IDs, skipping held ones; count added, -1 on a failed write */
 int  mdb_song_multi(const char *path);   /* 1 = more than one SONG row has this path (CUE/ISO) */
 int  mdb_playlist_has_subtrack(long pid, const char *path, int track);
-int  mdb_playlist_add_group(long pid, const char *col, const char *val);   /* bulk-add an ALBUM/ARTIST/GENRE; returns count added */
+int  mdb_playlist_add_group(long pid, const char *col, const char *val);   /* bulk-add a group; count added, -1 on failure */
 int  mdb_playlist_has_song(long pid, const char *path);
 int  mdb_playlist_rename(long pid, const char *name);
 int  mdb_playlist_delete(long pid);
@@ -211,7 +254,7 @@ int  mdb_import_m3u_sd(const char *root);
 int  mdb_split_artists(const char *raw, char toks[][MDB_STR], int cap);
 
 /* persistent per-song accent cache (0xRRGGBB; 0 = not computed). Survives reboot. */
-int  mdb_song_accent(const char *path);
+int  mdb_song_accent(const char *path); /* -1 = retry, 0 = absent, >0 = RGB */
 void mdb_set_song_accent(const char *path, int rgb, const char *cover_key);   /* worker threads only */
 int  mdb_song_accent_fresh(const char *path, const char *cover_key);          /* worker threads only */
 /* prewarm iterator: next SONG row with ID > after_id. Returns 1 + fills id/path. */

@@ -5,10 +5,12 @@
 ## Install
 
 - [Install, upgrade, restore, and recover](INSTALL.md) - host setup, flashing steps, and error codes.
+- [1.5-custom release notes](RELEASE_NOTES_1.5_CUSTOM.md) - custom enhancements merging upstream 1.2.2.
+- [1.2.2 release notes](RELEASE_NOTES_1.2.2.md) - additions, changes, and fixes from upstream 1.2.2.
 - [1.4-custom release notes](RELEASE_NOTES_1.4_CUSTOM.md) - custom enhancements over upstream 1.2.1.
 - [1.3-custom release notes](RELEASE_NOTES_1.3_CUSTOM.md) - v1.3-custom release documentation.
-- [1.2.1 upstream release notes](RELEASE_NOTES_1.2.1.md) - additions, changes, and fixes from upstream.
-- [Release history](../CHANGELOG.md) - changes by version and release notes.
+- [1.2.1 upstream release notes](RELEASE_NOTES_1.2.1.md) - additions, changes, and fixes from upstream 1.2.1.
+- [Release history](../CHANGELOG.md) - changes by version.
 - [Privacy and network use](PRIVACY.md) - device and installer network behavior.
 
 ## Explore

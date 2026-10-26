@@ -17,6 +17,8 @@ from . import basegate, bundle, flasher, imagebuild, state
 
 INSTALL_CONSEQUENCE = (
     "This replaces the Disc's system software to install diskOS. "
+    "Reinstalling starts this installer's diskOS version and clears downloaded diskOS updates. "
+    "Your settings and music are kept. "
     "Stored data is not wiped, and the SD card is not changed. "
     "Keep the USB cable connected until it finishes.")
 RESTORE_CONSEQUENCE = (

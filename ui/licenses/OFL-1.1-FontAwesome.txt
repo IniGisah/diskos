@@ -1,3 +1,7 @@
+Copyright (c) 2026 diskOS contributors (diskOS Beam glyph, U+F8D0).
+The Beam glyph and the merged diskOS icon fonts are licensed under
+the SIL Open Font License, Version 1.1, copied below.
+
 diskOS embeds rasterized glyphs from TWO Font Awesome releases; both font files
 are licensed under the SIL Open Font License, Version 1.1 (copied below):
 

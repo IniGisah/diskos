@@ -22,7 +22,8 @@ NATIVE = {'mksquashfs.exe', 'unsquashfs.exe', 'usbboot.exe',
 PAYLOAD = {'mq_ui', 'S96diskos_select', 'S97diskos_install', 'S99usbserial',
            'diskos-debug.sh', 'dropbearmulti', 'diskos-rmguard', 'diskos-selected',
            'diskos-bootprobe', 'diskos-artdec', 'diskos-launch', 'diskos-verify.sh',
-           'diskos-root.pub.pem'}
+           'diskos-root.pub.pem', 'diskos-flashstate', 'S97diskos_names',
+           'diskos-names', 'diskos-udhcpc', 'diskos-network-names-v1'}
 VERSIONS = {'zlib': '1.3.2-1', 'gcc-libs': '15.3.0-1', 'gcc': '15.3.0-1',
             'mingw-w64-ucrt-x86_64-gcc': '16.2.0-4',
             'mingw-w64-ucrt-x86_64-crt': '14.0.0.r426.g4564ee4b5-1',

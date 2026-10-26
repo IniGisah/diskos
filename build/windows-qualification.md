@@ -58,7 +58,7 @@ against the packaged dependency inventory.
 
 ## Exact enabled-ZIP qualification
 
-Clone the candidate installer revision at version 1.2.1. In MSYS2 bash, from
+Clone the candidate installer revision at version 1.2.2. In MSYS2 bash, from
 the clone root, with the pinned packages already installed, run:
 
 ```sh
@@ -149,8 +149,17 @@ artifact check. Absence of an artifact is a skip, never release qualification.
    Record exact app/native/payload/source hashes, raw USB identity, physical
    path, transfer timings, debug verdicts, confirmations, refusals and boot.
 
-Prepare matching recovery images on Windows AND Linux; record their full padded
-size, base and hash. With explicit owner authorization, stop the host after a
+Build recovery images independently on Windows and Linux using identical inputs.
+Record each image's flash ID, padded size, firmware base and full-file hash
+separately. Require DIFFERENT flash IDs between independent builds. Compare
+exported filesystem content and metadata, excluding only flash-ID file content
+and the existing permitted directory-mtime differences. Check each ID's format
+(32 lowercase hexadecimal digits plus LF), regular-file type and mode 0644
+separately. Retain full-file hashes for each actual recovery artifact. Use the
+existing fixed-ID test harness for deterministic cross-host comparisons; no
+production ID override is needed.
+
+With explicit owner authorization, stop the host after a
 logged writer start while keeping the Disc powered. Treat the result as UNKNOWN,
 wait at least 25 minutes, power-cycle, then prove boot or complete stock restore
 from Windows and Linux. Preserve retained backup-generation paths and logs.

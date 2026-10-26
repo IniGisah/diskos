@@ -27,6 +27,7 @@ typedef enum {
     THEME_FONT_COUNT
 } theme_font_role_t;
 const lv_font_t *theme_font(theme_font_role_t role);
+const lv_font_t *theme_font_fixed(theme_font_role_t role);   /* as theme_font, but never stepped by the Font Size setting */
 int theme_font_size(void);   /* 0 Small, 1 Medium (default), 2 Large: cfg "font_size", read once */
 #define TF(role) theme_font(THEME_FONT_##role)
 
@@ -77,6 +78,10 @@ const theme_def_t *theme_def(void);
 int         theme_screen_plain(unsigned which);   /* 1 = this screen is plain canvas in the active theme */
 const lv_font_t *theme_font_substitute(const lv_font_t *f);   /* Default face -> the theme's (NULL = keep) */           /* the active theme's definition, NULL for Default / custom */
 const theme_def_t *theme_def_find(const char *name);   /* theme_defs.c */
+/* theme d's face for font role r as a copy in caller storage (tf; ft = TTC step) with the international/CJK fallback
+ * attached, whether or not d is active. NULL = d has no such face. */
+const lv_font_t *theme_font_chain(const theme_def_t *d, int r, lv_font_t *tf, lv_font_t *ft);
+void        theme_settings_switch(lv_obj_t *sw); /* shared round Settings control, protected from kit restyling */
 void        theme_list_row(lv_obj_t *row);         /* call after a list row is filled: flat style + accent chevrons */
 char       *theme_lower(char *dst, int cap, const char *src);   /* as theme_upper, lower-cased */
 void        theme_case_text(lv_obj_t *label, const char *text);   /* text in the theme's case (not a title form) */

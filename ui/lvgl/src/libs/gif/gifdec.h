@@ -29,7 +29,9 @@ typedef struct _gd_GIF {
     lv_fs_file_t fd;
     const char * data;
     uint8_t is_file;
-    uint32_t f_rw_p;
+    uint32_t f_rw_p, data_size;
+    int status; /* 1: active, 0: complete, -1: failed (until rewind). */
+    uint8_t * saved_canvas;
     int32_t anim_start;
     uint16_t width, height;
     uint16_t depth;
@@ -54,7 +56,7 @@ typedef struct _gd_GIF {
 
 gd_GIF * gd_open_gif_file(const char * fname);
 
-gd_GIF * gd_open_gif_data(const void * data);
+gd_GIF * gd_open_gif_data(const void * data, uint32_t size);
 
 void gd_render_frame(gd_GIF * gif, uint8_t * buffer);
 

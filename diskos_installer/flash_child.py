@@ -8,6 +8,8 @@ import sys
 import re
 
 CHILD_MODE = "--_diskos-flash-child"
+# Private wrapper result: validation ended before the native invocation.
+VALIDATION_REFUSED = 65
 
 
 def validate_command(cmd):
@@ -122,23 +124,65 @@ def verify_supervision(parent_pid, api=None):
         api.CloseHandle(parent)
 
 
-def checked_path(path, root=None):
-    """Reject reparse points in every component, as well as canonical escapes."""
+def _long_path(path):
+    """Expand an existing Windows spelling without resolving reparse points."""
+    from ctypes import wintypes
+    api = ctypes.WinDLL("kernel32", use_last_error=True).GetLongPathNameW
+    api.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    api.restype = wintypes.DWORD
+    size = api(path, None, 0)
+    if not size:
+        raise OSError("GetLongPathNameW sizing failed")
+    # Retry once if the required size grew between the query and the copy.
+    for _ in range(2):
+        output = ctypes.create_unicode_buffer(size)
+        copied = api(path, output, size)
+        if not copied:
+            raise OSError("GetLongPathNameW failed")
+        if copied < size:
+            if not output.value or not os.path.isabs(output.value):
+                raise OSError("GetLongPathNameW returned an invalid path")
+            return output.value
+        size = copied
+    raise OSError("GetLongPathNameW size did not stabilize")
+
+
+def _checked_spelling(path):
+    """Inspect original components first; return a normalized expanded spelling."""
     import stat
+    stage = "component inspection"
+    try:
+        current = path
+        while True:
+            st = os.lstat(current)
+            if stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400:
+                raise ValueError("symlinks and reparse points are refused")
+            above = os.path.dirname(current)
+            if above == current:
+                break
+            current = above
+        stage = "long-name expansion"
+        expanded = _long_path(path) if os.name == "nt" else path
+        stage = "final-path comparison"
+        normalized = os.path.normcase(expanded)
+        if os.path.normcase(os.path.realpath(expanded, strict=True)) != normalized:
+            raise ValueError("canonical path differs from expanded path")
+        return normalized
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"{path!r}: {stage}: {exc}") from exc
+
+
+def checked_path(path, root=None):
+    """Validate aliases and containment, retaining the authorized argv spelling."""
     path = os.path.abspath(path)
-    if root is not None and os.path.commonpath([path, os.path.abspath(root)]) != os.path.abspath(root):
-        raise ValueError("path is outside the bundle")
-    if os.path.normcase(os.path.realpath(path)) != os.path.normcase(path):
-        raise ValueError("canonical path differs from bundled path")
-    current = path
-    while True:
-        st = os.lstat(current)
-        if stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400:
-            raise ValueError("reparse points are refused")
-        above = os.path.dirname(current)
-        if above == current:
-            break
-        current = above
+    expanded = _checked_spelling(path)
+    if root is not None:
+        expanded_root = _checked_spelling(os.path.abspath(root))
+        try:
+            if os.path.commonpath([expanded, expanded_root]) != expanded_root:
+                raise ValueError("path is outside the bundle")
+        except ValueError as exc:
+            raise ValueError(f"{path!r}: bundle containment: {exc}") from exc
     return path
 
 
@@ -215,14 +259,21 @@ def main(argv=None):
             raise ValueError("invalid parent capability")
         verify_supervision(request["parent"])
         cmd, env = authorized_command(request)
-        print("Windows flash child: assignment gate passed", flush=True)
-        return subprocess.call(cmd, env=env, stdin=subprocess.DEVNULL, shell=False)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         print(f"Windows flash child: refused: {exc}", file=sys.stderr, flush=True)
-        return 1
+        return VALIDATION_REFUSED
     except Exception as exc:
         # Coded bundle/preflight errors must also fail closed in private dispatch.
         print(f"Windows flash child: validation failed: {exc}", file=sys.stderr, flush=True)
+        return VALIDATION_REFUSED
+
+    # No error after this boundary may claim a validation refusal.
+    try:
+        print("Windows flash child: assignment gate passed", flush=True)
+        rc = subprocess.call(cmd, env=env, stdin=subprocess.DEVNULL, shell=False)
+        return 1 if rc == VALIDATION_REFUSED else rc
+    except Exception as exc:
+        print(f"Windows flash child: native invocation failed: {exc}", file=sys.stderr, flush=True)
         return 1
 
 

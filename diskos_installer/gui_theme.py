@@ -494,6 +494,16 @@ def apply(root, fonts):
     st.map("TEntry", fieldbackground=[(("disabled",), SURFACE)], foreground=[(("disabled",), DISABLED)],
            bordercolor=[(("focus", "!disabled"), FOCUS), (("disabled",), DIVIDER)],
            lightcolor=[(("focus", "!disabled"), BG)], darkcolor=[(("focus", "!disabled"), BG)])
+    st.configure("TCombobox", font=fonts["b"], foreground=TEXT, fieldbackground=BG, background=BG,
+                 arrowcolor=SECONDARY, bordercolor=LINE, lightcolor=BG, darkcolor=BG, padding=(8, 5),
+                 selectbackground=BG, selectforeground=TEXT)
+    st.map("TCombobox", fieldbackground=[(("disabled",), SURFACE), (("readonly",), BG)],
+           foreground=[(("disabled",), DISABLED)], arrowcolor=[(("disabled",), DISABLED)],
+           bordercolor=[(("focus", "!disabled"), FOCUS), (("disabled",), DIVIDER)],
+           selectbackground=[(("readonly",), BG)], selectforeground=[(("readonly",), TEXT)])
+    for opt, val in (("background", BG), ("foreground", TEXT), ("selectBackground", ACCENT),
+                     ("selectForeground", ON_ACCENT), ("font", fonts["b"])):
+        root.option_add("*TCombobox*Listbox." + opt, val)      # the drop-down list is a plain Tk listbox
     st.configure("TFrame", background=BG)
     st.configure("Panel.TFrame", background=PANEL, bordercolor=DIVIDER, relief="flat")
     for name, font in (("TLabel", "b"), ("Sub.TLabel", "sub"), ("Lede.TLabel", "b"), ("Meta.TLabel", "sub"), ("Kicker.TLabel", "kicker"),

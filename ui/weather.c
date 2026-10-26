@@ -10,6 +10,8 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <errno.h>
+#include <limits.h>
+#include <time.h>
 
 LV_FONT_DECLARE(font_weather16)
 static lv_font_t s_appwfont;   /* montserrat_22 + weather-icon fallback */
@@ -45,6 +47,80 @@ static int g_wwant = 0;      /* refresh asked, not started yet     (main thread 
 static int g_wjobnet = 0;    /* connectivity the in-flight fetch saw (main thread only) */
 static uint32_t g_wback = 0; /* connected retry wait, 0 = no failure yet (main thread only) */
 static int g_wskip = 0;      /* offline fetch: weather_poll publishes its failure (main thread only) */
+static int g_whold = 0;      /* request-start holds (weather_hold); > 0 blocks every start (main thread only) */
+
+/* ---- accepted-reading snapshot (read-only API: weather_snapshot_get) ----
+ * The worker's STRUCTURED result (icon code, temperature, unit) is kept apart from the display string and
+ * is only ever copied from it, never parsed back out of it. The snapshot is stamped when the main thread
+ * ACCEPTS a result (weather_poll, after the location-generation check), not at fetch start (g_last).
+ * Age uses CLOCK_MONOTONIC directly, the same clock as fb_pan.c's LVGL tick callback.
+ * Keep its full width so long gaps between reads cannot lose a wrap. */
+enum { WXI_NONE = 0, WXI_SUN, WXI_MOON, WXI_CLOUD, WXI_RAIN, WXI_BOLT, WXI_SNOW };   /* == WX_ICON_* in screens.h */
+struct wx_res { int ok; int icon; int temp; int unit; };   /* ok = temperature parsed; unit 'C', 'F' or 0 */
+static struct wx_res g_wres;          /* last successful worker result       (guarded) */
+static struct {
+    int on;                           /* weather enabled                     */
+    int valid;                        /* holds a reading for the live location */
+    int icon, temp, unit;
+    uint64_t at;                      /* monotonic ms of the last ACCEPTED result */
+    uint32_t rev;                     /* bumps when reading, validity or enabled changes */
+} g_snap = { 1, 0, 0, 0, 0, 0, 0 };  /* (guarded) */
+static uint64_t wx_now_ms_locked(void)
+{
+    struct timespec t;
+    if (clock_gettime(CLOCK_MONOTONIC, &t) != 0) return UINT64_MAX;
+    return (uint64_t)t.tv_sec * 1000u + (uint64_t)t.tv_nsec / 1000000u;
+}
+
+static void wx_snap_accept(int icon, int temp, int unit)
+{
+    pthread_mutex_lock(&g_wx_mu);
+    uint64_t now = wx_now_ms_locked();
+    if (now == UINT64_MAX) {
+        pthread_mutex_unlock(&g_wx_mu);
+        return;
+    }
+    int same = g_snap.valid && g_snap.icon == icon && g_snap.temp == temp && g_snap.unit == unit;
+    g_snap.at = now;                           /* an identical re-acceptance still renews the age */
+    g_snap.icon = icon; g_snap.temp = temp; g_snap.unit = unit; g_snap.valid = 1;
+    if (!same) g_snap.rev++;
+    pthread_mutex_unlock(&g_wx_mu);
+}
+
+static void wx_snap_invalidate(void)
+{
+    pthread_mutex_lock(&g_wx_mu);
+    if (g_snap.valid) { g_snap.valid = 0; g_snap.rev++; }
+    pthread_mutex_unlock(&g_wx_mu);
+}
+
+/* Disabling hides at once. The reading is KEPT with its true age: re-enabling shows it only while its
+ * monotonic age is still under the display limit, and it is never renewed by being re-enabled. */
+static void wx_snap_set_on(int on)
+{
+    on = on ? 1 : 0;
+    pthread_mutex_lock(&g_wx_mu);
+    if (g_snap.on != on) { g_snap.on = on; g_snap.rev++; }
+    pthread_mutex_unlock(&g_wx_mu);
+}
+
+/* "+12\xC2\xB0C", "-3C", "7" -> value and unit; anything else is a parse error. */
+static int wx_parse_temp(const char *s, int *val, int *unit)
+{
+    int neg = 0, n = 0, d = 0;
+    while (*s == ' ') s++;
+    if (*s == '+') s++;
+    else if (*s == '-') { neg = 1; s++; }
+    for (; *s >= '0' && *s <= '9'; s++) { if (++d > 3) return 0; n = n * 10 + (*s - '0'); }
+    if (!d) return 0;
+    if ((unsigned char)s[0] == 0xC2 && (unsigned char)s[1] == 0xB0) s += 2;
+    *unit = 0;
+    if (*s == 'C' || *s == 'F') *unit = *s++;
+    while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
+    if (*s) return 0;
+    *val = neg ? -n : n;
+    return 1;
+}
 
 /* percent-encode into a URL-safe AND shell-safe form (only [A-Za-z0-9-_.~] + %XX),
  * so g_loc can never break out of the single-quoted wget command. */
@@ -67,6 +143,7 @@ static void *weather_thread(void *arg)
     int fail = 1;    /* result of this fetch, published under the lock at the end */
     char result[160] = {0};   /* built here; copied into g_wbuf UNDER the lock at publish (no torn reads) */
     char line[256] = {0};
+    struct wx_res res = {0, WXI_NONE, 0, 0};
     char cmd[320];   /* fits "wget ... 'https://wttr.in/<g_loc<=141>?format=...' ..." */
     if (g_loc[0])
         snprintf(cmd, sizeof cmd, "wget -qO- -T 8 'https://wttr.in/%s?format=%%t~%%C~%%l' 2>/dev/null", g_loc);
@@ -90,14 +167,15 @@ static void *weather_thread(void *arg)
             char ch = c[i]; if (ch >= 'A' && ch <= 'Z') ch += 32; low[li++] = ch;
         }
         low[li] = 0;
-        const char *ic = WI_CLOUD;
-        if      (strstr(low,"thunder") || strstr(low,"storm"))                       ic = WI_BOLT;
+        const char *ic = WI_CLOUD; res.icon = WXI_CLOUD;
+        if      (strstr(low,"thunder") || strstr(low,"storm"))                       { ic = WI_BOLT; res.icon = WXI_BOLT; }
         else if (strstr(low,"snow") || strstr(low,"sleet") || strstr(low,"blizzard") ||
-                 strstr(low,"ice"))                                                  ic = WI_SNOW;
-        else if (strstr(low,"rain") || strstr(low,"shower") || strstr(low,"drizzle"))ic = WI_RAIN;
+                 strstr(low,"ice"))                                                  { ic = WI_SNOW; res.icon = WXI_SNOW; }
+        else if (strstr(low,"rain") || strstr(low,"shower") || strstr(low,"drizzle")){ ic = WI_RAIN; res.icon = WXI_RAIN; }
         else if (strstr(low,"fog") || strstr(low,"mist") || strstr(low,"haze") ||
-                 strstr(low,"cloud") || strstr(low,"overcast"))                      ic = WI_CLOUD;
-        else if (strstr(low,"sun") || strstr(low,"clear"))                           ic = WI_SUN;
+                 strstr(low,"cloud") || strstr(low,"overcast"))                      { ic = WI_CLOUD; res.icon = WXI_CLOUD; }
+        else if (strstr(low,"sun") || strstr(low,"clear"))                           { ic = WI_SUN; res.icon = WXI_SUN; }
+        res.ok = wx_parse_temp(temp, &res.temp, &res.unit);
         /* display condition = first phrase (cut at comma) */
         int cl = full;
         char *comma = memchr(c, ',', cl); if (comma) cl = (int)(comma - c);
@@ -114,7 +192,7 @@ static void *weather_thread(void *arg)
     /* publish atomically: the lock release/acquire pairs with weather_poll so the
      * g_wbuf writes above are guaranteed visible once it observes g_wready. */
     pthread_mutex_lock(&g_wx_mu);
-    if (!fail) memcpy(g_wbuf, result, sizeof g_wbuf);   /* g_wbuf written ONLY under the lock */
+    if (!fail) { memcpy(g_wbuf, result, sizeof g_wbuf); g_wres = res; }   /* g_wbuf written ONLY under the lock */
     g_wfail = fail; g_wready = 1; g_inflight = 0;
     pthread_mutex_unlock(&g_wx_mu);
     return NULL;
@@ -125,6 +203,12 @@ static void *weather_thread(void *arg)
 static void weather_start(int net)
 {
     if (net < 0) return;         /* not known yet: weather_poll asks again once it is */
+    /* THE request-start boundary: weather_fetch_async and weather_poll (interval, retry, reconnect, asked
+     * refresh) all end here, and this is the only place that claims the slot, spawns the worker or marks
+     * an offline fetch. While held nothing starts and nothing is consumed: an asked refresh stays in
+     * g_wwant, and an interval/retry start stays due because g_last and g_wback are untouched, so the
+     * ordinary poll serves either after the last release, on its own schedule. */
+    if (g_whold > 0) return;
     int go = 0;
     pthread_mutex_lock(&g_wx_mu);
     if (!g_inflight && !g_wready) { g_inflight = 1; go = 1; }   /* claim slot */
@@ -149,6 +233,20 @@ static void weather_start(int net)
     }
 }
 
+/* Reason-counted request-start hold. The Custom lock screen being visible and its preview can overlap, so
+ * a plain on/off flag would let the first release re-open requests under the other: each weather_hold(1)
+ * must be paired with one weather_hold(0), and starts resume only when the count returns to zero. An
+ * unpaired release is ignored. Main thread only. Releasing never starts a request and never refreshes;
+ * the next ordinary weather_poll serves whatever is due (no special refresh on saver entry or exit).
+ * An already running fetch is not stopped: its result is applied by weather_poll as usual.
+ * CALLERS: saver.c cu_start / cu_stop hold for the life of a Custom composition, for the lock screen's and for the settings
+ * Preview's (one hold each, released on every exit and dark path). */
+void weather_hold(int on)
+{
+    if (on) { if (g_whold < INT_MAX) g_whold++; }
+    else if (g_whold > 0) g_whold--;
+}
+
 /* Asked refresh: starts now, or stays pending until weather_poll can start it. */
 void weather_fetch_async(void)
 {
@@ -166,6 +264,7 @@ static void weather_app_refresh(void);   /* fwd */
  * Settings. Off = no wget, no display (battery); on = force a refetch on the next poll. */
 void weather_set_enabled(int on)
 {
+    wx_snap_set_on(on);
     if (on) {
         g_wwant = 1; g_wback = 0;
         pthread_mutex_lock(&g_wx_mu);
@@ -183,6 +282,7 @@ void weather_poll(lv_timer_t *t)
     int on = cfg_get_int("weather_on", 1);
     int reconnect = net > 0 && known == 0;
     if (net >= 0) known = net;
+    wx_snap_set_on(on);
     if (on && reconnect) { g_wback = 0; g_wwant = 1; }   /* becoming connected fetches at once */
     if (on && g_wwant) weather_start(net);   /* asked earlier, while unknown or busy */
     if (g_wskip) {                    /* publish the offline fetch's failure as the worker would */
@@ -200,8 +300,9 @@ void weather_poll(lv_timer_t *t)
         return;
     }
     int ready = 0, fail = 0, inflight;
+    struct wx_res rr = {0, WXI_NONE, 0, 0};
     pthread_mutex_lock(&g_wx_mu);
-    if (g_wready) { g_wready = 0; ready = 1; fail = g_wfail; }
+    if (g_wready) { g_wready = 0; ready = 1; fail = g_wfail; rr = g_wres; }
     inflight = g_inflight;
     pthread_mutex_unlock(&g_wx_mu);
     if (ready) {
@@ -213,6 +314,7 @@ void weather_poll(lv_timer_t *t)
                                     * lock and the next fetch only starts below, after this use. */
             g_have = 1;
             g_wback = 0;
+            if (rr.ok) wx_snap_accept(rr.icon, rr.temp, rr.unit);   /* stamped now, at acceptance */
             home_set_weather(g_wbuf);
             saver_set_weather(g_wbuf);
         } else if (g_wjobnet > 0 && !g_have) {   /* connected failure: 20s, doubling to 10 min */
@@ -255,12 +357,55 @@ static void weather_app_refresh(void)
 
 void weather_app_open(void) { weather_app_refresh(); screen_show(SCR_WEATHER); }
 
+/* Read-only copy of the accepted reading, taken under the worker mutex; the worker's buffers are never
+ * exposed. now_ms is read in the same critical section so the age is consistent with the copy. */
+_Static_assert((int)WXI_SUN == (int)WX_ICON_SUN && (int)WXI_MOON == (int)WX_ICON_MOON &&
+               (int)WXI_CLOUD == (int)WX_ICON_CLOUD && (int)WXI_RAIN == (int)WX_ICON_RAIN &&
+               (int)WXI_BOLT == (int)WX_ICON_BOLT && (int)WXI_SNOW == (int)WX_ICON_SNOW,
+               "icon codes must match screens.h");
+
+void weather_snapshot_get(weather_snapshot_t *out)
+{
+    pthread_mutex_lock(&g_wx_mu);
+    out->enabled = g_snap.on;
+    out->valid = g_snap.valid;
+    out->icon = g_snap.valid ? g_snap.icon : WX_ICON_NONE;
+    out->temp = g_snap.valid ? g_snap.temp : 0;
+    out->unit = g_snap.valid ? (char)g_snap.unit : 0;
+    out->accepted_ms = g_snap.at;
+    out->now_ms = wx_now_ms_locked();
+    if (out->now_ms == UINT64_MAX) {
+        out->valid = 0;
+        out->icon = WX_ICON_NONE;
+        out->temp = 0;
+        out->unit = 0;
+        out->now_ms = out->accepted_ms;
+    }
+    out->revision = g_snap.rev;
+    pthread_mutex_unlock(&g_wx_mu);
+}
+
+wx_band_t weather_band_for_age(uint64_t age_ms)
+{
+    if (age_ms < WX_FRESH_MS) return WX_BAND_FRESH;
+    if (age_ms < WX_HIDE_MS) return WX_BAND_CACHED;
+    return WX_BAND_HIDDEN;
+}
+
+wx_band_t weather_snapshot_band(const weather_snapshot_t *s)
+{
+    if (!s->enabled || !s->valid || s->now_ms < s->accepted_ms) return WX_BAND_HIDDEN;
+    return weather_band_for_age(s->now_ms - s->accepted_ms);
+}
+
 static void loc_done(const char *text)
 {
     if(!text) return;           /* Cancel: change nothing */
+    if(strlen(text) > 47){ ui_toast("Place too long"); return; }
     cfg_set_str("weather_loc", text);   /* empty Save clears to Auto */
     g_wgen++;                   /* invalidate any in-flight fetch for the old location */
     g_have = 0;                 /* force a fresh fetch + show "Fetching" */
+    wx_snap_invalidate();       /* a reading for the old location is never kept */
     g_wback = 0;                /* the new location starts its own retry backoff */
     weather_fetch_async();
     weather_app_refresh();
@@ -268,7 +413,7 @@ static void loc_done(const char *text)
 static void set_loc_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    kbinput_open("City / location", cfg_get_str("weather_loc", ""), loc_done);
+    kbinput_open_limited("City / location", cfg_get_str("weather_loc", ""), loc_done, 47);
 }
 static void auto_loc_cb(lv_event_t *e)
 {

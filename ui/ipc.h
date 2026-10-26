@@ -3,7 +3,30 @@
 #ifndef IPC_H
 #define IPC_H
 #include <stdint.h>
+
+/* Main-thread runtime #28 experiment. eligible means confirmed local BT intent;
+ * preference must be an explicit 0/1. Absent/invalid debug file sends nothing
+ * unless restoring an experiment already active in this process. */
+void ipc_bt_autonext_poll(uint32_t now, int eligible, int preference);
 #define IPC_TITLE_CAPACITY 256
+/* Bounded receiver data, copied read-only; transport_state is the raw stock
+ * value, not a proven playing indication. Progress stays invalid until qualified. */
+typedef struct {
+    unsigned generation;
+    uint64_t session_revision, item_revision;
+    char title[IPC_TITLE_CAPACITY], artist[160], album[160];
+    int transport_state, transport_valid, progress_valid;
+    long position_ms, duration_ms;
+    /* Monotonic receive times (ms) and sequence counters feed receiver_progress.
+     * pos_*: last a103 position; pos_item_revision is the item it arrived under.
+     * item_rx_ms: when item_revision last changed. dur_*: last a202 duration. */
+    uint64_t pos_rx_ms, pos_item_revision, item_rx_ms, dur_rx_ms;
+    unsigned pos_seq, dur_seq;
+} ipc_receiver_meta;
+void ipc_receiver_begin(unsigned generation, uint64_t arm);
+void ipc_receiver_end(void);
+void ipc_receiver_return(unsigned generation, uint64_t arm);
+void ipc_receiver_metadata(ipc_receiver_meta *out);
 unsigned ipc_transport_seq(void); /* main-thread transport-attempt epoch */
 typedef struct {
     char title[IPC_TITLE_CAPACITY];
@@ -58,15 +81,51 @@ static inline const char *ipc_display_title(const track_state_t *st){
 
 int  ipc_start(void);                  /* open queues + start thread; 0=ok */
 void ipc_get_state(track_state_t *out);
+/* Read-only complete A2 plus last accepted user toggle epoch and its A2 boundary.
+ * Raw reply state 0=playing, 1=paused. Short replies carry have_track=0. */
+int ipc_resume_snapshot(track_state_t *out, unsigned *serial, unsigned *toggle, unsigned *after_report);
 void ipc_seed_state(const track_state_t *s);  /* startup resume-state seed */
+#ifdef DISKOS_HOST
+/* Renderer input is an explicit player snapshot, including readiness and identity. */
+void ipc_host_set_state(const track_state_t *s);
+#endif
 int  ipc_send_cmd(const char *frame);  /* e.g. "0201000C0000" play/pause; 0=queued, -1=failed */
 int  ipc_send_probe(const char *frame);/* background send (state-sync/health): silent, no toast */
+#define IPC_SEND_DEFERRED 1 /* automatic intention remains pending, no send error */
+int  ipc_confirmed_snapshot(unsigned *generation); /* atomic current-generation evidence */
+int  ipc_send_automatic(const char *frame, unsigned generation); /* 0=queued, -1=failed, 1=deferred */
+#ifdef DISKOS_TEST_BT_PREPARE
+int ipc_prepare_snapshot(track_state_t *, unsigned *serial, unsigned *playing_frames);
+/* Queue only while the preparation still owns this generation, track token
+ * and main-thread transport epoch. Release additionally requires the exact
+ * latest complete paused A2; RX cannot change it between the check and send. */
+int ipc_prepare_send(const char *, unsigned generation, uint64_t token, unsigned transport,
+                     unsigned report, unsigned playing_frames, int held, int release, unsigned poweroff);
+#endif
 int  ipc_is_ready(void);               /* 1 once the /ui receive queue is open */
 int  ipc_take_send_error(void);        /* 1 (and clears) if a recent send failed */
 void ipc_health_check(void);           /* ~30s: detect player-restart queue recreation (fstat identity) */
 int  ipc_take_reconnected(void);       /* 1 (and clears) after a recovery reattach -> caller resyncs */
 unsigned ipc_rx_frames(void);          /* count of /ui frames received from the player (>0 => player up) */
 int  ipc_player_mode(void);            /* last a607 player mode this gen: -1=none, 8=LOCALPLAYER (v2.40 oracle) */
+/* Source evidence is independent of local metadata/work_mode strings. Copy under one
+ * recovery lock; valid is false while a player reattach is pending. Sequence counts
+ * accepted a607 reports; mode_change_sequence counts changes, including departures. */
+typedef struct {
+    unsigned generation;
+    uint64_t sequence, mode_change_sequence;
+    uint64_t arm_id, arm_sequence;
+    uint64_t adopt_id; /* observation arm that adopted an already selected AirPlay source, else 0 */
+    int mode, valid;
+} ipc_source_evidence;
+void ipc_source_snapshot(ipc_source_evidence *out); /* any thread; no controller callbacks */
+/* Main thread requests/cancels; only RX drains and publishes the arm boundary. */
+uint64_t ipc_source_arm(unsigned generation); /* 0 = refused; otherwise async token */
+void ipc_source_cancel_arm(uint64_t id);
+/* Observation, not a transition: arms the same RX drain boundary with no 0657 behind it. Fresh AirPlay source
+ * evidence after the boundary (a607 mode 10, or a length-framed a202 with work_mode AIRPLAY) adopts the source and
+ * publishes that frame's receiver metadata. 0 = refused (cancelled by ipc_source_cancel_arm). */
+uint64_t ipc_observe_arm(unsigned generation);
 unsigned ipc_generation(void);         /* bumps on each /ui reattach (player restart) - v2.40 one-shot re-arm */
 int  ipc_tip_event(unsigned *seq);     /* last a60a TIP_INFO_EVENT (0x0212=connect, 0x0213=disconnect) */
 int  ipc_player_ready(void);          /* 1 once /player queue is open and accepting commands */
@@ -75,4 +134,39 @@ void ipc_set_quiet(int q);             /* 1 to suppress user-facing error toast 
  * *poweroff_seq bumps per frame), with their generation under one lock. Reattach clears both counters
  * and sets *on to -1 (no screen frame yet). Counters also start at 0 at startup. */
 void ipc_screen_snapshot(int *on, unsigned *scr_seq, unsigned *poweroff_seq, unsigned *generation);
+/* The stock player's own charging report, aa1f (V2.57 mq_player adc_control.c, see ipc.c): exactly "aa1f000C0000" (not
+ * charging) or "aa1f000C0001" (charging). The player sends it only when its debounced flag changes and a 0 when the battery
+ * reaches 100%, never on request, so a UI restart starts without one. state: -1 = no valid report in this player
+ * generation (startup, or after a /ui reattach), 0 = not charging, 1 = charging. at_ms = CLOCK_MONOTONIC ms of the last
+ * valid report (0 = none); seq counts valid reports and bad counts ignored malformed aa1f frames (both since startup).
+ * Any thread; returns state. Consumers use power_charging() (power.h), never this directly. */
+typedef struct { int state; uint64_t at_ms; unsigned seq, bad, generation; } ipc_charge_evidence;
+int ipc_charge_snapshot(ipc_charge_evidence *out);
+/* Stock still-image conversion: 0810 value 5 + source path, result in the a810 reply. One operation at a time;
+ * the reply carries no id, so it completes the operation only while outstanding (PENDING, or UNRESOLVED after the
+ * deadline) in the same player generation. A timeout or a /ui reattachment never yields a result by itself: the
+ * state is UNRESOLVED (the converter may still write the output) and a new start is refused until one valid
+ * same-generation a810 confirms completion; a reattachment alone does not prove the converter stopped. Source must
+ * be /tmp/sdcard/CustomCover/<file>.{jpg,jpeg,png,bmp} (gif is not convertible).
+ * Checks source components with lstat; no asset modification or DB access. */
+#define IPC_CONV_TIMEOUT_MS 30000u
+typedef enum { IPC_CONV_IDLE, IPC_CONV_PENDING, IPC_CONV_DONE, IPC_CONV_FAILED, IPC_CONV_UNRESOLVED,
+               IPC_CONV_STALE /* poll of an op id that is no longer current */ } ipc_conv_state;
+typedef enum { IPC_CONV_START_OK, IPC_CONV_START_BUSY, IPC_CONV_START_PATH, IPC_CONV_START_NOT_READY,
+               IPC_CONV_START_SEND } ipc_conv_start_status;
+ipc_conv_start_status ipc_conv_start(const char *src, unsigned *op);
+/* FAILED: *code = the converter's nonzero result (exact for 4-hex-digit codes and 8-digit -1 forms). */
+ipc_conv_state ipc_conv_poll(unsigned op, unsigned *code);
+int ipc_conv_release(unsigned op);   /* 0 once DONE/FAILED (or UNRESOLVED from a dead player) is consumed, else -1 */
+/* 1 while a conversion is pending, holds an unreleased result, or may still be writing (the start-BUSY rule). */
+int ipc_conv_busy(void);
+/* Stock's GIF selection: pathless 0810 value 5 ("08100005000C", no reply). Refused (BUSY) while a conversion is
+ * busy, so it cannot interleave with one. OK only means the frame was queued. */
+typedef enum { IPC_GIF_SELECT_OK, IPC_GIF_SELECT_BUSY, IPC_GIF_SELECT_NOT_READY, IPC_GIF_SELECT_SEND } ipc_gif_select_status;
+ipc_gif_select_status ipc_gif_select(void);
+/* Apply coordinator owns this reservation until commit/rollback/recovery is resolved.
+ * Reselect requires that reservation; 0..4 = system, 5 = saved Custom, no conversion. */
+int ipc_apply_reserve(void);
+void ipc_apply_release(void);
+int ipc_saver_reselect(unsigned style);
 #endif

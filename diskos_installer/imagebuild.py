@@ -12,6 +12,8 @@ build locally. squashfs pack/unpack delegates to the bundled mksquashfs/unsquash
 import contextlib
 import os
 import re
+import secrets
+import stat
 import subprocess
 import sys
 import zipfile
@@ -198,6 +200,10 @@ def extract_stock_rootfs(fw_zip, out_squashfs, workdir, rep=None):
     clobbers the output."""
     rep = rep or CLIReporter()
     rep.phase("Extracting stock firmware")
+    if sys.platform == 'darwin' and os.path.isdir(fw_zip):
+        raise BuildError('Safari unpacked the firmware ZIP; the recorded checksum requires the original ZIP.',
+                         code='E201', action='In Safari, right-click the download link and choose Download Linked File, '
+                                             'then select the .zip; or use Get firmware')
     if not zipfile.is_zipfile(fw_zip):
         raise BuildError(f"not a zip archive: {fw_zip}", code="E201")
 
@@ -434,6 +440,7 @@ _BOOT_DECISION_FILES = (
     (_SELECTED_HELPER.lstrip("/"), "diskos-selected"),
     (_BOOTPROBE.lstrip("/"), "diskos-bootprobe"),
     (_LAUNCHER.lstrip("/"), "diskos-launch"),
+    ("opt/diskos/bin/diskos-flashstate", "diskos-flashstate"),
 )
 _IF_LINE = "if " + _SELECT_LINE + " && [ -f /tmp/.diskos_ready ] && [ -f /usr/data/mq_ui ] && [ -f /usr/data/mq_player ]"
 _OTA_BRANCH = (
@@ -443,12 +450,39 @@ _OTA_BRANCH = (
     "    " + _LAUNCH_CMD + "\n    sleep 2\n    /usr/data/mq_player &\n" +
     _OTA_BRANCH_END
 )
+# Naming runs after selection/install and before the one initial Avahi start.
+# All supported fixtures have these exact stock bytes; refuse a new boot order.
+_STOCK_AVAHI = b'#!/bin/sh\n#\n# avahi-daemon init script\n\nDAEMON=/usr/sbin/avahi-daemon\ncase "$1" in\n    start)\n\t$DAEMON -c || $DAEMON -D\n\t;;\n    stop)\n\t$DAEMON -c && $DAEMON -k\n\t;;\n    reload)\n\t$DAEMON -c && $DAEMON -r\n\t;;\n    *)\n\techo "Usage: S50avahi-daemon {start|stop|reload}" >&2\n\texit 1\n\t;;\nesac\n'
+_DEFERRED_AVAHI = _STOCK_AVAHI.replace(
+    b'\t$DAEMON -c || $DAEMON -D',
+    b'\t# Defer boot startup; retain later stock stop/start behavior.\n'
+    b'\t[ -d /run/diskos-avahi-ready ] || exit 0\n'
+    b'\t$DAEMON -c || $DAEMON -D')
+_LATE_AVAHI = _STOCK_AVAHI.replace(
+    b'\t$DAEMON -c || $DAEMON -D',
+    b'\tmkdir -p /run/diskos-avahi-ready\n'
+    b'\t$DAEMON -c || $DAEMON -D')
+_NAMES_FILES = (
+    ("etc/init.d/S97diskos_names", "S97diskos_names"),
+    ("opt/diskos/bin/diskos-names", "diskos-names"),
+    ("opt/diskos/netbin/udhcpc", "diskos-udhcpc"),
+)
+_NAMES_DECL = "opt/diskos/network-names-v1"
+_NAMES_PATH = (
+    'unset DISKOS_NETWORK_NAMES\n'
+    '# Boot snapshot only; descendants and both watchdog branches inherit this.\n'
+    'if /opt/diskos/bin/diskos-selected && /opt/diskos/bin/diskos-names --active; then\n'
+    '    export DISKOS_NETWORK_NAMES=v1\n'
+    '    export PATH=/opt/diskos/netbin:$PATH\n'
+    'fi\n'
+)
+
 _BLOCK = (
     "# diskOS SD guard: the stock player runs 'umount /tmp/sdcard; rm -rf /tmp/sdcard' without checking\n"
     "# the umount; on a busy (mounted) card that empties the card. /opt/diskos/bin/rm refuses card\n"
     "# operands. Exported HERE (before any launch) so the initial launch, BOTH watchdog respawn\n"
     "# branches and the stock fallback all inherit it.\n"
-    + _GUARD_PATH_LINE + "\n"
+    + _GUARD_PATH_LINE + "\n" + _NAMES_PATH
     + _OTA_HELPERS +
     "# READINESS GATE: /tmp/.diskos_ready is written by S97 only when it COMPLETED and left a verified\n"
     "# override in place. It is on tmpfs, so it means 'this boot'. Requiring it means a first-boot hook\n"
@@ -561,15 +595,15 @@ def _validate_boot_hook(fi):
         bad("has no gated /usr/data launch (unexpected structure)")
 
 
-def _check_decision_file(path, payload_path, name, fs=None):
+def _check_decision_file(path, payload_path, name, fs=None, mode=0o755):
     """One boot-decision file in the output image: a regular file (lstat - never a symlink), permission
-    bits EXACTLY 0755 (S_IMODE: no setuid/setgid/sticky either), and byte-identical to the payload."""
+    bits exactly as requested (no setuid/setgid/sticky), and byte-identical to the payload."""
     import stat as _st
     if fs is None:
         fs, path = TreeFS(os.path.dirname(path)), os.fsencode(os.path.basename(path))
     m = fs.lstat(path).st_mode
-    if not _st.S_ISREG(m) or _st.S_IMODE(m) != 0o755:
-        raise BuildError(f"repacked image: {name} is not a regular 0755 file (mode {oct(m)}) - do NOT flash",
+    if not _st.S_ISREG(m) or _st.S_IMODE(m) != mode:
+        raise BuildError(f"repacked image: {name} is not a regular {mode:04o} file (mode {oct(m)}) - do NOT flash",
                          code="E232")
     with open(payload_path, "rb") as b:
         if fs.read_bytes(path) != b.read():
@@ -624,7 +658,7 @@ def _patch_fiio_init(path, rep):
 OTA_DIR = "etc/diskos-ota"
 DEFAULT_MIN_KEY_EPOCH = 1
 # Match the UI release epoch shipped by this installer.
-DEFAULT_MIN_UI_EPOCH = 6
+DEFAULT_MIN_UI_EPOCH = 7
 _P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200")   # SubjectPublicKeyInfo, id-ecPublicKey/prime256v1, uncompressed point
 _OTA_FILES = (("root.pub.pem", 0o644), ("epochs", 0o644), ("diskos-verify.sh", 0o644))
 
@@ -1010,7 +1044,7 @@ def _case_sensitive_extract_root(workdir, rep):
 
 
 def _validate_squashfs_output(sq_path, unsq, expect_ui_sha, expect_ui_sz, extract_root, rep=None, expected_busybox_sha=None,
-                              expected_fiio_init=None, ota_cfg=None):
+                              expected_fiio_init=None, ota_cfg=None, flash_id=None):
     """Validate a freshly-repacked squashfs by its CONTENT, not the repacker's exit status. Does a
     COMPLETE independent extraction (so silent corruption ANYWHERE fails, not just in two files),
     then verifies every boot-critical artefact: the boot-hook patch in fiio_init.sh, the executable
@@ -1035,7 +1069,7 @@ def _validate_squashfs_output(sq_path, unsq, expect_ui_sha, expect_ui_sz, extrac
                              f"corrupt/truncated repack: {r.stderr.strip()[:200]}", code="E232")
 
         validate_image(TreeFS(dst), expect_ui_sha, expect_ui_sz, expected_busybox_sha,
-                       expected_fiio_init, ota_cfg)
+                       expected_fiio_init, ota_cfg, flash_id)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     if rep is not None:
@@ -1068,7 +1102,7 @@ def _export_archive(sq_path, unsq, spool_root, code="E232"):
 
 def validate_archive_output(sq_path, unsq, expect_ui_sha, expect_ui_sz, spool_root,
                             expected_busybox_sha=None, expected_fiio_init=None, ota_cfg=None,
-                            intended_archive=None):
+                            intended_archive=None, flash_id=None):
     """Check contents and, when supplied, every intended inode after pack transforms."""
     try:
         sqsz = os.path.getsize(sq_path)
@@ -1084,7 +1118,7 @@ def validate_archive_output(sq_path, unsq, expect_ui_sha, expect_ui_sz, spool_ro
         raise BuildError(f"repacked image could not be read: {exc}", code="E232") from exc
     with _export_archive(sq_path, unsq, spool_root) as archive:
         validate_image(ArchiveFS(archive), expect_ui_sha, expect_ui_sz, expected_busybox_sha,
-                       expected_fiio_init, ota_cfg)
+                       expected_fiio_init, ota_cfg, flash_id)
         if intended_archive is not None:
             try:
                 expected = _packed_manifest(intended_archive)
@@ -1168,17 +1202,17 @@ def _fs_grep1(fs, path, pattern):
 
 
 def validate_image(fs, expect_ui_sha, expect_ui_sz, expected_busybox_sha=None,
-                   expected_fiio_init=None, ota_cfg=None):
+                   expected_fiio_init=None, ota_cfg=None, flash_id=None):
     """The single content validator for independently unpacked output."""
     try:
         _validate_image_contents(fs, expect_ui_sha, expect_ui_sz, expected_busybox_sha,
-                                 expected_fiio_init, ota_cfg)
+                                 expected_fiio_init, ota_cfg, flash_id)
     except (OSError, ValueError) as exc:
         raise BuildError(f"repacked image content could not be read: {exc} - do NOT flash", code="E232") from exc
 
 
 def _validate_image_contents(fs, expect_ui_sha, expect_ui_sz, expected_busybox_sha,
-                             expected_fiio_init, ota_cfg):
+                             expected_fiio_init, ota_cfg, flash_id):
     def _need(rel, what):
         p = rel.encode("ascii")
         _edit_within(fs, p, code="E232")   # a crafted rootfs must not escape via a symlink
@@ -1187,6 +1221,15 @@ def _validate_image_contents(fs, expect_ui_sha, expect_ui_sz, expected_busybox_s
         except FileNotFoundError:
             raise BuildError(f"repacked image is missing {what} ({rel}) - do NOT flash", code="E232")
         return p
+
+    _check_flash_id(flash_id, code="E232")
+    identity = _need("etc/diskos-flash-id", "flash identity")
+    info = fs.lstat(identity)
+    if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o644:
+        raise BuildError("repacked image: flash identity must be a regular file with mode 0644 - "
+                         "do NOT flash", code="E232")
+    if fs.read_bytes(identity) != flash_id:
+        raise BuildError("repacked image: flash identity mismatch - do NOT flash", code="E232")
 
     # boot hook present + patched
     fi = fs.read_bytes(_need("usr/project/fiio_init.sh", "boot script"))                 # RAW bytes: no newline translation, no lossy decoding
@@ -1199,8 +1242,17 @@ def _validate_image_contents(fs, expect_ui_sha, expect_ui_sz, expected_busybox_s
     # exact identity, not just existence: the boot-time scripts are what decide stock vs diskOS
     # every file the stock/diskOS decision runs through: exact bytes, a regular file (not a symlink),
     # and permission bits exactly 0755 - a non-executable helper would silently force every boot to stock
-    for rel, name in _BOOT_DECISION_FILES + _SUPPORT_FILES:
+    for rel, name in _BOOT_DECISION_FILES + _SUPPORT_FILES + _NAMES_FILES:
         _check_decision_file(_need(rel, name), bundle.data(name), name, fs)
+    _check_decision_file(_need(_NAMES_DECL, "network naming declaration"),
+                         bundle.data("diskos-network-names-v1"), "network naming declaration", fs, mode=0o644)
+    for rel, expected in (("etc/init.d/S50avahi-daemon", _DEFERRED_AVAHI),
+                          ("etc/init.d/S97zavahi", _LATE_AVAHI)):
+        path = _need(rel, "ordered Avahi start")
+        info = fs.lstat(path)
+        if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o755
+                or fs.read_bytes(path) != expected):
+            raise BuildError("repacked image: Avahi boot order differs - do NOT flash", code="E232")
     _validate_sd_guards(fs, expected_busybox_sha)
     _check_ota_output(fs, ota_cfg)
     # first-boot installer hook present + executable
@@ -1237,18 +1289,36 @@ def _edit_install(fs, src, dst, mode):
         fs.replace_file(dst, source, mode)
 
 
-def edit_image(fs, ui_binary, variant, ota_cfg, rep=None):
+def _check_flash_id(flash_id, code):
+    """Require the build's expected bytes; never invent an identity during checks."""
+    if not isinstance(flash_id, bytes) or re.fullmatch(rb"[0-9a-f]{32}\n", flash_id) is None:
+        raise BuildError("internal: flash identity must be 32 lowercase hex digits plus LF", code=code)
+
+
+def edit_image(fs, ui_binary, variant, ota_cfg, rep=None, flash_id=None):
     """The single image edit phase. Paths are image bytes, never host paths."""
     import hashlib, time
     if variant not in ("public", "dev"):
         raise BuildError(f"variant must be 'public' or 'dev', got {variant!r}", code="E250")
+    _check_flash_id(flash_id, code="E233")
     try:
+        identity = b"etc/diskos-flash-id"
+        _edit_within(fs, identity)
+        fs.replace_file(identity, flash_id, 0o644)
         boot = b"usr/project/fiio_init.sh"
         _edit_within(fs, boot)
         patched = _patched_boot_bytes(fs.read_bytes(boot))
         fs.replace_file(fs.resolve(boot), patched)
-        for rel, name in _BOOT_DECISION_FILES:
+        for rel, name in _BOOT_DECISION_FILES + _NAMES_FILES:
             _edit_install(fs, bundle.data(name), rel.encode("ascii"), 0o755)
+        _edit_install(fs, bundle.data("diskos-network-names-v1"), _NAMES_DECL.encode("ascii"), 0o644)
+        avahi = b"etc/init.d/S50avahi-daemon"
+        _edit_within(fs, avahi)
+        if fs.read_bytes(avahi) != _STOCK_AVAHI:
+            raise BuildError("unrecognized stock Avahi init script", code="E223")
+        _edit_within(fs, b"etc/init.d/S97zavahi")
+        fs.replace_file(b"etc/init.d/S97zavahi", _LATE_AVAHI, 0o755)
+        fs.replace_file(avahi, _DEFERRED_AVAHI, 0o755)
         if ota_cfg:
             _edit_ota(fs, ota_cfg)
         for rel, name in _SUPPORT_FILES:
@@ -1320,9 +1390,11 @@ def build_image(stock_squashfs, ui_binary, variant, out_bin, workdir, rep=None, 
 
     unsq = bundle.native("unsquashfs")
     mksq = bundle.native("mksquashfs")
+    # A fresh identity belongs to this image, including same-version rebuilds.
+    flash_id = (secrets.token_hex(16) + "\n").encode("ascii")
     if host == "windows":
         return _build_archive_image(stock_squashfs, ui_binary, variant, out_bin,
-                                    workdir, rep, ota_cfg, mksq, unsq)
+                                    workdir, rep, ota_cfg, mksq, unsq, flash_id)
     # Prove the resolved squashfs tools can pack+extract with the stock LZO params BEFORE
     # unpacking the firmware - so a system tool without LZO fails cleanly, not mid-build.
     check_squashfs_tools(mksq, unsq, rep)
@@ -1345,7 +1417,7 @@ def build_image(stock_squashfs, ui_binary, variant, out_bin, workdir, rep=None, 
 
         rep.status("[4/6] patching fiio_init.sh + installing first-boot hook")
         patched_fiio_init, busybox_sha, ui_sha, ui_sz = edit_image(
-            TreeFS(rf), ui_binary, variant, ota_cfg, rep)
+            TreeFS(rf), ui_binary, variant, ota_cfg, rep, flash_id=flash_id)
 
         rep.status("[5/6] repacking squashfs (stock params: lzo, -b 131072)")
         out_sq = os.path.join(workdir, "out.squashfs")
@@ -1366,7 +1438,7 @@ def build_image(stock_squashfs, ui_binary, variant, out_bin, workdir, rep=None, 
         # silently-corrupt/truncated repack - the exact failure mode a nonzero-exit-but-valid (or, worse,
         # zero-exit-but-corrupt) mksquashfs could hide - before it ever reaches the device.
         _validate_squashfs_output(out_sq, unsq, ui_sha, ui_sz, extract_root, rep, busybox_sha,
-                                  expected_fiio_init=patched_fiio_init, ota_cfg=ota_cfg)
+                                  expected_fiio_init=patched_fiio_init, ota_cfg=ota_cfg, flash_id=flash_id)
 
         rep.status("[6/6] finalizing image (pad to partition size)")
         _copyfile(out_sq, out_bin)
@@ -1379,7 +1451,7 @@ def build_image(stock_squashfs, ui_binary, variant, out_bin, workdir, rep=None, 
         return out_bin
 
 
-def _build_archive_image(stock, ui, variant, out_bin, workdir, rep, ota_cfg, mksq, unsq):
+def _build_archive_image(stock, ui, variant, out_bin, workdir, rep, ota_cfg, mksq, unsq, flash_id):
     """Windows build only: Linux inode names and metadata never reach the host FS."""
     import hashlib
     import tempfile
@@ -1393,7 +1465,7 @@ def _build_archive_image(stock, ui, variant, out_bin, workdir, rep, ota_cfg, mks
         rep.status("[4/6] patching fiio_init.sh + installing first-boot hook")
         try:
             patched, bb_sha, ui_sha, ui_sz = edit_image(
-                archive_extraction_fs(archive), ui, variant, ota_cfg, rep)
+                archive_extraction_fs(archive), ui, variant, ota_cfg, rep, flash_id=flash_id)
         except OSError as exc:
             raise BuildError(f"archive edit failed: {exc}", code="E230") from exc
         rep.status("[5/6] repacking squashfs (stock params: lzo, -b 131072)")
@@ -1414,7 +1486,7 @@ def _build_archive_image(stock, ui, variant, out_bin, workdir, rep, ota_cfg, mks
                 except (OSError, ValueError, subprocess.SubprocessError) as exc:
                     raise BuildError(f"archive repack failed: {exc}", code="E230") from exc
                 validate_archive_output(sq, unsq, ui_sha, ui_sz, workdir, bb_sha, patched,
-                                        ota_cfg, intended_archive=archive)
+                                        ota_cfg, intended_archive=archive, flash_id=flash_id)
                 rep.status("[6/6] finalizing image (pad to partition size)")
                 # Finish a sibling first; the destination only changes once it is complete.
                 partial = out_bin + ".partial"

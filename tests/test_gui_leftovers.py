@@ -42,7 +42,12 @@ class GuiLeftovers(unittest.TestCase):
         self.addCleanup(root.destroy)
         patches = [mock.patch.object(gui, "ota_key_available", return_value=True),
                    mock.patch.object(platform_probe, "maskrom_count", return_value=0),
-                   mock.patch.object(gui.state, "stock_image_exists", return_value=False)]
+                   mock.patch.object(gui.state, "stock_image_exists", return_value=False),
+                   mock.patch.object(gui.firmware_resolve, "identify_zip",
+                                     side_effect=lambda path, expected=None: gui.firmware_resolve.ZipIdentity(expected, path)),
+                   mock.patch.object(gui.firmware_resolve, "check_space", return_value=None),
+                   mock.patch.object(gui.firmware_resolve, "plan_restore",
+                                     return_value=gui.firmware_resolve.RestorePlan("backup", "240"))]
         rd = getattr(gui, "readiness", None)
         if rd is not None:                       # the checklist (slice 2b) must not touch real USB here
             patches.append(mock.patch.object(rd, "probe", return_value={
@@ -93,6 +98,14 @@ class GuiLeftovers(unittest.TestCase):
         self.assertTrue(close(on.get(*at(0.78, 0.78)), fill))      # nor the bottom-right of an X
         self.assertFalse(close(off.get(*at(0.45, 0.68)), fill))
 
+    @staticmethod
+    def _until_worker(app):
+        """Apply queued events (probe, plan, verification) until a service worker has started."""
+        app.worker = None
+        while app.worker is None:
+            app._handle(*app.q.get(timeout=5))
+        app.worker.join(5)
+
     # ---- restore never reuses the Install page's firmware ----------------------
     def test_restore_with_saved_image_passes_no_firmware(self):
         app = self._app()
@@ -104,7 +117,7 @@ class GuiLeftovers(unittest.TestCase):
             app._set_mode("restore")
             self.assertIsNone(app.restore_fw_var)
             app._on_action()
-            app.worker.join(5)
+            self._until_worker(app)
         self.assertEqual(seen, [{"firmware": None}])
 
     def test_restore_without_saved_image_uses_its_own_field_only(self):
@@ -117,13 +130,12 @@ class GuiLeftovers(unittest.TestCase):
             app._set_mode("restore")
             self.assertIsNotNone(app.restore_fw_var)
             self.assertEqual(app.restore_fw_var.get(), "")
-            app._on_action()
-            app.worker.join(5)
-            app.state = gui.IDLE
+            app._on_action()                      # nothing chosen: no service call, no stale Install path
+            self.assertEqual(seen, [])
             app.restore_fw_var.set("/restore/own.zip")
-            app._on_action()
-            app.worker.join(5)
-        self.assertEqual(seen, [{"firmware": None}, {"firmware": "/restore/own.zip"}])
+            app._on_action()                      # verified first, then the restore starts with that path
+            self._until_worker(app)
+        self.assertEqual(seen, [{"firmware": "/restore/own.zip"}])
         self.assertEqual(app.fw_var.get(), "/from/install.zip")
 
     def test_picked_firmware_goes_to_the_screen_on_show(self):

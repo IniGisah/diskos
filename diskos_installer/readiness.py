@@ -119,7 +119,9 @@ def _access_row(p):
     return _row("access", label, None, "Checked when the flash starts")
 
 
-def _firmware_row(mode, firmware, have_stock):
+def _firmware_row(mode, firmware, have_stock, fw=None):
+    if fw is not None:      # the GUI's acquisition state: (verified, text, fix)
+        return _row("firmware", "Firmware", fw[0], fw[1], fw[2])
     label = "Firmware chosen"
     if mode == "restore" and have_stock:
         return _row("firmware", label, True, "A saved stock image is available")
@@ -136,9 +138,9 @@ def _tools_row(p):
     return _row("tools", "Installer tools", True, "All bundled tools found")
 
 
-def evaluate(p, mode="install", firmware="", have_stock=False):
+def evaluate(p, mode="install", firmware="", have_stock=False, fw=None):
     """Checklist rows for the given probe. Rows warn only; none of them blocks Install."""
-    return [_device_row(p), _access_row(p), _firmware_row(mode, firmware, have_stock), _tools_row(p)]
+    return [_device_row(p), _access_row(p), _firmware_row(mode, firmware, have_stock, fw), _tools_row(p)]
 
 
 def needs_flash_mode_help(rows):

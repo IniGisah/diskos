@@ -442,7 +442,9 @@ static void aw_seed_cb(lv_timer_t *t){
             int found = 0;
             for(int i=0;i<m;i++){
                 char track[512]; track[0]=0;
-                if(mdb_song_path(ids[i], track, sizeof track) && track[0]){
+                int ready=mdb_song_path(ids[i],track,sizeof track);
+                if(ready<0){ lv_timer_set_period(t,2000); return; }
+                if(ready>0 && track[0]){
                     found = 1;
                     if(!ui_prewarm_enqueue(track)){            /* queue full: the worker isn't draining it right now
                                                                  * (heat, card access, a live decode) - retry this album
@@ -527,8 +529,20 @@ static int aw_prefetch_step(unsigned g){
                 if(pthread_create(&th, NULL, aw_worker, NULL)==0){ pthread_detach(th); g_wstarted = 1; }
             }
             if(g_wstarted){
+                if(!mdb_ui_read_begin()){
+                    if(g_prefetch) lv_timer_set_period(g_prefetch,2000);
+                    pthread_mutex_unlock(&g_wmu); return 1;
+                }
                 int ids[6]; g_wn = mdb_album_track_ids(g_names[sp->idx], ids, 6);
-                for(int i=0;i<g_wn;i++){ g_wpaths[i][0]=0; mdb_song_path(ids[i], g_wpaths[i], sizeof g_wpaths[i]); }
+                int complete=1;
+                for(int i=0;i<g_wn;i++){
+                    if(mdb_song_path(ids[i], g_wpaths[i], sizeof g_wpaths[i])<0) complete=0;
+                }
+                mdb_ui_read_end();
+                if(!complete){
+                    if(g_prefetch) lv_timer_set_period(g_prefetch,2000);
+                    pthread_mutex_unlock(&g_wmu); return 1;
+                }
                 g_widx = sp->idx; g_wac_gen = g; sp->asked = 1; g_wbusy = g_wwant = 1;
                 pthread_cond_signal(&g_wcv);
             }
@@ -546,6 +560,7 @@ static int aw_prefetch_step(unsigned g){
 static void aw_prefetch_cb(lv_timer_t *t){
     if(screen_current()!=SCR_ALBUMWALL){ if(aw_leave()) lv_timer_pause(t); return; }
     if(g_nalb<=0){ lv_timer_pause(t); return; }
+    lv_timer_set_period(t,40);
     unsigned g = artcache_gen();
     if(g != g_last_ac_gen){ g_last_ac_gen = g; aw_rebake_new_covers(); }
     if(aw_prefetch_step(g)){ g_prefetch_cur = -1; return; }
@@ -646,6 +661,8 @@ void albumwall_create(lv_obj_t *root){
 }
 
 void albumwall_refresh(void){
+    extern void ui_library_check(void) __attribute__((weak));
+    if(ui_library_check) ui_library_check();
     if(!g_root) return;
     aw_cancel(); g_active = 1;
     g_prefetch_cur = -1;

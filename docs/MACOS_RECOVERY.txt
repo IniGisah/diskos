@@ -1,0 +1,20 @@
+diskOS macOS recovery
+Keep the complete release download, logs and saved stock image.
+UNKNOWN, timeout, app closed or USB lost after writing may have started:
+Leave the Disc powered and connected for at least 25 minutes after the error.
+Keep the computer awake and the lid open. Do not retry or disconnect during
+this wait: the Disc may still be writing by itself. Then power-cycle it.
+If it will not boot, power it off, hold Volume Down and connect USB for
+mask-ROM mode (the screen stays black). Open diskOS Installer.app and use
+Restore stock with the saved matching stock image. Restore the complete image;
+never resume at a guessed block or bypass a refusal. Recovery is not guaranteed.
+Keep the entire installer state folder, including stock generations and their
+checksums. Run the app's Contents/MacOS/diskos-installer doctor to print its
+state directory; DISKOS_INSTALLER_HOME overrides the normal per-user location.
+If the backup is missing or damaged, preserve all state and use the original
+verified FiiO ZIP for the Disc's existing firmware version in Restore stock.
+Do not substitute a different version. If the version is unknown, get help.
+For a blocked app, follow docs/INSTALL.md first-run Gatekeeper steps. For a
+blocked bundled tool, move the app to a writable folder and reopen it; if still
+blocked, download and extract a fresh complete release. Never replace individual
+tools or libraries from unrelated downloads.

@@ -10,6 +10,7 @@ Contents:
     stock/stock.bin       the saved stock-rootfs image, rebuilt from the user's firmware (for restore-stock)
     stock/stock.sha256    its checksum
     build/                scratch for extract/build (cleaned opportunistically)
+    firmware/             verified firmware ZIP cache and incomplete .part files
 """
 
 import hashlib
@@ -356,7 +357,7 @@ def build_dir():
 
 
 def wipe_all():
-    """Delete the entire tool state directory (the full uninstall footprint).
+    """Delete the entire tool state directory, including firmware ZIPs and partials.
     Returns (path, errors): errors is a list of (path, message) for anything that
     could NOT be removed, so the caller reports the truth instead of a false success."""
     d = _state_base()   # PATH only - never re-create the sentinel we are about to verify

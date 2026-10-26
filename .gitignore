@@ -81,6 +81,8 @@ INSTALL_v209_legacy.md
 
 # --- source-tree checksums are fragile; release checksums are generated at staging ---
 SHA256SUMS
+# vendored dependency pins are part of the source closure (see ui/third_party/VENDOR.md)
+!/ui/third_party/SHA256SUMS
 
 # --- unsupported developer diagnostics (hardcoded paths / no clean public build) ---
 flash/qual_lpddr3.sh

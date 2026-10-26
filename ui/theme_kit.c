@@ -4,6 +4,7 @@
 #include "theme_kit.h"
 #include "theme.h"
 #include "screens.h"
+#include "ui_dialog.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -43,6 +44,21 @@ lv_obj_t *ui_action_find(const char *name){   /* "name#K" = the K-th newest (0 =
     return NULL;
 }
 int ui_action_tier(const lv_obj_t *o){ for(act_t *a = g_acts; a; a = a->next) if(a->obj == o) return a->tier; return -1; }
+#endif
+
+#ifdef DISKOS_HOST
+/* host tests: the role the styling pass gave each object (newest entry wins, so a reused address reads its latest
+ * classification; -1 = never classified) and how many times a styler ran. No handler is added to the objects. */
+typedef struct role_rec { const lv_obj_t *obj; int role; struct role_rec *next; } role_rec_t;
+static role_rec_t *g_roles;
+static uint32_t g_style_calls;
+static void role_note(lv_obj_t *o, kit_role_t r){
+    role_rec_t *a = calloc(1, sizeof *a);
+    if(a){ a->obj = o; a->role = (int)r; a->next = g_roles; g_roles = a; }
+    g_style_calls++;
+}
+int kit_host_role(const lv_obj_t *o){ for(role_rec_t *a = g_roles; a; a = a->next) if(a->obj == o) return a->role; return -1; }
+uint32_t kit_host_style_calls(void){ return g_style_calls; }
 #endif
 
 /* A touch that moved like a swipe is not a tap. LVGL keeps a button pressed when the finger slides off it (press
@@ -92,6 +108,9 @@ const char *ui_transport_action(const char *cmd, const char *prefix, char *buf, 
 
 /* ---- the styling pass ---- */
 #define KIT_DONE LV_OBJ_FLAG_USER_4     /* already styled */
+static char g_kit_isolated_tag;
+static char g_kit_section_tag;
+static char g_kit_button_tag;
 static int is_glyph(const char *t){    /* one symbol / icon glyph (private use area or LVGL symbol), no words */
     if(!t || !*t) return 0;
     unsigned char c = (unsigned char)t[0];
@@ -105,6 +124,15 @@ static lv_obj_t *first_label(lv_obj_t *o){
 }
 static kit_role_t classify(lv_obj_t *o, kit_role_t parent_role, int is_root, int on_top){
     const lv_obj_class_t *c = lv_obj_get_class(o);
+    /* a shared dialog's parts are known by identity (ui_dialog.h), whatever their size or ancestry: the panel is a
+     * popup, the wrappers are plain containers (never a card or a row) */
+    switch(ui_dialog_part_of(o)){
+    case UI_DLG_SCRIM:  return KIT_SCRIM;
+    case UI_DLG_PANEL:  return KIT_POPUP;
+    case UI_DLG_VIEWPORT: case UI_DLG_CONTENT: case UI_DLG_ACTIONS: return KIT_OTHER;
+    default: break;
+    }
+    if(lv_obj_get_user_data(o) == &g_kit_button_tag) return KIT_BUTTON;
     if(is_root && !on_top) return KIT_SCREEN;
     if(c == &lv_switch_class)   return KIT_TOGGLE;
     if(c == &lv_slider_class)   return KIT_SLIDER;
@@ -116,6 +144,7 @@ static kit_role_t classify(lv_obj_t *o, kit_role_t parent_role, int is_root, int
     if(c == &lv_image_class)    return KIT_IMAGE;
     if(c == &lv_label_class){
         const char *t = lv_label_get_text(o);
+        if(lv_obj_get_user_data(o) == &g_kit_section_tag) return KIT_SECTION;
         if(parent_role == KIT_ROW){
             if(is_glyph(t) && !strcmp(t, LV_SYMBOL_RIGHT)) return KIT_ROW_CHEVRON;
             return lv_obj_get_index(o) == lv_obj_get_index(first_label(lv_obj_get_parent(o))) ? KIT_ROW_TEXT : KIT_ROW_SUB;
@@ -125,6 +154,8 @@ static kit_role_t classify(lv_obj_t *o, kit_role_t parent_role, int is_root, int
             return KIT_TITLE;
         return KIT_TEXT;
     }
+    if(lv_obj_get_parent(o) && ui_dialog_part_of(lv_obj_get_parent(o)) == UI_DLG_ACTIONS && first_label(o))
+        return is_glyph(lv_label_get_text(first_label(o))) ? KIT_ICON_BUTTON : KIT_BUTTON;   /* a dialog's button, any width */
     int32_t w = lv_obj_get_width(o), h = lv_obj_get_height(o);
     if(is_root && on_top) return (w >= 340 && h >= 340) ? KIT_SCRIM : KIT_POPUP;
     if(lv_obj_has_flag(o, LV_OBJ_FLAG_CLICKABLE) && lv_obj_get_event_count(o) > 0){
@@ -139,14 +170,20 @@ static kit_role_t classify(lv_obj_t *o, kit_role_t parent_role, int is_root, int
     return KIT_OTHER;
 }
 static void pass(lv_obj_t *o, kit_role_t parent_role, int is_root, int on_top, int force){
+    if(lv_obj_get_user_data(o) == &g_kit_isolated_tag) return;
     void (*style)(lv_obj_t *, kit_role_t) = theme_kit()->style;
     kit_role_t r = classify(o, parent_role, is_root, on_top);
     if(force || !lv_obj_has_flag(o, KIT_DONE)){
         lv_obj_add_flag(o, KIT_DONE);
+#ifdef DISKOS_HOST
+        role_note(o, r);
+#endif
         if(lv_obj_check_type(o, &lv_label_class) && !is_glyph(lv_label_get_text(o))){   /* no Default face left */
             const lv_font_t *f = theme_font_substitute(lv_obj_get_style_text_font(o, 0));
             if(f) lv_obj_set_style_text_font(o, f, 0);
         }
+        if(ui_dialog_part_of(o) == UI_DLG_VIEWPORT)
+            lv_obj_set_style_bg_color(o, TC(TEXT_SECONDARY), LV_PART_SCROLLBAR);
         style(o, r);
         if(r == KIT_ROW && theme_kit()->row_decor) theme_kit()->row_decor(o, first_label(o));
         /* a one-line label with a fixed height shorter than the theme's face: grow it to the face (accents and
@@ -172,23 +209,30 @@ static void pass(lv_obj_t *o, kit_role_t parent_role, int is_root, int on_top, i
             }
         }
     }
+    if(ui_dialog_part_of(o)) on_top = 1;      /* a filled container inside a dialog is part of that popup */
     uint32_t n = lv_obj_get_child_count(o);
     for(uint32_t i = 0; i < n; i++) pass(lv_obj_get_child(o, (int32_t)i), r, 0, on_top, force);
 }
 static int on_top_layer(lv_obj_t *o){ return lv_obj_get_parent(o) == lv_layer_top() || lv_obj_get_parent(o) == lv_layer_sys(); }
 /* sizes decide roles (a row is wide): lay out first, or content built this frame still measures 0 */
 void kit_pass(lv_obj_t *root){
-    if(!root || !theme_kit()->style) return;
-    lv_obj_update_layout(root); pass(root, KIT_OTHER, 1, on_top_layer(root), 0);
+    if(!root) return;
+    if(theme_kit()->style){ lv_obj_update_layout(root); pass(root, KIT_OTHER, 1, on_top_layer(root), 0); }
     if(theme_kit()->pass_end) theme_kit()->pass_end();
+    ui_headers_fit(root);
 }
 void kit_restyle(lv_obj_t *root){
     if(!root || !theme_kit()->style) return;
     lv_obj_update_layout(root); pass(root, KIT_OTHER, 1, on_top_layer(root), 1);
     if(theme_kit()->pass_end) theme_kit()->pass_end();
+    ui_headers_fit(root);
+    ui_dialog_restyled(root);     /* fonts and borders may have changed: its dialogs are measured again */
 }
 
 void kit_keep(lv_obj_t *obj){ if(obj) lv_obj_add_flag(obj, KIT_DONE); }
+void kit_button(lv_obj_t *obj){ if(obj) lv_obj_set_user_data(obj, &g_kit_button_tag); }
+void kit_isolate(lv_obj_t *obj){ if(obj) lv_obj_set_user_data(obj, &g_kit_isolated_tag); }
+void kit_section(lv_obj_t *label){ if(label) lv_obj_set_user_data(label, &g_kit_section_tag); }
 void kit_row_layout(lv_obj_t *row, kit_row_layout_t layout){
     if(!row) return;
     if(layout & 1) lv_obj_add_flag(row, LV_OBJ_FLAG_USER_2);
@@ -204,17 +248,21 @@ kit_row_layout_t kit_row_layout_get(const lv_obj_t *row){
  * runs while the screen is idle. */
 static void before_redraw(lv_event_t *e){
     (void)e;
-    lv_obj_t *cur = screen_get_root(screen_current());
-    if(cur) kit_pass(cur);
-    lv_obj_t *top = lv_layer_top();
-    uint32_t n = lv_obj_get_child_count(top);
-    for(uint32_t i = 0; i < n; i++) kit_pass(lv_obj_get_child(top, (int32_t)i));
+    {
+        lv_obj_t *cur = screen_get_root(screen_current());
+        if(cur) kit_pass(cur);
+        lv_obj_t *top = lv_layer_top();
+        uint32_t n = lv_obj_get_child_count(top);
+        for(uint32_t i = 0; i < n; i++) kit_pass(lv_obj_get_child(top, (int32_t)i));
+    }
+    ui_dialog_pass();     /* after styling: shared dialogs measure with their final theme (every theme, Default too) */
 }
 
-/* the styling pass watches redraws; screens_init calls this once the display exists (no-op for Default) */
+/* the styling pass watches redraws (Default has no styler, but shared dialogs still reflow); screens_init calls this
+ * once the display exists */
 void kit_install(void){
     static int done;
-    if(done || !theme_kit()->style || !lv_display_get_default()) return;
+    if(done || !lv_display_get_default()) return;
     done = 1;
     lv_display_add_event_cb(lv_display_get_default(), before_redraw, LV_EVENT_REFR_START, NULL);
 }

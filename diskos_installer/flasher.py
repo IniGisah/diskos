@@ -489,6 +489,15 @@ def _flash(image_path, target_ver, log_path, rep, launched, completed):
             rep.indeterminate(False)
             logf.close()
 
+        if isinstance(proc, _WindowsChild) and rc == flash_child.VALIDATION_REFUSED:
+            error = FlashError(
+                "The flash could not start because Windows flash validation failed. "
+                "Nothing was sent by the flash transfer.", code="E304",
+                action="See Details for the validation failure. Correct the reported problem "
+                       "and retry; no flash-recovery wait is needed.")
+            error.pre_launch = True
+            raise error
+
         rep.log(f"usbboot exit={rc}")
         if not os.path.exists(dbg):
             raise FlashError(
@@ -587,16 +596,20 @@ class _sleep_inhibited:
         self.host = host
         self.api = api
         self.windows_active = False
+        self.macos_assertion = None
 
     def __enter__(self):
         self.proc = None
         o = self.host or platform_probe.host()[0]
+        if o == "macos":
+            from .macos_runtime import NoSleep
+            self.macos_assertion = NoSleep(self.rep)
+            self.macos_assertion.__enter__()
+            return self
         try:
             if o == "windows":
                 self.api = self.api or bundle._windows_api()
                 self.windows_active = bool(self.api.SetThreadExecutionState(0x80000001))
-            elif o == "macos":
-                self.proc = subprocess.Popen(["caffeinate", "-dimsu"])
             elif o == "linux":
                 import shutil
                 if shutil.which("systemd-inhibit"):
@@ -618,6 +631,8 @@ class _sleep_inhibited:
         return self
 
     def __exit__(self, *exc):
+        if self.macos_assertion is not None:
+            return self.macos_assertion.__exit__(*exc)
         if self.windows_active:
             if not self.api.SetThreadExecutionState(0x80000000) and self.rep:
                 self.rep.warning("could not release the Windows sleep request")

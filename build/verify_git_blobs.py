@@ -14,7 +14,8 @@ PAYLOAD = (
     'mq_ui', 'S96diskos_select', 'S97diskos_install', 'S99usbserial',
     'diskos-debug.sh', 'dropbearmulti', 'diskos-rmguard', 'diskos-selected',
     'diskos-bootprobe', 'diskos-artdec', 'diskos-launch', 'diskos-verify.sh',
-    'diskos-root.pub.pem',
+    'diskos-root.pub.pem', 'diskos-flashstate',
+    'S97diskos_names', 'diskos-names', 'diskos-udhcpc', 'diskos-network-names-v1',
 )
 DEVICE = ('my_write6_dram.bin', 'disc_spl_lpddr3.bin')
 

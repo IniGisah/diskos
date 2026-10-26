@@ -10,6 +10,7 @@ enum { LFM_AUTH_IDLE=0, LFM_AUTH_TOKEN, LFM_AUTH_WAIT, LFM_AUTH_OK, LFM_AUTH_ERR
 /* Lifecycle - all of these run on the LVGL/main thread only. */
 void        lastfm_init(void);                     /* load config + queue; once at startup */
 void        lastfm_poll(void);                     /* each loop tick: consume worker results, drive auth + scrobble queue */
+void        lastfm_watch_view(const track_state_t *st, int playing, int cast); /* 15c: view + explicit (receiver-confirmed) play state; cast = receiver media id, 0 = local */
 void        lastfm_watch(const track_state_t *st); /* each loop tick: play-state -> now-playing + scrobble eligibility */
 
 /* Status */

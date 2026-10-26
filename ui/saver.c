@@ -4,6 +4,11 @@
 #include "theme.h"
 #include "theme_kit.h"
 #include "config.h"
+#include "i18n.h"
+#include "custom_saver_overlay.h"
+#include "custom_saver_db.h"
+#include "custom_saver_apply.h"
+#include <fcntl.h>
 #include <time.h>
 #include <math.h>
 #include <stdio.h>
@@ -32,9 +37,32 @@ static void saver_clock_style_cb(lv_event_t *e);   /* refits the time when the t
 static void saver_clock_fit(void);                  /* lays out the time (+ AM/PM beside it, hidden with the clock) */
 static lv_obj_t *g_date;
 static lv_obj_t *g_weather;
+static lv_obj_t *g_mer;   /* AM/PM in a text face, for a theme whose clock face has no letters (saver_mer_apart) */
 static lv_obj_t *g_track;
 static lv_obj_t *g_artist;
 static int g_playing;
+static lv_obj_t *g_root;   /* the saver's screen root */
+
+/* ---- Custom style (slice 14): the installed lock-screen image with the overlay group, in ONE container that exists
+ * only while the lit saver is on screen. Every exit or dark path deletes it (screenmgr.c -> saver_leave, main.c ->
+ * saver_dark): the GIF object (its destructor closes the decoder and the file and deletes its timer), the overlay
+ * group, the decode-cache entry of a still, and the weather hold. Hiding it would leave all of those running. ---- */
+#define SAVER_STYLE_CUSTOM   5
+#define SAVER_STYLE_FALLBACK 2   /* Minimal: what a missing or corrupt image shows */
+typedef struct {
+    lv_obj_t *box, *img;
+    custom_ov_group_t *grp;
+    char still[1100];            /* lv_fs path of a JPEG/BMP still (its cache entry is dropped on teardown), "" otherwise */
+    unsigned char *px;           /* a PNG still decoded to BGRA (the PNG decoder is stb's, not LVGL's); freed on teardown */
+    lv_image_dsc_t dsc;
+    int lang, held;              /* held: this build acquired one weather_hold, not yet released */
+} cu_t;
+static cu_t g_cu;                /* the lock screen's */
+static cu_t g_cp;                /* the settings Preview's (slice 17d): the same builder on another parent, with the draft as the model */
+static int g_cfg_style = -1;     /* the saver_style last laid out, so a tick re-lays-out only when it changes */
+static int g_cu_msg;             /* a fallback happened: one message is due on the next wake */
+static int cu_on(void){ return g_cu.box != NULL; }
+int ui_screen_backlight_on(void);
 
 /* analog clock */
 static lv_obj_t *g_face;
@@ -349,9 +377,11 @@ void sharp_cover_set_source(const char *path)
     snprintf(g_vpath, sizeof g_vpath, "%s", p);
 }
 
+/* Who keeps the sharp cover: Bauhaus Now Playing, the vinyl saver, and the full-screen art while it is open.
+ * It is still freed on every source change (sharp_cover_set_source/invalidate), whoever asked for it. */
 static int sharp_retained(void)
 {
-    return !strcmp(theme_kit()->id, "bauhaus") || cfg_get_int("saver_style", 0) == 4;
+    return !strcmp(theme_kit()->id, "bauhaus") || cfg_get_int("saver_style", 0) == 4 || ui_np_fsart_active();
 }
 
 /* Install without requiring a vinyl widget. The descriptor belongs to the provider. */
@@ -365,7 +395,7 @@ static void vinyl_poll(lv_timer_t *t)
     if (gen != g_vgen) { free(buf); if (!g_vpending) lv_timer_pause(t); return; }
     g_vpending = 0;
     lv_timer_pause(t);
-    if (!sharp_retained()) { free(buf); return; }
+    if (!sharp_retained()) { free(buf); g_vasked_gen = ~0u; return; }   /* nobody keeps it now: a later demand asks again */
     if (!buf) {
         if (g_vinyl && g_have_track && g_style == 4 && screen_current() == SCR_SAVER) {
             vinyl_generate_placeholder();
@@ -475,15 +505,20 @@ static int min_hand_len(void)
     return default_saver() || something_saver() || term_saver() || bauh_saver() || blue_saver() || stone_saver()
         || zine_saver() ? 80 : 104;
 }
-static void saver_anim_cb(lv_timer_t *t)
+static void analog_sync(void)
 {
-    (void)t;
-    if (g_style != 1 || screen_current() != SCR_SAVER) return;
+    if (g_style != 1) return;
     time_t now = time(NULL); struct tm lt; localtime_r(&now, &lt);
     int def = default_saver();
     set_hand(g_hour, g_hpts, (lt.tm_hour % 12) * 30.0 + lt.tm_min * 0.5, hifi_saver() ? 60 : 70);
     set_hand(g_min,  g_mpts, lt.tm_min * 6.0, min_hand_len());
     set_hand(g_sec,  g_spts, lt.tm_sec * 6.0, hifi_saver() ? 68 : def || something_saver() || term_saver() || bauh_saver() || blue_saver() || stone_saver() || zine_saver() ? 83 : 118);
+}
+
+static void saver_anim_cb(lv_timer_t *t)
+{
+    (void)t;
+    if(screen_current() == SCR_SAVER) analog_sync();
 }
 
 /* vinyl spin - idempotent; main.c calls it each loop with the live condition
@@ -525,6 +560,7 @@ void saver_vinyl_spin(int want)
 
 /* show/hide + position elements for a style */
 static void song_visibility(void){
+    if(cu_on()) return;   /* Custom keeps its own container: the built-in song labels stay hidden */
     int hifi = hifi_saver();
     int show = default_saver() || something_saver() || hifi || term_saver() || bauh_saver() || blue_saver() || stone_saver() || zine_saver()
                ? g_playing && g_have_track : cfg_get_int("saver_style", 0) == 0;
@@ -544,9 +580,11 @@ static void song_visibility(void){
 }
 
 void saver_set_playing(int playing){
+    custom_ov_feed_playing(playing);   /* the Custom overlay's pause marker (no-op without a group) */
     if(g_playing == !!playing) return;
     g_playing = !!playing;
     song_visibility();
+    if(cu_on()) return;
     if(blue_saver() && screen_current() == SCR_SAVER) blue_song_layout();
     if(zine_saver() && screen_current() == SCR_SAVER && g_clock){
         saver_parts_t sp = { lv_obj_get_parent(g_clock), g_clock, g_date, g_weather, g_track, g_artist, g_face, g_style };
@@ -584,8 +622,147 @@ static void default_song_layout(int style)
     if(g_artist) lv_obj_set_width(g_artist, width);
 }
 
+/* The installed image the stock theme database selects, if it is usable: a regular file (no symlink on the path,
+ * opened here and checked as the apply and picker code check it: size, magic, dimensions) that is a GIF or a still
+ * LVGL can read. 0 = none (no Custom row, a system style selected, missing or corrupt file). */
+enum { CU_GIF, CU_PNG, CU_OTHER };
+#define CU_BASE_RGB 0x000000u
+static int cu_asset(char *path, size_t cap, int *kind, int saved, int *alpha)   /* saved: the custom row whatever style is active (the Preview), else the active one */
+{
+    custom_saver_asset a;
+    if((saved ? custom_saver_db_saved(NULL, &a) : custom_saver_db_read(NULL, &a)) != CUSTOM_SAVER_OK) return 0;
+    int fd = open(a.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    if(fd < 0) return 0;
+    struct stat sb;
+    unsigned char m[4];
+    int ok = 0;
+    if(!fstat(fd, &sb) && S_ISREG(sb.st_mode) && pread(fd, m, sizeof m, 0) == (ssize_t)sizeof m){
+        *kind = !memcmp(m, "GIF", 3) ? CU_GIF : !memcmp(m, "\x89PNG", 4) ? CU_PNG : CU_OTHER;
+        ok = (*kind == CU_GIF ? custom_gif_check_fd(fd, sb.st_size) : custom_still_check_fd(fd, sb.st_size)) == CUSTOM_GIF_OK;
+    }
+    close(fd);
+    if(ok && strlen(a.path) >= cap) ok = 0;
+    if(ok){ snprintf(path, cap, "%s", a.path); *alpha = a.alpha; }
+    return ok;
+}
+
+static void cu_free_still(cu_t *c)
+{
+    if(c->still[0]){ lv_image_cache_drop(c->still); c->still[0] = 0; }
+    if(c->px){ lv_image_cache_drop(&c->dsc); custom_still_free(c->px); c->px = NULL; }
+}
+
+/* Delete everything Custom built, in the order the overlay feed requires: detach the feed, destroy the overlay group,
+ * then the container (the GIF object goes with it), then release the weather hold exactly once. Safe to call twice. */
+static void cu_stop(cu_t *c)
+{
+    if(c->box) custom_ov_feed_attach(NULL, c->lang, NULL);
+    if(c->grp){ custom_ov_group_destroy(c->grp); c->grp = NULL; }
+    if(c->box){ lv_obj_delete(c->box); c->box = c->img = NULL; }
+    cu_free_still(c);
+    if(c->held){ c->held = 0; weather_hold(0); }
+}
+
+/* Build the container: black base, the image centred, the overlay group from the saved model on top. The first GIF
+ * frame is decoded here; further frames come from the GIF's own 10 ms timer (no timer of ours). 0 = nothing usable,
+ * nothing left behind. */
+static int cu_start(cu_t *c, lv_obj_t *parent, const custom_ov_t *model, int saved)
+{
+    char path[1024], src[1100];
+    int kind = CU_GIF, alpha = 100;
+    if(!parent || c->box || !cu_asset(path, sizeof path, &kind, saved, &alpha)) return 0;
+    snprintf(src, sizeof src, "A:%s", path);
+    lv_obj_t *box = lv_obj_create(parent);
+    kit_isolate(box);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_size(box, 360, 360);
+    lv_obj_set_pos(box, 0, 0);
+    lv_obj_set_style_bg_color(box, theme_color_from_rgb(CU_BASE_RGB), 0);   /* black whatever the theme: what a smaller image leaves bare */
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *img = NULL;
+    int ok = 0, w = 0, h = 0;
+    if(kind == CU_GIF){
+        img = lv_gif_create(box);
+        lv_gif_set_src(img, src);
+        ok = lv_gif_is_loaded(img) && lv_gif_get_status(img) > 0;   /* opened AND its first frame decoded */
+    } else if(kind == CU_PNG){
+        c->px = custom_still_load(path, &w, &h);
+        if(c->px){
+            c->dsc = (lv_image_dsc_t){ .header = { .magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_ARGB8888, .w = (uint32_t)w,
+                                                     .h = (uint32_t)h, .stride = (uint32_t)w * 4 }, .data_size = (uint32_t)w * (uint32_t)h * 4,
+                                         .data = c->px };
+            img = lv_image_create(box);
+            lv_image_set_src(img, &c->dsc);
+            ok = 1;
+        }
+    } else {
+        lv_image_header_t hd;
+        if(lv_image_decoder_get_info(src, &hd) == LV_RESULT_OK && hd.w > 0 && hd.h > 0){
+            w = hd.w; h = hd.h;
+            img = lv_image_create(box);
+            lv_image_set_src(img, src);
+            snprintf(c->still, sizeof c->still, "%s", src);
+            ok = 1;
+        }
+    }
+    if(!ok){ lv_obj_delete(box); cu_free_still(c); return 0; }
+    if(kind != CU_GIF && (w > 360 || h > 360)) lv_image_set_scale(img, 256 * 360 / (w > h ? w : h));   /* a larger still is shown whole */
+    lv_obj_set_style_image_opa(img, (lv_opa_t)(alpha * LV_OPA_COVER / 100), 0);
+    lv_obj_center(img);
+    c->box = box; c->img = img;
+    c->lang = i18n_lang();
+    custom_ov_data_t d;
+    custom_ov_feed_current(c->lang, &d);
+    c->grp = custom_ov_group_create(box, model, c->lang, &d);
+    if(c->grp) custom_ov_feed_attach(c->grp, c->lang, &d);
+    weather_hold(1);   /* no weather request starts while Custom is visible (slice 10); released by cu_stop */
+    c->held = 1;
+    return 1;
+}
+
+/* The settings Preview (slice 17d) draws the REAL Custom composition with the draft as the model: same builder, own state, so the lock
+ * screen's container, feed and hold are never shared. Refused while the lock screen's Custom is up or the panel is dark. */
+int saver_custom_preview_start(lv_obj_t *parent)
+{
+    custom_ov_t draft = custom_ov_draft_get();   /* never custom_ov_get: Preview shows what Save would store */
+    if(!parent || cu_on() || !ui_screen_backlight_on()) return 0;
+    int ok = cu_start(&g_cp, parent, &draft, 1);
+    if(!ok && !g_cp.held){
+        weather_hold(1);   /* the no-image Preview also blocks weather starts */
+        g_cp.held = 1;
+    }
+    return ok;
+}
+void saver_custom_preview_stop(void){ cu_stop(&g_cp); }
+int saver_custom_preview_on(void){ return g_cp.box != NULL; }
+
+/* The style to lay out for the configured one. Custom builds its container when the lit saver is on screen and the
+ * image is usable, else it falls back to Minimal (one message on the next wake); hidden or dark builds nothing.
+ * Any other style deletes the Custom container first. */
+static int saver_resolve_style(int want)
+{
+    g_cfg_style = want;
+    if(want != SAVER_STYLE_CUSTOM){ cu_stop(&g_cu); return want; }
+    if(cu_on()) return SAVER_STYLE_CUSTOM;
+    if(screen_current() != SCR_SAVER || !ui_screen_backlight_on()) return SAVER_STYLE_FALLBACK;
+    custom_ov_t model = custom_ov_get(NULL);
+    if(cu_start(&g_cu, g_root, &model, 0)) return SAVER_STYLE_CUSTOM;
+    g_cu_msg = 1;
+    return SAVER_STYLE_FALLBACK;
+}
+
 static void relayout(int style)
 {
+    if(style == SAVER_STYLE_CUSTOM){
+        /* Custom is its own container: hide the built-in parts and run no theme hook over them. Leaving Custom runs
+         * the ordinary path below again, which shows exactly what each of the five styles needs. */
+        lv_obj_t *parts[] = { g_bg, g_vinyl, g_face, g_hour, g_min, g_sec, g_hub, g_clock, g_mer, g_date, g_weather, g_track, g_artist };
+        for(unsigned i = 0; i < sizeof parts / sizeof parts[0]; i++) if(parts[i]) lv_obj_add_flag(parts[i], LV_OBJ_FLAG_HIDDEN);
+        for(int i = 0; i < 12; i++) if(g_tick[i]) lv_obj_add_flag(g_tick[i], LV_OBJ_FLAG_HIDDEN);
+        g_song_dirty = 1;
+        return;
+    }
     int analog = (style == 1);
     int cover  = (style == 0);
     int minim  = (style == 2);
@@ -649,6 +826,7 @@ static void relayout(int style)
 
 void saver_create(lv_obj_t *root)
 {
+    g_root = root;
     lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
 
@@ -709,8 +887,8 @@ void saver_create(lv_obj_t *root)
     lv_label_set_text(g_clock, "--:--");
     lv_obj_add_event_cb(g_clock, saver_clock_style_cb, LV_EVENT_STYLE_CHANGED, NULL);   /* refit after the theme's face lands */
 
-    relayout(cfg_get_int("saver_style", 0));
-    g_style = cfg_get_int("saver_style", 0);
+    g_style = saver_resolve_style(cfg_get_int("saver_style", 0));   /* not on screen yet: Custom builds nothing here */
+    relayout(g_style);
     lv_timer_create(saver_anim_cb, 1000, NULL);   /* analog seconds hand */
 }
 
@@ -728,12 +906,44 @@ void saver_set_accent(lv_color_t c)
  * than waiting for the next clock tick (which is where style changes were applied). */
 void saver_show_sync(void)
 {
-    int s = cfg_get_int("saver_style", 0);
+    int s = saver_resolve_style(cfg_get_int("saver_style", 0));   /* Custom builds its container here (or falls back) */
     g_style = s; relayout(s);   /* style first: relayout's vinyl/label visibility reads g_style */
     saver_set_accent(ui_current_accent());
+    analog_sync();   /* all hands are correct on entry, before the first 1 s timer */
     /* decode the sharp cover as the vinyl saver appears - but only if a track is loaded;
      * otherwise make sure the vinyl stays hidden (no stale cover on an idle player). */
     if (g_style == 4) { if (g_have_track) vinyl_load_sharp_cover(); else vinyl_update_vis(); }
+}
+
+/* The one deferred message of a Custom fallback, once the panel is lit (a dark wake or the leave of a lit saver). */
+void saver_wake(void)
+{
+    if(!g_cu_msg || !ui_screen_backlight_on()) return;
+    g_cu_msg = 0;
+    ui_toast("Custom image unavailable");
+}
+
+/* The saver is being left (screenmgr.c transition(): wake touch, screen off, Back, any screen_show away from it).
+ * Custom is deleted, not hidden, and the built-in layout of the fallback style is restored for the next entry. */
+void saver_leave(void)
+{
+    if(cu_on()){
+        cu_stop(&g_cu);
+        g_style = SAVER_STYLE_FALLBACK;
+        relayout(g_style);
+    }
+    saver_wake();
+}
+
+/* The panel went dark while the saver may still be current (main.c draw_set_dark): nothing Custom keeps running and
+ * nothing is rebuilt until a lit saver entry. Idempotent, and a no-op for the five built-in styles. */
+void saver_dark(void)
+{
+    custom_preview_dark();   /* the settings Preview (slice 17d) stops the same way, and rebuilds on the first lit draw */
+    if(!cu_on()) return;
+    cu_stop(&g_cu);
+    g_style = SAVER_STYLE_FALLBACK;
+    relayout(g_style);
 }
 
 /* The time as set (a dotted label edits its own copy, so the fit always starts from this). */
@@ -742,7 +952,6 @@ static char g_clock_text[32] = "--:--";
  * end in "..." (bauhaus showed "5:53..."). Then the label takes the text's natural width (one line; its alignment keeps
  * it centred) and is drawn scaled down about its centre. Runs on every time change AND whenever the label's style
  * changes - the theme's styling pass sets the final (bigger) face after the first time is set. */
-static lv_obj_t *g_mer;   /* AM/PM in a text face, for a theme whose clock face has no letters (saver_mer_apart) */
 static void saver_clock_fit(void)
 {
     if (!g_clock) return;
@@ -819,8 +1028,9 @@ static void song_geom(intptr_t g[6][SONG_GEOM_N])
 void saver_set_clock(const char *t, const char *date)
 {
     /* re-apply layout if the style setting changed */
-    int s = cfg_get_int("saver_style", 0);
-    if (s != g_style) { g_style = s; relayout(s); }
+    int s = g_style;
+    if (cfg_get_int("saver_style", 0) != g_cfg_style) { s = g_style = saver_resolve_style(cfg_get_int("saver_style", 0)); relayout(s); }
+    if (cu_on()) { custom_ov_feed_tick(); return; }   /* Custom: its own container, no built-in label, theme hook or fit runs */
 
     /* The layout below reads what it last set (a theme's song widths, the date's place), so it ran on every 10 s tick to
      * settle. It runs when a text changed, and again while a run moves what it reads; once a run leaves that as it found
@@ -851,22 +1061,22 @@ void saver_set_clock(const char *t, const char *date)
     }
 
     /* analog hands from the live time */
-    if (g_style == 1) {
-        time_t now = time(NULL); struct tm lt; localtime_r(&now, &lt);
-        set_hand(g_hour, g_hpts, (lt.tm_hour % 12) * 30.0 + lt.tm_min * 0.5, hifi_saver() ? 60 : 70);
-        set_hand(g_min,  g_mpts, lt.tm_min * 6.0, min_hand_len());
-    }
+    analog_sync();
+
+    custom_ov_feed_tick();   /* the existing clock tick drives the Custom overlay's time, date and weather (no-op without a group) */
 }
 
 void saver_set_weather(const char *text)
 {
     if (ui_label_set_changed(g_weather, text ? text : "")) g_song_dirty = 1;
+    if(g_cp.box) custom_ov_feed_tick();
 }
 
 void saver_set_track(const char *title, const char *artist, const void *backdrop_src, const char *path)
 {
     /* The caller passes a non-NULL title iff st.have_track (NULL when no track), so key off
      * NULL-ness, not emptiness - a valid but untitled file still counts as a loaded track. */
+    custom_ov_feed_track(title, artist);   /* the Custom overlay's title and artist (no-op without a group) */
     g_have_track = (title != NULL);
     const char *p = (g_have_track && path) ? path : "";
     sharp_cover_set_source(p);
@@ -874,8 +1084,8 @@ void saver_set_track(const char *title, const char *artist, const void *backdrop
     if (ui_label_set_changed(g_track, title ? title : "")) g_song_dirty = 1;
     if (ui_label_set_changed(g_artist, artist ? artist : "")) g_song_dirty = 1;
     song_visibility();
-    if(blue_saver() && screen_current() == SCR_SAVER) blue_song_layout();
-    if(zine_saver() && screen_current() == SCR_SAVER && g_clock){
+    if(!cu_on() && blue_saver() && screen_current() == SCR_SAVER) blue_song_layout();
+    if(!cu_on() && zine_saver() && screen_current() == SCR_SAVER && g_clock){
         saver_parts_t sp = { lv_obj_get_parent(g_clock), g_clock, g_date, g_weather, g_track, g_artist, g_face, g_style };
         theme_kit()->saver(&sp);
     }

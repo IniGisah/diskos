@@ -1,5 +1,7 @@
-Copyright 2015 Google LLC. All Rights Reserved.
-(diskOS's font_intl_14/16/18/20.c embed glyphs rasterized from Noto Sans, Regular, Version 2.004.)
+Copyright 2015 Google LLC. All Rights Reserved. (Noto Sans)
+Copyright 2019 Google Inc. All Rights Reserved. (Noto Sans Hebrew)
+(diskOS's font_intl_14/16/18/20.c embed glyphs rasterized from Noto Sans, Regular, Version 2.004,
+and, new in 1.2.2, Noto Sans Hebrew, Regular, Version 3.000.)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:

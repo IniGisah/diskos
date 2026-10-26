@@ -77,11 +77,12 @@ BLOCK_ASSETS=(audiobook-np.png books.png chapters.png quicksettings.png)
 # Host-side tools taken from vendor/<TAG>/ (untracked/ignored build outputs): an EXPLICIT allowlist only.
 REQ_VENDOR=(usbboot mksquashfs unsquashfs my_write6_dram.bin disc_spl_lpddr3.bin)
 # Payload that MUST exist in the archive (committed at REF); nothing else from the working tree is added.
-REQ_PAYLOAD=(mq_ui S96diskos_select S97diskos_install S99usbserial diskos-debug.sh dropbearmulti diskos-rmguard diskos-selected diskos-bootprobe diskos-artdec diskos-launch diskos-verify.sh diskos-root.pub.pem)
+REQ_PAYLOAD=(S97diskos_names diskos-names diskos-udhcpc diskos-network-names-v1 mq_ui S96diskos_select S97diskos_install S99usbserial diskos-debug.sh dropbearmulti diskos-rmguard diskos-selected diskos-bootprobe diskos-artdec diskos-launch diskos-flashstate diskos-verify.sh diskos-root.pub.pem)
 MACOS_DYLIBS=(libusb-1.0.0.dylib liblzo2.2.dylib liblz4.1.10.0.dylib liblzma.5.dylib libzstd.1.5.7.dylib)
 # Other files that MUST be in the archive (writer + its build inputs, launcher source, verifier support).
 REQ_ARCHIVE=(flash/my_write6_dram.bin flash/my_write6.c flash/build_nand.sh flash/dram_head.bin flash/dram_head.S flash/dram_head.ld flash/dram.ld
   flash/sha256_min.h flash/disc_spl_lpddr3.bin src/launcher/diskos_launch.c build/build-launcher.sh
+  src/flashstate/diskos_flashstate.c build/build-flashstate.sh
   diskos_installer/basegate.py diskos_installer/assets/wordmark.png diskos_installer/assets/wordmark@2x.png
   diskos_installer/assets/display.png diskos_installer/assets/display@1.5x.png diskos_installer/assets/display@2x.png
   diskos_installer/assets/display.json diskos_installer/assets/disc.png diskos_installer/assets/disc@1.5x.png

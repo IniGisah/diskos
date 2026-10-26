@@ -573,6 +573,35 @@ static void lfm_queue_pop(void){
 }
 
 /* ---- result handling + drivers (main thread) ---- */
+/* Retain the latest requested account state across config rollback.
+ * Retry on the main thread, including while disabled or disconnected. */
+enum { LFM_SAVE_SESSION = 1, LFM_SAVE_CREDS = 2 };
+static unsigned g_cfg_pending;
+static int64_t g_cfg_retry_ms;
+
+static void lfm_save_config(void){
+    if(!g_cfg_pending) return;
+    cfg_begin();
+    int bad = 0;
+    if(g_cfg_pending & LFM_SAVE_CREDS){
+        bad |= cfg_set_str_deferred(LFM_CFG_API, g_api_key) < 0;
+        bad |= cfg_set_str_deferred(LFM_CFG_SEC, g_secret) < 0;
+    }
+    bad |= cfg_set_str_deferred(LFM_CFG_SK, g_sk) < 0;
+    bad |= cfg_set_str_deferred(LFM_CFG_USER, g_user) < 0;
+    int rc = cfg_commit();
+    if(rc == 0 && !bad){
+        g_cfg_pending = 0;
+    } else {
+        g_cfg_retry_ms = lfm_now_ms() + 30000;
+    }
+}
+
+static void lfm_request_config_save(unsigned fields){
+    g_cfg_pending |= fields;
+    lfm_save_config();
+}
+
 static void lfm_build_auth_url(void){
     char ka[144], ta[144];
     if(lfm_pct(g_api_key,ka,sizeof ka)<0 || lfm_pct(g_auth_token,ta,sizeof ta)<0){ g_auth_url[0]=0; return; }
@@ -583,7 +612,7 @@ static void lfm_build_auth_url(void){
  * clean re-auth instead of silently reporting "connected" until the next request fails. */
 static void lfm_clear_session(void){
     g_sk[0]=0; g_user[0]=0; g_connected=0;
-    cfg_begin(); cfg_set_str_deferred(LFM_CFG_SK,""); cfg_set_str_deferred(LFM_CFG_USER,""); cfg_commit();   /* atomic */
+    lfm_request_config_save(LFM_SAVE_SESSION);
 }
 static void lfm_handle_result(const lfm_result_t *r){
     if((r->kind==JOB_GET_TOKEN||r->kind==JOB_GET_SESSION) && r->gen!=g_gen) return;  /* stale auth */
@@ -600,7 +629,7 @@ static void lfm_handle_result(const lfm_result_t *r){
             if(strlen(r->api.session_key) < sizeof g_sk){
                 snprintf(g_sk,sizeof g_sk,"%s",r->api.session_key);
                 snprintf(g_user,sizeof g_user,"%s",r->api.username);
-                cfg_begin(); cfg_set_str_deferred(LFM_CFG_SK,g_sk); cfg_set_str_deferred(LFM_CFG_USER,g_user); cfg_commit();   /* atomic */
+                lfm_request_config_save(LFM_SAVE_SESSION);
                 g_connected=1; g_auth_state=LFM_AUTH_OK;
             } else g_auth_state=LFM_AUTH_ERR;      /* absurd key length -> refuse */
         } else if(r->ok && r->api.api_error==14){  /* pending user authorization: keep polling */
@@ -881,6 +910,8 @@ void lastfm_poll(void){
     if(g_result_ready){ res=g_result; g_result_ready=0; have=1; }
     pthread_mutex_unlock(&g_mu);
     if(have){ lfm_handle_result(&res); lfm_wipe(&res,sizeof res); }
+    if(g_cfg_pending && lfm_now_ms() >= g_cfg_retry_ms)
+        lfm_save_config();
     lfm_drive_token();
     lfm_drive_auth();
     lfm_drive_jobs();
@@ -903,7 +934,11 @@ static void lfm_start_candidate(const track_state_t *st){
     g_cur_start_unix=(long)time(NULL);
     g_np_pending=1; g_scrobbled=0; g_have_cur=1;
 }
-void lastfm_watch(const track_state_t *st){
+/* 15c: the watcher's input is a VIEW (the Cast track while casting, else the raw local state) plus an explicit play state and the source. While
+ * casting `playing` is the receiver-confirmed flag (PLAYING on the track's own media), so a failed / excluded / never-played Cast track is never a
+ * candidate and never sends Now Playing. A CAST<->LOCAL switch on the SAME path is one listening: the candidate (listened, scrobbled flag) carries over. */
+static int g_cur_cast;
+void lastfm_watch_view(const track_state_t *st, int playing, int cast){
     if(!g_inited || !g_enabled || !g_connected || !st) return;
     /* st->state is raw A2 metadata, UNRELIABLE for play-state (reports 0 while playing -- see ipc.h),
      * so use the main loop's authoritative g_playing. A track with no real playback (boot-seeded pause,
@@ -918,14 +953,21 @@ void lastfm_watch(const track_state_t *st){
         g_have_cur=0; g_cur_track[0]=0; g_cur_artist[0]=0;
         return;
     }
-    if(!ui_is_playing()){               /* track loaded but PAUSED: hold the current candidate (don't reset it,
+    if(!playing){                       /* track loaded but PAUSED: hold the current candidate (don't reset it,
                                          * don't start one, don't send Now Playing) until playback resumes. */
         if(g_have_cur) g_cur_lastpos_ms = st->position_ms;   /* absorb paused seeks so the jump isn't counted as listening on resume */
         return;
     }
-    if(!g_have_cur || strcmp(st->path,g_cur_path) || strcmp(st->title,g_cur_track) || strcmp(st->artist,g_cur_artist)){
+    if(g_have_cur && (!cast != !g_cur_cast) && !strcmp(st->path,g_cur_path)){   /* source switch mid-track: same listening, never a new candidate */
+        g_cur_cast = cast;
+        snprintf(g_cur_track,sizeof g_cur_track,"%s",st->title); snprintf(g_cur_artist,sizeof g_cur_artist,"%s",st->artist);
+        g_cur_lastpos_ms = st->position_ms;      /* the receiver's clock is not the local player's: the jump is not listening */
+        return;
+    }
+    if(!g_have_cur || strcmp(st->path,g_cur_path) || strcmp(st->title,g_cur_track) || strcmp(st->artist,g_cur_artist)
+       || (cast && g_cur_cast && cast != g_cur_cast)){   /* a new receiver media on the same path (repeat-one, replay) is a new play */
         lfm_finalize_candidate();       /* the outgoing track, if it earned it */
-        lfm_start_candidate(st);
+        lfm_start_candidate(st); g_cur_cast = cast;
         return;
     }
     /* same track: accumulate REAL playback only (ignore seeks / jumps > 4s / rewinds) */
@@ -944,6 +986,7 @@ void lastfm_watch(const track_state_t *st){
             g_scrobbled=1;
     }
 }
+void lastfm_watch(const track_state_t *st){ lastfm_watch_view(st, ui_is_playing(), 0); }   /* the local watcher, unchanged */
 int lastfm_enabled(void){ return g_enabled; }
 int lastfm_connected(void){ return g_connected; }
 int lastfm_has_creds(void){ return g_have_creds; }
@@ -955,16 +998,14 @@ void lastfm_set_credentials(const char *api_key,const char *secret){
     snprintf(g_secret ,sizeof g_secret ,"%s",secret);
     /* one atomic write for all four credential keys: a mid-run save failure can no longer leave
      * api/secret persisted without clearing the stale session (or the reverse). */
-    cfg_begin();
-    cfg_set_str_deferred(LFM_CFG_API,g_api_key); cfg_set_str_deferred(LFM_CFG_SEC,g_secret);
     g_have_creds = g_api_key[0] && g_secret[0];
     g_sk[0]=0; g_user[0]=0; g_connected=0;                 /* new app -> re-auth */
-    cfg_set_str_deferred(LFM_CFG_SK,""); cfg_set_str_deferred(LFM_CFG_USER,""); cfg_commit();
+    lfm_request_config_save(LFM_SAVE_CREDS | LFM_SAVE_SESSION);
     g_gen++; g_auth_state=LFM_AUTH_IDLE;
 }
 void lastfm_logout(void){
     g_sk[0]=0; g_user[0]=0; g_connected=0;
-    cfg_begin(); cfg_set_str_deferred(LFM_CFG_SK,""); cfg_set_str_deferred(LFM_CFG_USER,""); cfg_commit();   /* atomic */
+    lfm_request_config_save(LFM_SAVE_SESSION);
     g_gen++; g_auth_state=LFM_AUTH_IDLE;
 }
 void lastfm_auth_begin(void){

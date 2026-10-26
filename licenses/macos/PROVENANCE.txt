@@ -1,0 +1,68 @@
+Notice inputs and SHA256 of output files. Source archives were supplied offline.
+
+CPython-LICENSE.txt
+  Input: inv/files/lib_python3.12_LICENSE.txt
+  SHA256: 3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf
+CPython-Incorporated-NOTICES.txt
+  Input: selected framework LICENSE.txt plus existing shared CPython 3.12.10 incorporated terms
+  SHA256: af0dbf4797e33e3962c3129fd9ab400f003cee4983de5a88c3515d93641d7f18
+Tcl-license.terms.txt
+  Input: tcl8.6.16-src.tar.gz:tcl8.6.16/license.terms
+  SHA256: c0a69a2bfd757361ec7e6143973b103c90409316b49e9c88db26ad6388e79f16
+Tcl-Incorporated-NOTICES.txt
+  Input: tcl8.6.16-src.tar.gz (labelled verbatim licence files and credit/comment blocks)
+  SHA256: 6fe0bd78f7eabd15999270bb452683bc682fbe343e75d2ead1fe05830e83c5d4
+Tk-license.terms.txt
+  Input: tk8.6.16-src.tar.gz:tk8.6.16/license.terms
+  SHA256: 2cde822b93ca16ae535c954b7dfe658b4ad10df2a193628d1b358f1765e8b198
+Tk-Incorporated-NOTICES.txt
+  Input: tk8.6.16-src.tar.gz (labelled verbatim licence files and credit/comment blocks)
+  SHA256: 3c0393dcb0be532ca9849d493e4ea3962ec47fdb87255c746b79bf3a7c1978ab
+Tk-demos-license.terms.txt
+  Input: inv/files/lib_tk8.6_demos_license.terms
+  SHA256: 2cde822b93ca16ae535c954b7dfe658b4ad10df2a193628d1b358f1765e8b198
+PyCryptodome-LICENSE.txt
+  Input: inv/files/lib_python3.12_site-packages_pycryptodome-3.23.0.dist-info_LICENSE.rst
+  SHA256: 4e04660d77c1c64e89d79537919fb8240fa21484a7e3db29f358b2c7f84ea073
+PyCryptodome-NOTICES.txt
+  Input: /t/lv/instmacP2/licenses/PyCryptodome-3.23.0-Native-NOTICES.txt
+  SHA256: 45d0abd51a4ff1c47d1e27d8fe020bb3c075027f2b10f4b5f6e0f6ab024a17ce
+OpenSSL-LICENSE.txt
+  Input: openssl-3.0.16.tar.gz:openssl-3.0.16/LICENSE.txt
+  SHA256: 7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a
+NCurses-COPYING.txt
+  Input: ncurses-6.5.tar.gz:ncurses-6.5/COPYING
+  SHA256: b2feb54f39529abe226f709a292584fde48a2e5721559fee417d2cdd51cb7cc1
+XZ-COPYING.txt
+  Input: xz-5.2.3.tar.gz:xz-5.2.3/COPYING
+  SHA256: c4f8e14fafe458d84808a4cd8b69f94673ebe2bf8fc992291629a69ac12218f8
+liblzma-NOTICE.txt
+  Input: xz-5.2.3.tar.gz:src/liblzma/common/common.h (verbatim header)
+  SHA256: 377c6d43d868913daa2f2cf09c691f611436a5f5f80fd315c78c61cf76677551
+SQLite-NOTICE.txt
+  Input: sqlite-autoconf-3490100.tar.gz:sqlite3.c (verbatim sqliteInt.h notice)
+  SHA256: 49cf7bcb103eb3244150a23bb23d840370a4762914faf1b450072a4b03c14670
+pyinstaller_hooks_contrib-2025.9-LICENSE.txt
+  Input: inv/files/lib_python3.12_site-packages_pyinstaller_hooks_contrib-2025.9.dist-info_licenses_LICENSE
+  SHA256: 91d0baaff00773038e72c0a1fc9d5d2d38706b7a2b9c04f34296608f931b9cd0
+altgraph-0.17.4-LICENSE.txt
+  Input: inv/files/lib_python3.12_site-packages_altgraph-0.17.4.dist-info_LICENSE
+  SHA256: 6c194d6db0c64d45535d10c95142b9b0cda7b7dcc7f1ddee302b3d536f3dbe46
+macholib-1.16.3-LICENSE.txt
+  Input: inv/files/lib_python3.12_site-packages_macholib-1.16.3.dist-info_LICENSE
+  SHA256: 47082ab2bc0184123ec9f10fdf80c70723ee68f07d44382e17615c2a6ba70b09
+packaging-25.0-LICENSE.txt
+  Input: inv/files/lib_python3.12_site-packages_packaging-25.0.dist-info_licenses_LICENSE
+  SHA256: cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48
+packaging-25.0-LICENSE.APACHE.txt
+  Input: inv/files/lib_python3.12_site-packages_packaging-25.0.dist-info_licenses_LICENSE.APACHE
+  SHA256: 0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594
+packaging-25.0-LICENSE.BSD.txt
+  Input: inv/files/lib_python3.12_site-packages_packaging-25.0.dist-info_licenses_LICENSE.BSD
+  SHA256: b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5
+README.md
+  Input: Inventory explanation written from supplied Mac inputs
+  SHA256: cff7e28130a96bb4e19e1a1f3c1f8425e46eac1626f32286ce59b859215164b8
+RUNTIME_COMPONENTS.json
+  Input: Component records derived from supplied Mac inputs
+  SHA256: cf8b7a1a4ad707f654e3b5ee6e5c038b08d3a6a261dbeb96040c5ea4afcc18f7

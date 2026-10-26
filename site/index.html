@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>diskOS - Made round, from the centre out</title>
-<meta name="description" content="diskOS is a free, open-source interface for the FiiO Snowsky Disc, made for its round screen. Eight themes, Cover Flow, timed lyrics, audiobooks and search.">
+<meta name="description" content="diskOS is a free, open-source interface for the FiiO Snowsky Disc, made for its round screen. Beam your music to Cast and AirPlay speakers and TVs, with eight themes, Cover Flow, timed lyrics, audiobooks and search.">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#050506">
 <link rel="canonical" href="https://b0hemia.github.io/diskos/">
@@ -12,7 +12,7 @@
 <meta property="og:site_name" content="diskOS">
 <meta property="og:url" content="https://b0hemia.github.io/diskos/">
 <meta property="og:title" content="diskOS - Made round, from the centre out">
-<meta property="og:description" content="A free, open-source interface for the FiiO Snowsky Disc, made for its round screen. Eight themes, Cover Flow, timed lyrics, audiobooks and search.">
+<meta property="og:description" content="A free, open-source interface for the FiiO Snowsky Disc, made for its round screen. Beam your music to Cast and AirPlay speakers and TVs, with eight themes, Cover Flow, timed lyrics, audiobooks and search.">
 <meta property="og:image" content="https://b0hemia.github.io/diskos/img/og-hero.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -32,7 +32,7 @@
 <!--
 ONE STORY, FOUR ACTS, ONE LIGHT.
 1 The pressing: the page is the data side of a disc under a moving light; the real screen sits at its hub.
-2 The tracklist: the same disc settles beside eight everyday things; a laser reads the active track and the hub shows it.
+2 The tracklist: the same disc settles beside ten everyday things; a laser reads the active track and the hub shows it.
 3 Eight worlds: the screen grows, the record dissolves into halo, and scrolling sweeps the whole page through all eight themes.
 4 Lit stage: one last sweep turns the page black; the screen becomes the only light, the eight records orbit it, and the
   room takes the colour of whichever theme is in front. The install button is lit by the same light.
@@ -73,7 +73,7 @@ ONE STORY, FOUR ACTS, ONE LIGHT.
         <div class="amb"></div><div class="tex"></div>
         <p class="word">something</p>
         <img class="disc" src="img/np-something-dark.webp" alt="" width="720" height="720" loading="lazy">
-        <div class="info"><p class="name">something</p><p class="desc">Dot-matrix clock and titles, a blinking colon, dot arrows and a dotted progress ring.</p><p class="track"><span>Open Circuit</span> Decimal Choir, from Soft Errors</p></div>
+        <div class="info"><p class="name">something</p><p class="desc">Dot-matrix clock and titles, a steady colon, dot arrows and a dotted progress ring.</p><p class="track"><span>Open Circuit</span> Decimal Choir, from Soft Errors</p></div>
       </div>
       <div class="world tex-bezel" data-i="2" style="--bg:#15120e;--fg:#efe4d2;--ac:#ffa630;--a1:255,166,48;--a2:120,60,10;--face:'Share Tech Mono';--wt:400;--tr:0;--case:none">
         <div class="amb"></div><div class="tex"></div>
@@ -148,9 +148,9 @@ ONE STORY, FOUR ACTS, ONE LIGHT.
       <div class="copy hero-copy">
         <p class="kicker"><span class="brand">diskOS</span> for the FiiO Snowsky Disc</p>
         <h1 id="hero-title"><span class="ln">Made round,</span> <span class="ln">from the centre out.</span></h1>
-        <p class="lede">A new face for the FiiO Snowsky Disc, made for its round screen. Your music sits in the middle of the circle.</p>
+        <p class="lede">A new face for the FiiO Snowsky Disc, made for its round screen. Your music sits in the middle of the circle, and Beam sends it to the Cast and AirPlay speakers and TVs in your home.</p>
         <div class="actions"><a class="btn" href="https://github.com/b0hemia/diskos#install">Get diskOS</a><a class="link" href="#tracklist">Read the tracklist</a></div>
-        <p class="fine">Free and open source. Install from Linux x86-64, macOS on Apple Silicon or Windows 10/11 x64. Flashing takes about 20 minutes. Choose the stock interface for the next boot in Settings &gt; System &gt; Default UI.</p>
+        <p class="fine">Free and open source. Install from Linux x86-64, macOS on Apple Silicon or Windows 10/11 x64. Flashing takes about 20 minutes. Choose the stock interface for the next boot in Settings &gt; Device &gt; Default UI.</p>
       </div>
       <figure class="still-art hero-art">
         <div class="still-disc"><canvas class="still-gl"></canvas></div>
@@ -162,52 +162,62 @@ ONE STORY, FOUR ACTS, ONE LIGHT.
     <section class="act act-tracks" id="tracklist" aria-labelledby="tl-title">
       <div class="copy tl-head">
         <p class="kicker"><span>Side A</span> The tracklist</p>
-        <h2 id="tl-title">Eight things you can do.</h2>
+        <h2 id="tl-title">Ten things you can do.</h2>
         <p class="tl-lede">Each one made for the circle. Scroll, and the disc plays them in order.</p>
       </div>
       <ol class="tracks">
-        <li data-img="home-default-dark"><div class="tr">
+        <li data-img="tour-beam"><div class="tr">
           <span class="no">01</span>
+          <img class="thumb" src="img/tour-beam.webp" alt="The Beam picker listing a Cast speaker and an AirPlay TV, each tagged with its type" width="720" height="720" loading="lazy">
+          <div class="tx"><h3>Beam</h3><p>Send what is playing to a speaker or TV on your Wi-Fi. Pick a Cast or AirPlay device, enter the PIN if the TV asks for one, and the Disc's controls and volume drive that device while it plays.</p></div>
+        </div></li>
+        <li data-img="tour-airplay-receiving"><div class="tr">
+          <span class="no">02</span>
+          <img class="thumb" src="img/tour-airplay-receiving.webp" alt="AirPlay Receiving: the track, artist and cover sent from an iPhone, shown on the round screen" width="720" height="720" loading="lazy">
+          <div class="tx"><h3>AirPlay Receiving</h3><p>Choose AirPlay Receiving as a source, then pick the Disc from your iPhone or Mac. The track, artist and cover appear on the round screen. On firmware V2.40 and V2.57.</p></div>
+        </div></li>
+        <li data-img="home-default-dark"><div class="tr">
+          <span class="no">03</span>
           <img class="thumb" src="img/home-default-dark.webp" alt="Home in halo: the time, date and weather above the current song, with progress around the now-playing island" width="720" height="720" loading="lazy">
           <div class="tx"><h3>Home</h3><p>The time, the date and your song, at a glance. In halo, the border around your song fills as it plays.</p></div>
         </div></li>
         <li data-img="tour-library"><div class="tr">
-          <span class="no">02</span>
+          <span class="no">04</span>
           <img class="thumb" src="img/tour-library.webp" alt="Library: Songs, Albums, Artists, Genres and Playlists" width="720" height="720" loading="lazy">
           <div class="tx"><h3>Library</h3><p>A big library, one thumb. Run your finger around the rim to fly through a long list, or tap A-Z and land on the letter you want.</p></div>
         </div></li>
         <li data-img="tour-cover-flow"><div class="tr">
-          <span class="no">03</span>
+          <span class="no">05</span>
           <img class="thumb" src="img/tour-cover-flow.webp" alt="Cover Flow with After Hours Test by Caldera Lines in the centre" width="720" height="720" loading="lazy">
           <div class="tx"><h3>Cover Flow</h3><p>Some albums you know by their cover before you know their name. Flip through the artwork, tap the one in the middle to open it, or hold it to play.</p></div>
         </div></li>
         <li data-img="tour-search"><div class="tr">
-          <span class="no">04</span>
+          <span class="no">06</span>
           <img class="thumb" src="img/tour-search.webp" alt="Search: the word Between finds Between Tides by Iona Relay" width="720" height="720" loading="lazy">
           <div class="tx"><h3>Search</h3><p>Remember one word of the title? Search by song, artist or album from Home or Quick Settings, and play what you find.</p></div>
         </div></li>
         <li data-img="np-default-dark"><div class="tr">
-          <span class="no">05</span>
+          <span class="no">07</span>
           <img class="thumb" src="img/np-default-dark.webp" alt="Now Playing in halo: Between Tides by Iona Relay inside the round seek ring" width="720" height="720" loading="lazy">
           <div class="tx"><h3>Now Playing</h3><p>Playback controls and your place in the song, together on the round screen. Play, pause, skip and seek without leaving the screen.</p></div>
         </div></li>
         <li data-img="tour-lyrics-timed"><div class="tr">
-          <span class="no">06</span>
+          <span class="no">08</span>
           <img class="thumb" src="img/tour-lyrics-timed.webp" alt="Timed lyrics with the current line lit" width="720" height="720" loading="lazy">
           <div class="tx"><h3>Timed lyrics</h3><p>Sing along. Timed lyrics follow the song, and the line you are on lights up. Lyrics beside the song or inside it work offline; missing words can be looked up over Wi-Fi.</p></div>
         </div></li>
         <li data-img="feat-book-playing-dark"><div class="tr">
-          <span class="no">07</span>
+          <span class="no">09</span>
           <img class="thumb" src="img/feat-book-playing-dark.webp" alt="An audiobook playing, with buttons to skip back 15 seconds and forward 30" width="720" height="720" loading="lazy">
           <div class="tx"><h3>Audiobooks</h3><p>.m4b audiobooks get their own home in Library &gt; Books. Jump between chapters and pick up at your saved position.</p></div>
         </div></li>
         <li data-img="tour-quick-settings"><div class="tr">
-          <span class="no">08</span>
-          <img class="thumb" src="img/tour-quick-settings.webp" alt="Quick Settings with Wi-Fi, Bluetooth, EQ, Search, Rescan and Source tiles" width="720" height="720" loading="lazy">
-          <div class="tx"><h3>Quick Settings</h3><p>Pull down from the top edge: brightness, Wi-Fi, Bluetooth and EQ, together in one place. Change what you need and get straight back to listening.</p></div>
+          <span class="no">10</span>
+          <img class="thumb" src="img/tour-quick-settings.webp" alt="Quick Settings with Wi-Fi, Bluetooth, EQ, Search and Source tiles, and a lit Beam tile showing Bedroom TV" width="720" height="720" loading="lazy">
+          <div class="tx"><h3>Quick Settings</h3><p>Pull down from the top edge: brightness, Wi-Fi, Bluetooth and EQ, together in one place. Add a Beam tile to send the music to a speaker or TV. Change what you need and get straight back to listening.</p></div>
         </div></li>
       </ol>
-      <p class="copy also">Also on the record: Last.fm scrobbling, playlists with M3U import and export, Up Next, Song Info, a sleep timer and signed app updates over Wi-Fi. diskOS changes what you see and touch; the sound still comes from the Disc's own stock audio engine.</p>
+      <p class="copy also">Also on the record: Last.fm scrobbling, playlists with M3U import and export, Up Next, Song Info, a sleep timer, your own picture or animated GIF as the screensaver, editable Disc and Bluetooth names, and signed app updates over Wi-Fi with an optional update check. Swipe up from the bottom edge of the screen to go straight Home. Local playback uses the Disc's stock audio engine. Beam plays through the selected receiver.</p>
       <div class="tl-tail"></div>
     </section>
 
@@ -240,7 +250,7 @@ ONE STORY, FOUR ACTS, ONE LIGHT.
             <div class="wl-tx"><h3>halo</h3><p>Rounded controls, a cover-centred Now Playing view, a large Home clock and border progress around the now-playing island.</p><p class="track"><span>Between Tides</span> Iona Relay, from Still Current</p></div></li>
           <li id="something" class="wl tex-dots" style="--bg:#000000;--fg:#f2f2f2;--ac:#ff4a3a;--a1:255,74,58;--face:'Doto';--wt:700;--tr:-.02em;--case:none"><div class="tex"></div>
             <img src="img/np-something-dark.webp" alt="something Now Playing: Open Circuit by Decimal Choir, dot-matrix title and a dotted progress ring" width="720" height="720" loading="lazy">
-            <div class="wl-tx"><h3>something</h3><p>Dot-matrix clock and titles, a blinking colon, dot arrows and a dotted progress ring.</p><p class="track"><span>Open Circuit</span> Decimal Choir, from Soft Errors</p></div></li>
+            <div class="wl-tx"><h3>something</h3><p>Dot-matrix clock and titles, a steady colon, dot arrows and a dotted progress ring.</p><p class="track"><span>Open Circuit</span> Decimal Choir, from Soft Errors</p></div></li>
           <li id="hi-fi" class="wl tex-bezel" style="--bg:#15120e;--fg:#efe4d2;--ac:#ffa630;--a1:255,166,48;--face:'Share Tech Mono';--wt:400;--tr:0;--case:none"><div class="tex"></div>
             <img src="img/np-hi-fi-dark.webp" alt="hi-fi Now Playing: Amber Window by Caldera Lines, with amber segment time and bezel ticks" width="720" height="720" loading="lazy">
             <div class="wl-tx"><h3>hi-fi</h3><p>Faceplate rows with amber press lights, a segmented clock and bezel-tick progress.</p><p class="track"><span>Amber Window</span> Caldera Lines, from After Hours Test</p></div></li>
@@ -283,7 +293,7 @@ ONE STORY, FOUR ACTS, ONE LIGHT.
       <div class="copy close-copy">
         <div id="install"><h2 id="close-title">Put diskOS<br>on your Disc.</h2></div>
         <div class="close-side">
-          <p>Install from Linux x86-64, macOS on Apple Silicon or Windows 10/11 x64. Flashing takes about 20 minutes. Before flashing, the installer saves a stock restore image built from your official firmware ZIP. Choose Settings &gt; System &gt; Default UI &gt; Stock to use the stock interface on the next boot. Works with stock firmware V2.09, V2.28, V2.40 and V2.57. Playlist and book playback may fail on V2.09.</p>
+          <p>Install from Linux x86-64, macOS on Apple Silicon or Windows 10/11 x64. Flashing takes about 20 minutes. The installer can download and verify the official FiiO firmware for you. Before flashing, it saves a stock restore image built from that firmware. Choose Settings &gt; Device &gt; Default UI &gt; Stock to use the stock interface on the next boot. Works with stock firmware V2.09, V2.28, V2.40 and V2.57; AirPlay Receiving needs V2.40 or V2.57. Playlist and book playback may fail on V2.09.</p>
           <div class="actions"><a class="btn btn-big" href="https://github.com/b0hemia/diskos#install">Get diskOS</a><a class="link" href="https://github.com/b0hemia/diskos">Read the source</a></div>
           <p class="fine">The eight records around the screen show the Vinyl screensaver in each theme. On the Disc, cover art turns about once every 27 seconds while playing, with the screensaver visible and the screen on.</p>
         </div>
@@ -299,6 +309,7 @@ ONE STORY, FOUR ACTS, ONE LIGHT.
     <a class="link" href="https://github.com/b0hemia/diskos">Source</a>
     <a class="link" href="https://github.com/b0hemia/diskos/releases/latest">Latest release</a>
     <a class="link" href="https://github.com/b0hemia/diskos/issues">Report a problem</a>
+    <a class="link" href="https://ko-fi.com/b0hemia">Support on Ko-fi</a>
   </nav>
 </footer>
 </body>

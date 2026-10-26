@@ -211,7 +211,7 @@ class InstallHookSupervisorTests(unittest.TestCase):
             script = Path(temp) / 'S97test'
             started = Path(temp) / 'worker-started'
             marker = Path(temp) / 'worker-finished'
-            script.write_text('#!/bin/sh\n' + wrapper +
+            script.write_text('#!/bin/sh\n' + wrapper.replace('/tmp/', temp + '/') +
                               'echo $$ > "%s"\nsleep 60\ntouch "%s"\n' % (started, marker))
             script.chmod(0o755)
             start = time.monotonic()
@@ -261,7 +261,7 @@ class InstallHookSupervisorTests(unittest.TestCase):
             script = Path(temp) / 'S97test'
             # the descendant records its pid, then becomes a long sleep with that same pid; the worker
             # records its own pid and becomes a long sleep too, so cleanup can find both
-            script.write_text('#!/bin/sh\n' + wrapper +
+            script.write_text('#!/bin/sh\n' + wrapper.replace('/tmp/', temp + '/') +
                               '/bin/sh -c \'echo $$ > "%s"; exec sleep 300\' &\n'
                               'echo $$ > "%s"\nexec sleep 60\n' % (child, worker))
             script.chmod(0o755)
@@ -297,6 +297,19 @@ _stock_location = os.environ.get('DISKOS_STOCK_FIIO_INIT')
 _STOCK_FIIO_INIT = Path(_stock_location) if _stock_location else None
 
 
+def _launch_block(text):
+    """Keep the real patched launches, ending before the next pinned stock section.
+
+    The naming prelude and helpers can contain their own top-level conditionals;
+    their first `fi` is not the end of the launch decision.
+    """
+    end = '\nif [ "$BUILD_TYPE" = "debug" ]; then\n'
+    if text.count(end) != 1:
+        raise ValueError('expected exactly one stock post-launch debug section')
+    start = text.index(imagebuild._GUARD_PATH_LINE)
+    return text[start:text.index(end, start)]
+
+
 @unittest.skipUnless(_STOCK_FIIO_INIT is not None and _STOCK_FIIO_INIT.is_file(),
                      'Set DISKOS_STOCK_FIIO_INIT to a pristine stock fiio_init.sh (not shipped in this repo)')
 @unittest.skipUnless(os.name != 'nt' and os.access('/bin/sh', os.X_OK), 'needs POSIX /bin/sh')
@@ -319,6 +332,22 @@ class BootHookValidatorOnRealFirmwareTests(unittest.TestCase):
         out = self.patched()
         imagebuild._check_boot_script_output(out, out)
         subprocess.run(['/bin/sh', '-n', '-c', out.decode()], check=True)
+
+    def test_extracted_block_keeps_helpers_and_all_launch_branches(self):
+        # This also runs on hosts where namespace execution is unavailable.
+        block = _launch_block(self.patched().decode())
+        self.assertIn(imagebuild._OTA_HELPERS, block)
+        self.assertIn(imagebuild._OTA_BRANCH, block)
+        self.assertIn('el' + imagebuild._IF_LINE + '; then\n', block)
+        gate = ('elif ' + imagebuild._SELECT_LINE +
+                ' && [ -f /tmp/.diskos_ready ] && [ "$COREDUMP_FLAG" == "1" ]; then\n')
+        self.assertEqual(block.count(gate), 1)
+        self.assertEqual(block.count('    /usr/data/mq_ui &\n'), 2)
+        self.assertEqual(block.count('    /usr/data/mq_player &\n'), 3)
+        self.assertTrue(block.rstrip().endswith('    mq_ui &\n    sleep 2\n    mq_player &\nfi'))
+        self.assertNotIn('while true', block)
+        self.assertNotIn('PID_PLAYER=', block)
+        subprocess.run(['/bin/sh', '-n', '-c', block], check=True)
 
     def test_patch_is_deterministic_and_keeps_the_guard_export_first(self):
         out = self.patched()
@@ -415,7 +444,7 @@ class DecisionFileCheckTests(unittest.TestCase):
 
     def test_all_boot_decision_files_are_listed_and_shipped(self):
         names = {n for _, n in imagebuild._BOOT_DECISION_FILES}
-        self.assertEqual(names, {'S96diskos_select', 'S97diskos_install', 'diskos-selected', 'diskos-bootprobe', 'diskos-launch'})
+        self.assertEqual(names, {'S96diskos_select', 'S97diskos_install', 'diskos-selected', 'diskos-bootprobe', 'diskos-launch', 'diskos-flashstate'})
         for n in names:
             p = Path(__file__).resolve().parents[1] / 'payload' / n
             self.assertTrue(p.is_file(), n)
@@ -459,12 +488,14 @@ class BootHookExecutionTests(unittest.TestCase):
             shutil.copy(_STOCK_FIIO_INIT, f)
             imagebuild._patch_fiio_init(str(f), None)
             text = f.read_text()
-        a = text.index(imagebuild._GUARD_PATH_LINE)
-        b = text.index('\nfi\n', a) + len('\nfi\n')
-        return text[a:b]
+        return _launch_block(text)
 
     def boot(self, record, ready=True, helper=True, coredump='0', data_files=('mq_ui', 'mq_player'), block=None):
-        with tempfile.TemporaryDirectory(prefix='diskos-hookexec-', dir='/var/tmp') as t:   # /tmp is replaced inside the namespace
+        # /tmp is replaced inside the namespace; allow a private scratch directory outside it.
+        scratch = Path(os.environ.get('TMPDIR', '/var/tmp')).resolve()
+        if scratch == Path('/tmp') or Path('/tmp') in scratch.parents:
+            scratch = Path('/var/tmp')
+        with tempfile.TemporaryDirectory(prefix='diskos-hookexec-', dir=scratch) as t:
             t = Path(t)
             data = t / 'usrdata'
             data.mkdir()

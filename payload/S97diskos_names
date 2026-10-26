@@ -1,0 +1,8 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# After S97diskos_install; before S97zavahi and S98FIIO. No retry.
+[ "$1" = start ] || exit 0
+/opt/diskos/bin/diskos-selected || exit 0
+[ -f /tmp/.diskos_ready ] || exit 0
+/opt/diskos/bin/diskos-names
+exit 0

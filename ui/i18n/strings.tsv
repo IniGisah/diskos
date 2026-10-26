@@ -9,8 +9,25 @@ Playback	播放	播放	再生	재생	Reproducción	Reprodução	Riproduzione	Wie
 Audio	音频	音訊	オーディオ	오디오	Audio	Áudio	Audio	Audio	Audio	Звук
 Display	显示	顯示	表示	화면	Pantalla	Ecrã	Schermo	Anzeige	Affichage	Экран
 Network	网络	網路	ネットワーク	네트워크	Red	Rede	Rete	Netzwerk	Réseau	Сеть
-System	系统	系統	システム	시스템	Sistema	Sistema	Sistema	System	Système	Система
 Library	音乐库	音樂庫	ライブラリ	라이브러리	Música	Biblioteca	Libreria	Musik	Musique	Медиатека
+Controls	控制	控制	コントロール	조작	Controles	Controlos	Controlli	Steuerung	Commandes	Управление
+Battery & Power	电池和电源	電池與電源	バッテリーと電源	배터리 및 전원	Batería y energía	Bateria e energia	Batteria e alimentazione	Akku und Energie	Batterie et alimentation	Батарея и питание
+Device	设备	裝置	デバイス	기기	Dispositivo	Dispositivo	Dispositivo	Gerät	Appareil	Устройство
+Playing music	播放音乐	播放音樂	音楽の再生	노래 재생	Reproducir música	Reproduzir música	Riproduzione musica	Musik abspielen	Lecture de musique	Воспроизведение музыки
+Bedtime	睡前	睡前	就寝前	수면 전	Antes de dormir	Antes de dormir	Prima di dormire	Schlafenszeit	Au coucher	Перед сном
+Sound	声音	聲音	サウンド	사운드	Sonido	Som	Suono	Klang	Son	Звук
+Output limits	输出限制	輸出限制	出力制限	출력 제한	Límites de salida	Limites de saída	Limiti di uscita	Ausgabegrenzen	Limites de sortie	Ограничения вывода
+Screen	屏幕	螢幕	画面	화면	Pantalla	Ecrã	Schermo	Bildschirm	Écran	Экран
+Music and Home	音乐和主页	音樂與主頁	ミュージックとホーム	노래 및 홈	Música e inicio	Música e início	Musica e Home	Musik und Start	Musique et accueil	Музыка и главный экран
+Browsing	查看	檢視	ブラウズ	보기	Navegación	Navegação	Navigazione	Durchsuchen	Navigation	Просмотр
+Artwork and lyrics	封面和歌词	封面與歌詞	ジャケットと歌詞	앨범 아트 및 가사	Carátulas y letras	Capas e letras	Copertine e testi	Cover und Songtexte	Pochettes et paroles	Обложки и тексты
+Maintenance	管理	管理	メンテナンス	정리	Mantenimiento	Manutenção	Manutenzione	Wartung	Maintenance	Обслуживание
+Language and clock	语言和时钟	語言與時鐘	言語と時計	언어 및 시계	Idioma y reloj	Idioma e relógio	Lingua e orologio	Sprache und Uhr	Langue et horloge	Язык и часы
+Startup	启动	啟動	起動	시작	Inicio	Arranque	Avvio	Start	Démarrage	Запуск
+Information	信息	資訊	情報	정보	Información	Informação	Informazioni	Informationen	Informations	Информация
+Updates	更新	更新	アップデート	업데이트	Actualizaciones	Atualizações	Aggiornamenti	Updates	Mises à jour	Обновления
+Audio Source	音频源	音訊來源	オーディオソース	오디오 소스	Fuente de audio	Fonte de áudio	Sorgente audio	Audioquelle	Source audio	Источник звука
+%d of %d tiles selected	已选 %d / %d 个磁贴	已選 %d / %d 個圖磚	タイル %d / %d 選択中	타일 %d / %d 선택됨	%d de %d iconos seleccionados	%d de %d atalhos selecionados	%d di %d riquadri selezionati	%d von %d Kacheln gewählt	%d tuiles sur %d sélectionnées	Выбрано плиток: %d из %d
 Songs	歌曲	歌曲	曲	노래	Canciones	Músicas	Brani	Titel	Titres	Песни
 Albums	专辑	專輯	アルバム	앨범	Álbumes	Álbuns	Album	Alben	Albums	Альбомы
 Artists	艺术家	藝人	アーティスト	아티스트	Artistas	Artistas	Artisti	Interpreten	Artistes	Исполнители
@@ -33,7 +50,6 @@ End of queue - repeats from start	队列末尾 - 从头重复	佇列末尾 - 從
 Options	选项	選項	オプション	옵션	Opciones	Opções	Opzioni	Optionen	Options	Параметры
 Add to Playlist	添加到播放列表	加入播放清單	プレイリストに追加	재생목록에 추가	Añadir a lista	Adicionar à lista	Aggiungi a playlist	Zur Wiedergabeliste	Ajouter à la playlist	В плейлист
 Chapters	章节	章節	チャプター	챕터	Capítulos	Capítulos	Capitoli	Kapitel	Chapitres	Главы
-Working Mode	工作模式	工作模式	動作モード	작동 모드	Modo de trabajo	Modo de trabalho	Modalità di lavoro	Betriebsmodus	Mode de travail	Режим работы
 Custom EQ	自定义均衡器	自訂等化器	カスタムEQ	사용자 EQ	EQ personalizado	EQ personalizado	EQ personalizzato	Eigener EQ	Égaliseur perso	Свой эквалайзер
 Accent	强调色	強調色	アクセント	강조색	Acento	Cor de destaque	Accento	Akzent	Accent	Акцент
 Bluetooth	蓝牙	藍牙	Bluetooth	블루투스	Bluetooth	Bluetooth	Bluetooth	Bluetooth	Bluetooth	Bluetooth
@@ -61,12 +77,12 @@ Outdoor Mode	户外模式	戶外模式	屋外モード	야외 모드	Modo exteri
 Track Numbers	曲目编号	曲目編號	トラック番号	트랙 번호	Números de pista	Números das faixas	Numeri di traccia	Titelnummern	Numéros de piste	Номера треков
 Online Album Art	在线专辑封面	線上專輯封面	オンラインジャケット	온라인 앨범 아트	Carátulas en línea	Capas online	Copertine online	Online-Cover	Pochettes en ligne	Обложки из сети
 Online Lyrics	在线歌词	線上歌詞	オンライン歌詞	온라인 가사	Letras en línea	Letras online	Testi online	Online-Songtexte	Paroles en ligne	Тексты из сети
-Now Playing	正在播放	正在播放	再生中	재생 중	Reproduciendo		In riproduzione	Aktuelle Wiedergabe	Lecture en cours	Сейчас играет
+Now Playing	正在播放	正在播放	再生中	재생 중	Reproduciendo	A reproduzir	In riproduzione	Jetzt läuft	Lecture en cours	Сейчас играет
 Album View	专辑视图	專輯檢視	アルバム表示	앨범 보기	Vista de álbumes		Vista album	Albumansicht	Vue des albums	Вид альбомов
 Accent Colour	强调色	強調色	アクセントカラー	강조 색상	Color de acento		Colore accento	Akzentfarbe	Couleur d'accent	Цвет акцента
 Album Art Cache	封面缓存	封面快取	ジャケットキャッシュ	앨범 아트 캐시	Caché de carátulas		Cache copertine	Cover-Cache	Cache des pochettes	Кэш обложек
 Screensaver	屏保	螢幕保護	スクリーンセーバー	화면 보호기	Salvapantallas		Salvaschermo	Bildschirmschoner	Économiseur d'écran	Заставка
-Saver Style	屏保样式	螢幕保護樣式	セーバーの種類	보호기 스타일	Estilo de salvapantallas		Stile salvaschermo	Schonerstil	Style d'écran de veille	Стиль заставки
+Saver Style	屏保样式	螢幕保護樣式	セーバーの種類	보호기 스타일	Estilo	Estilo	Stile	Schonerstil	Style	Стиль заставки
 Screen Off	息屏	關閉螢幕	画面オフ	화면 끄기	Apagar pantalla		Spegni schermo	Bildschirm aus	Extinction écran	Выкл. экрана
 24-Hour Time	24小时制	24小時制	24時間表示	24시간제	Formato 24 h		Formato 24 ore	24-Stunden-Format	Format 24 h	24-часовой формат
 Animations	动画	動畫	アニメーション	애니메이션	Animaciones		Animazioni	Animationen	Animations	Анимации
@@ -84,8 +100,6 @@ Set Date & Time	设置日期和时间	設定日期與時間	日付と時刻を�
 Time Zone	时区	時區	タイムゾーン	시간대	Zona horaria	Fuso horário	Fuso orario	Zeitzone	Fuseau horaire	Часовой пояс
 Restart	重启	重新啟動	再起動	다시 시작	Reiniciar	Reiniciar	Riavvia	Neustart	Redémarrer	Перезапуск
 Debug Mode	调试模式	除錯模式	デバッグモード	디버그 모드	Modo de depuración	Modo de depuração	Modalità debug	Debug-Modus	Mode débogage	Режим отладки
-Temperature	温度	溫度	温度	온도	Temperatura	Temperatura	Temperatura	Temperatur	Température	Температура
-About	关于	關於	情報	정보	Acerca de	Sobre	Info	Info	À propos	О системе
 Sequential	顺序播放	順序播放	順次再生	순차 재생	Secuencial	Sequencial	Sequenziale	Der Reihe nach	Séquentiel	По порядку
 Shuffle	随机播放	隨機播放	シャッフル	셔플	Aleatorio	Aleatório	Casuale	Zufall	Aléatoire	Вперемешку
 Repeat One	单曲循环	單曲循環	1曲リピート	한 곡 반복	Repetir una	Repetir uma	Ripeti uno	Titel wiederholen	Répéter un titre	Повтор трека
@@ -167,6 +181,7 @@ Removed from Favourites	已从收藏中移除	已從收藏中移除	お気に入
 Sleep timer off	睡眠定时已关闭	睡眠計時已關閉	スリープタイマーをオフにしました	수면 타이머 꺼짐	Temporizador desactivado	Temporizador desligado	Timer spento	Schlaftimer aus	Minuterie désactivée	Таймер сна выключен
 Sleep at end of chapter	章节结束时睡眠	章節結束時睡眠	チャプター終了でスリープ	챕터 끝에서 수면	Dormir al final del capítulo		Sospendi a fine capitolo	Schlaf am Kapitelende	Veille à la fin du chapitre	Сон в конце главы
 Return to local playback first	请先返回本地播放	請先返回本機播放	先にローカル再生に戻してください	먼저 로컬 재생으로 돌아가세요	Vuelve antes a la reproducción local		Torna prima alla riproduzione locale	Erst zur lokalen Wiedergabe wechseln	Revenez d'abord à la lecture locale	Сначала вернитесь к локальному воспроизведению
+Return to Local first	请先返回本地播放	請先返回本機播放	先にローカル再生に戻してください	먼저 로컬 재생으로 돌아가세요	Vuelve antes a local	Volte primeiro ao local	Torna prima alla riproduzione locale	Erst zur lokalen Wiedergabe wechseln	Revenez d'abord à la lecture locale	Сначала вернитесь к локальному воспроизведению
 Couldn't seek - try again	无法跳转，请重试	無法跳轉，請重試	シークできません。もう一度お試しください	이동할 수 없습니다. 다시 시도하세요	No se pudo avanzar, inténtalo de nuevo		Impossibile spostarsi, riprova	Suchen fehlgeschlagen, erneut versuchen	Impossible de se déplacer, réessayez	Не удалось перемотать, повторите
 Player busy - try again	播放器繁忙，请重试	播放器忙碌中，請重試	プレーヤーがビジー状態です。もう一度お試しください	플레이어가 사용 중입니다. 다시 시도하세요	Reproductor ocupado, inténtalo de nuevo	Leitor ocupado - tente novamente	Lettore occupato, riprova	Player beschäftigt, erneut versuchen	Lecteur occupé, réessayez	Плеер занят, повторите
 No track playing	没有正在播放的曲目	沒有正在播放的曲目	再生中の曲はありません	재생 중인 곡 없음	Ninguna pista en reproducción	Nenhuma faixa em reprodução	Nessun brano in riproduzione	Kein Titel wird gespielt	Aucun titre en lecture	Ничего не играет
@@ -183,7 +198,7 @@ Playlist created	已创建播放列表	已建立播放清單	プレイリスト�
 Couldn't apply EQ	无法应用均衡器	無法套用等化器	EQを適用できませんでした	EQ를 적용할 수 없음	No se pudo aplicar el EQ		Impossibile applicare l'EQ	EQ konnte nicht angewendet werden	Impossible d'appliquer l'égaliseur	Не удалось применить эквалайзер
 EQ off	均衡器已关闭	等化器已關閉	EQオフ	EQ 꺼짐	EQ desactivado	EQ desligado	EQ disattivato	EQ aus	Égaliseur désactivé	Эквалайзер выключен
 Not available in books	有声书中不可用	有聲書中無法使用	ブックでは使用できません	책에서는 사용할 수 없음	No disponible en libros		Non disponibile nei libri	In Büchern nicht verfügbar	Indisponible dans les livres	Недоступно в книгах
-Not supported on this firmware yet	此固件暂不支持	此韌體暫不支援	このファームウェアはまだ非対応です	이 펌웨어는 아직 지원하지 않음	Aún no compatible con este firmware		Non ancora supportato da questo firmware	Von dieser Firmware noch nicht unterstützt	Pas encore pris en charge par ce firmware	Пока не поддерживается этой прошивкой
+Not supported on this firmware yet	此固件暂不支持	此韌體暫不支援	このファームウェアはまだ非対応です	이 펌웨어는 아직 지원하지 않음	Aún no compatible con este firmware	Ainda não suportado por este firmware	Non ancora supportato da questo firmware	Von dieser Firmware noch nicht unterstützt	Pas encore pris en charge par ce firmware	Пока не поддерживается этой прошивкой
 Turn off a tile first	请先关闭一个磁贴	請先關閉一個圖磚	先にタイルを1つオフにしてください	먼저 타일 하나를 끄세요	Desactiva antes un icono		Disattiva prima un riquadro	Zuerst eine Kachel ausschalten	Désactivez d'abord une tuile	Сначала отключите одну плитку
 Wi-Fi off	无线网络已关闭	無線網路已關閉	Wi-Fiオフ	Wi-Fi 꺼짐	Wi-Fi desactivado	Wi-Fi desligado	Wi-Fi disattivato	WLAN aus	Wi-Fi désactivé	Wi-Fi выключен
 Turning on Wi-Fi...	正在开启无线网络...	正在開啟無線網路...	Wi-Fiをオンにしています...	Wi-Fi 켜는 중...	Activando Wi-Fi...		Attivazione Wi-Fi...	WLAN wird eingeschaltet...	Activation du Wi-Fi...	Включение Wi-Fi...
@@ -216,82 +231,16 @@ Couldn't change it - try again	无法更改，请重试	無法變更，請重試
 30 sec	30秒	30秒	30秒	30초	30 s		30 s	30 Sek.	30 s	30 сек
 Keep this orientation?						Manter esta orientação?				
 Reverting in						A reverter em				
-The drawer shows up to 6 tiles (5 with playback controls).						O painel mostra até 6 atalhos (5 com controlos de reprodução).				
-Album covers preload in the background so browsing stays smooth. Per-track art is decoded only as you play it (default).										
-Covers preload, plus every track's art is pre-decoded while idle. Decoding can warm the player; it pauses automatically if it gets hot.										
-Covers preload, plus every track's art is pre-decoded while idle AND charging. Decoding can warm the player; it pauses automatically if it gets hot.										
-Play through the list in order, then stop.										
-Play tracks in a random order.	随机顺序播放曲目。	隨機順序播放曲目。	曲をランダムな順序で再生します。		Reproduce las pistas en orden aleatorio.	Reproduz as faixas por ordem aleatória.	Riproduce i brani in ordine casuale.	Spielt Titel in zufälliger Reihenfolge ab.	Lit les titres dans un ordre aléatoire.	Воспроизводит треки в случайном порядке.
-Repeat the current track over and over.	重复播放当前曲目。	重複播放目前曲目。	現在の曲を繰り返し再生します。		Repite la pista actual.	Repete a faixa atual.	Ripete il brano corrente.	Wiederholt den aktuellen Titel.	Répète le titre en cours.	Повторяет текущий трек.
-Loop the whole list when it ends.										
-Play the current track once, then stop.										
-Album cover shown as a rounded square.										
-Spinning vinyl record while a track plays.										
-How the player advances through tracks.										
-Tone preset sent to the player; audible effect is still being verified.										
-Adjust the 10-band custom EQ. Applies live and saves on the device.										
-The player auto-selects the DSD mode; this control isn't user-adjustable yet.										
-On power-on: Off = start fresh, Position = resume the exact spot, Song = reopen the last track.										
-Group the Artists list by each song's artist, or by its album artist - the same choice as the stock player.										
-When an album, artist, genre or folder finishes, keep playing the next one. Works with Sequential, Shuffle and Loop All.										
-Switch the audio source: local playback, USB DAC, Bluetooth receiving, or USB storage.										
-Headphone output gain. High drives demanding headphones louder.										
-CS43131 digital filter roll-off. A subtle tone/transient tradeoff.										
-Level the volume across tracks. Track uses each song's gain; Album keeps an album's relative dynamics.										
-Dynamic Range Enhancement (CS43131) for quieter listening.										
-Play tracks with no silent gap between them.			曲間を空けずに再生します。		Reproduce las pistas sin pausas.	Reproduz as faixas sem pausas.	Riproduce i brani senza pause.	Spielt Titel ohne Pause dazwischen.	Lit les titres sans blanc entre eux.	Воспроизводит треки без пауз между ними.
-Cap the maximum volume level (protects your ears / headphones).										
-Left/right channel balance. 0 = centred; negative = left, positive = right.										
-Send audio to the digital SPDIF output instead of the internal DAC. Playback pauses for a moment while it switches.										
-Screen backlight level. While Outdoor Mode is on the screen stays at full brightness.										
-Colour theme for the whole interface. Each has dark and light screens (see Appearance).										
-Dark or light screens. Changing it redraws the screen in a moment; music keeps playing.										
-Size of list and body text: Small, Medium or Large. Titles and clocks keep their size. The screen redraws in a moment.										
-Turn the picture and touch clockwise: Normal, 90, 180 or 270 degrees. Stored by the player, as in the stock menu.										
-Light screens at full brightness, easier to read in sunlight. Uses more battery. Turning it off returns your own brightness.										
-Show each song's track number in album lists.										
-Songs with no cover of their own get one from the internet (Wi-Fi). Each album is looked up once; playback is never touched.										
-Songs with no lyrics of their own (no .lrc file, none in the song's tags) are looked up on lrclib.net (Wi-Fi). Off stops diskOS's own lookup; lyrics from the SD card or the song's tags still show.										
-Choose which tiles appear in the pull-down Quick Settings drawer.										
-Album art style on the Now Playing screen.										
-How the Albums list looks: a text list, or a cover flow you flick through.										
-Now Playing accent: derived from album art, or any fixed colour you pick.										
-Pre-decode album art so covers load instantly. Background decoding can warm the player; it throttles on heat.										
-Idle time before the clock screensaver appears and the screen dims.										
-Screensaver look: Cover art, Analog clock, Minimal, Digital, or spinning Vinyl.										
-How long after the screensaver the screen turns fully off.										
-Use a 24-hour clock instead of AM/PM.										
-Slide animations between screens.										
+For demanding headphones										
+Digital filter shape										
+Evens out track volume										
+Dynamic Range Enhancement										
+Loads covers in advance										
+Text encoding of old tags										
 The colour of the Disc drawn on the startup screen. Set it to match yours.										
-Show the weather glance on the home screen and screensaver (tap it to open the full forecast). Off skips the background fetch to save battery.										
-Swipe distance needed to go back. Lower is more sensitive.										
-Scan for and connect to Wi-Fi networks.										
-Pair Bluetooth devices. Audio routes to connected headphones or speakers (SBC, beta).										
 Codec for Bluetooth headphones, as in the stock player. Applies the next time the headphones connect. If they lack the codec, SBC is used. AAC and LDAC are heavier for this player and may stutter.										
-Interface language. Song, artist and album names are always shown as they are tagged.										
-Pause playback, or shut the device down (see When Sleep Ends), after this long. Resets on restart.										
-What the Sleep Timer does. Shut down closes the card safely first, then powers the device off.										
-Power the device off after this long with nothing playing and no touch or key press. Closes the card safely first.										
-The player's Charging optimization: stops charging at about 80% to slow battery wear.										
-What the volume keys do on a single press: adjust the volume or switch track. Stored by the player, as in the stock menu.										
-What the volume keys do on a double press: adjust the volume or switch track.										
-What the volume keys do when held: adjust the volume or switch track.										
-Re-scan the SD card for new or removed music.										
-Import .m3u / .m3u8 playlists found on the SD card.										
-Which UI boots by default. To boot the other one, hold Vol-Up from power-on until it appears.										
-Set the time and time zone from the internet whenever Wi-Fi connects. A change applies after the next restart.										
-Set the clock by hand. With Automatic Time on, Wi-Fi may correct it later.										
-Automatic follows your location when Wi-Fi connects (with Automatic Time on). Pick a zone to set it yourself.										
-Restart the device. Boots your default UI; hold Vol-Up for the other one.										
-Model, stock firmware, diskOS build, MAC addresses, storage and battery.										
-Look for a file on the SD card named like a stock update and show how it is used. Information only: diskOS never runs it.										
-Look up the newest diskOS release on GitHub (needs Wi-Fi). If it carries a signed update, download and verify it, then restart to finish. Nothing changes until you confirm.										
 Put diskOS's look and behaviour settings back to defaults. Music, Wi-Fi, Bluetooth, Last.fm, EQ and audio settings are kept.										
-Enable temporary SSH over Wi-Fi (fresh random password) for debugging. Off by default.										
-Battery/board temperature from the fuel gauge (this SoC exposes no core sensor).										
-diskOS - a custom music player UI. The code in brackets identifies this exact build.										
 Play	播放	播放	再生	재생	Reproducir	Reproduzir	Riproduci	Abspielen	Lire	Играть
-Screen redraws after selection.					La pantalla se redibuja.	O ecrã é atualizado.	Lo schermo si aggiorna.	Bildschirm wird neu gezeichnet.	L'écran se redessine.	Экран обновится после выбора.
 Keep diskOS %s?										
 This update has been running for a few minutes. Keep it, or go back to the previous version (the device restarts).										
 Go back										
@@ -299,7 +248,6 @@ Keep
 Restart to go back to the previous version.										
 Couldn't save your choice. Try again.										
 Allow diskOS Updates										
-diskOS only updates when you tap Update diskOS, and only with signed releases.										
 Not supported on this install										
 diskOS %s is available (you have %s). Updates are turned off in Settings. Turn on Allow diskOS Updates, or install it with the installer from github.com/b0hemia/diskos.										
 diskOS updates										
@@ -308,7 +256,253 @@ Discard
 Turn off updates?										
 Turning updates off discards the downloaded update.										
 Update discarded. Updates are off.										
-Old tags	旧标签	舊標籤	古いタグ	이전 태그	Etiquetas antiguas	Etiquetas antigas	Tag vecchi	Alte Tags	Anciens tags	Старые теги
+Tag Encoding	标签字符集	標籤字元集	タグの文字コード	태그 문자	Codificación de etiquetas	Codificação de etiquetas	Codifica dei tag	Tag-Kodierung	Encodage des tags	Кодировка тегов
+Stock Update Guide	官方更新指南	原廠更新指南	標準アップデート手順	기본 업데이트 정보	Guía de actualización original	Guia de atualização original	Guida aggiornamento stock	Anleitung Stock-Update	Guide de mise à jour d'origine	Руководство по обновлению
 Western	西欧	西歐	西欧	서유럽	Occidental	Ocidental	Occidentale	Westeuropäisch	Occidental	Западные
 Cyrillic	西里尔	西里爾	キリル文字	키릴 문자	Cirílico	Cirílico	Cirillico	Kyrillisch	Cyrillique	Кириллица
-Legacy text: guess, Latin-1 or CP1251. Rescan Library to apply.	旧文本：自动猜测、Latin-1 或 CP1251。重新扫描音乐库以应用。	舊文字：自動猜測、Latin-1 或 CP1251。重新掃描音樂庫以套用。	古い文字：自動判定、Latin-1、CP1251。適用には再スキャン。	이전 텍스트: 자동 감지, Latin-1 또는 CP1251. 적용하려면 라이브러리를 다시 검색하세요.	Texto antiguo: Auto, Latin-1 o CP1251. Reescanea la biblioteca para aplicar.	Texto antigo: Auto, Latin-1 ou CP1251. Reanalise a biblioteca para aplicar.	Testo vecchio: Auto, Latin-1 o CP1251. Riesegui la scansione per applicare.	Alter Text: Auto, Latin-1 oder CP1251. Zum Anwenden Bibliothek neu scannen.	Ancien texte : Auto, Latin-1 ou CP1251. Réanalysez la bibliothèque pour appliquer.	Старый текст: Авто, Latin-1 или CP1251. Пересканируйте медиатеку для применения.
+AIRPLAY	AIRPLAY	AIRPLAY	AIRPLAY	AIRPLAY	AIRPLAY	AIRPLAY	AIRPLAY	AIRPLAY	AIRPLAY	AIRPLAY
+Starting AirPlay...	正在启动 AirPlay...	正在啟動 AirPlay...	AirPlay を起動中...	AirPlay 시작 중...	Iniciando AirPlay...	A iniciar AirPlay...	Avvio di AirPlay...	AirPlay wird gestartet...	Demarrage d'AirPlay...	Запуск AirPlay...
+Returning to Local...	正在返回本地播放...	正在返回本機播放...	ローカル再生に戻っています...	로컬 재생으로 돌아가는 중...	Volviendo a local...	A voltar ao local...	Ritorno alla riproduzione locale...	Zur lokalen Wiedergabe...	Retour a la lecture locale...	Возврат к локальному воспроизведению...
+Couldn't start AirPlay	无法启动 AirPlay	無法啟動 AirPlay	AirPlay を起動できませんでした	AirPlay를 시작할 수 없습니다	No se pudo iniciar AirPlay	Nao foi possivel iniciar AirPlay	Impossibile avviare AirPlay	AirPlay konnte nicht gestartet werden	Impossible de demarrer AirPlay	Не удалось запустить AirPlay
+Wi-Fi disconnected	Wi-Fi 已断开	Wi-Fi 已中斷	Wi-Fi が切断されました	Wi-Fi 연결 끊김	Wi-Fi desconectado	Wi-Fi desligado	Wi-Fi disconnesso	WLAN getrennt	Wi-Fi deconnecte	Wi-Fi отключен
+Wi-Fi Settings	Wi-Fi 设置	Wi-Fi 設定	Wi-Fi 設定	Wi-Fi 설정	Ajustes de Wi-Fi	Definicoes de Wi-Fi	Impostazioni Wi-Fi	WLAN-Einstellungen	Reglages Wi-Fi	Настройки Wi-Fi
+Confirm exit?	退出?	退出?	終了?	종료?	¿Salir?	Sair?	Uscire?	Beenden?	Quitter ?	Выйти?
+Exit	退出	退出	終了	종료	Salir	Sair	Esci	Beenden	Quitter	Выйти
+Return to Local	返回本地播放	返回本機播放	ローカル再生に戻る	로컬 재생으로 돌아가기	Volver a local	Voltar ao local	Torna alla riproduzione locale	Zur lokalen Wiedergabe	Retour a la lecture locale	Вернуться к локальному воспроизведению
+Audio from your Apple device	来自 Apple 设备的音频	來自 Apple 裝置的音訊	Apple デバイスからのオーディオ	Apple 기기의 오디오	Audio de tu dispositivo Apple	Audio do seu dispositivo Apple	Audio dal tuo dispositivo Apple	Audio von deinem Apple-Gerat	Audio de votre appareil Apple	Аудио с устройства Apple
+Select this Disc on your iPhone or Mac	在 iPhone 或 Mac 上选择此 Disc	在 iPhone 或 Mac 上選擇此 Disc	iPhone または Mac でこの Disc を選択	iPhone 또는 Mac에서 이 Disc를 선택하세요	Selecciona este Disc en tu iPhone o Mac	Selecione este Disc no iPhone ou Mac	Seleziona questo Disc su iPhone o Mac	Wahle diesen Disc auf iPhone oder Mac	Selectionnez ce Disc sur iPhone ou Mac	Выберите этот Disc на iPhone или Mac
+AirPlay Receiving	AirPlay 接收	AirPlay 接收	AirPlay 受信	AirPlay 수신	Recepcion AirPlay	Rececao AirPlay	Ricezione AirPlay	AirPlay-Empfang	Reception AirPlay	Прием AirPlay
+Play audio sent from an iPhone or Mac	播放 iPhone 或 Mac 发送的音频	播放 iPhone 或 Mac 傳送的音訊	iPhone または Mac からの音声を再生	iPhone 또는 Mac에서 보낸 오디오 재생	Reproduce audio de un iPhone o Mac	Reproduza audio de um iPhone ou Mac	Riproduci audio da iPhone o Mac	Audio von iPhone oder Mac wiedergeben	Lire l'audio d'un iPhone ou Mac	Воспроизведение аудио с iPhone или Mac
+Paused	已暂停	已暫停	一時停止中	일시 정지	En pausa	Em pausa	In pausa	Pausiert	En pause	Пауза
+Retry	重试	重試	再試行	다시 시도	Reintentar	Tentar novamente	Riprova	Erneut versuchen	Reessayer	Повторить
+Player state uncertain	播放器状态不确定	播放器狀態不確定	プレーヤーの状態が不明です	플레이어 상태 불명	Estado del reproductor incierto	Estado do leitor incerto	Stato del lettore incerto	Playerzustand unklar	Etat du lecteur incertain	Состояние плеера неизвестно
+Local Playback	本地播放	本機播放	ローカル再生	로컬 재생	Reproduccion local	Reproducao local	Riproduzione locale	Lokale Wiedergabe	Lecture locale	Локальное воспроизведение
+Play from the microSD card	播放 microSD 卡中的音乐	播放 microSD 卡中的音樂	microSD カードから再生	microSD 카드에서 재생	Reproduce desde la tarjeta microSD	Reproduza do cartao microSD	Riproduci dalla scheda microSD	Von der microSD-Karte abspielen	Lire depuis la carte microSD	Воспроизведение с карты microSD
+USB DAC	USB DAC	USB DAC	USB DAC	USB DAC	USB DAC	USB DAC	USB DAC	USB DAC	USB DAC	USB DAC
+Be a USB sound card for a PC	用作电脑的 USB 声卡	用作電腦的 USB 音效卡	PC の USB サウンドカードとして使用	PC용 USB 사운드 카드로 사용	Usar como tarjeta de sonido USB	Usar como placa de som USB	Usa come scheda audio USB	Als USB-Soundkarte am PC nutzen	Utiliser comme carte son USB	Использовать как звуковую карту USB
+Bluetooth Receiving	蓝牙接收	藍牙接收	Bluetooth 受信	Bluetooth 수신	Recepcion Bluetooth	Rececao Bluetooth	Ricezione Bluetooth	Bluetooth-Empfang	Reception Bluetooth	Прием Bluetooth
+Play audio sent from a phone	播放手机发送的音频	播放手機傳送的音訊	スマートフォンからの音声を再生	휴대폰에서 보낸 오디오 재생	Reproduce audio de un telefono	Reproduza audio de um telefone	Riproduci audio da un telefono	Audio vom Telefon wiedergeben	Lire le son envoye par un telephone	Воспроизведение аудио с телефона
+USB Storage	USB 存储	USB 儲存	USB ストレージ	USB 저장소	Almacenamiento USB	Armazenamento USB	Memoria USB	USB-Speicher	Stockage USB	Накопитель USB
+Open the card on a computer	在电脑上打开存储卡	在電腦上開啟記憶卡	コンピューターでカードを開く	컴퓨터에서 카드 열기	Abrir la tarjeta en un ordenador	Abrir o cartao num computador	Apri la scheda sul computer	Karte am Computer oeffnen	Ouvrir la carte sur un ordinateur	Открыть карту на компьютере
+USB Audio	USB Audio	USB Audio	USB Audio	USB Audio	USB Audio	USB Audio	USB Audio	USB Audio	USB Audio	USB Audio
+Play through an external USB DAC	通过外置 USB DAC 播放	透過外接 USB DAC 播放	外付け USB DAC で再生	외부 USB DAC로 재생	Reproduce con un DAC USB externo	Reproduza num DAC USB externo	Riproduci con un DAC USB esterno	Ueber externen USB-DAC abspielen	Lire via un DAC USB externe	Воспроизведение через внешний USB DAC
+Beam unavailable	投射不可用	傳送無法使用	Beamは利用できません	Beam을 사용할 수 없음	Beam no disponible	Beam indisponível	Beam non disponibile	Beam nicht verfügbar	Beam indisponible	Beam недоступен
+Couldn't start beaming	无法开始投射	無法開始傳送	Beamを開始できません	Beam을 시작할 수 없음	No se pudo iniciar Beam	Não foi possível iniciar o Beam	Impossibile avviare Beam	Beam konnte nicht starten	Impossible de lancer Beam	Не удалось начать Beam
+Playback changed on receiver	接收设备已更改播放	接收裝置已變更播放	受信側で再生が変更されました	수신기에서 재생이 변경됨	La reproducción cambió en el receptor	A reprodução mudou no recetor	La riproduzione è cambiata sul ricevitore	Wiedergabe am Empfänger geändert	La lecture a changé sur le récepteur	Воспроизведение изменено на приёмнике
+Beam connection lost	投射连接已断开	傳送連線已中斷	Beam接続が切断されました	Beam 연결이 끊김	Conexión de Beam perdida	Ligação do Beam perdida	Connessione Beam persa	Beam-Verbindung verloren	Connexion Beam perdue	Соединение Beam потеряно
+Couldn't confirm the receiver stopped	无法确认接收设备已停止	無法確認接收裝置已停止	受信側の停止を確認できません	수신기 정지를 확인할 수 없음	No se pudo confirmar que el receptor se detuvo	Não foi possível confirmar que o recetor parou	Impossibile confermare l'arresto del ricevitore	Stopp des Empfängers nicht bestätigt	Arrêt du récepteur non confirmé	Не удалось подтвердить остановку приёмника
+Stop beaming to play this on the Disc	停止投射后才能在 Disc 上播放	停止傳送後才能在 Disc 上播放	このDiscで再生するにはBeamを停止してください	Disc에서 재생하려면 Beam을 중지하세요	Detén Beam para reproducir en el Disc	Pare o Beam para tocar no Disc	Interrompi Beam per riprodurre sul Disc	Beam beenden, um auf dem Disc zu spielen	Arrêtez Beam pour lire sur le Disc	Остановите Beam, чтобы играть на Disc
+Couldn't play that list	无法播放此列表	無法播放此清單	このリストを再生できません	이 목록을 재생할 수 없음	No se pudo reproducir esa lista	Não foi possível reproduzir essa lista	Impossibile riprodurre questa lista	Liste konnte nicht abgespielt werden	Impossible de lire cette liste	Не удалось воспроизвести список
+Queue is updating - try again	列表正在更新，请重试	清單正在更新，請重試	キューを更新中です。もう一度お試しください	목록을 새로 만드는 중 - 다시 시도하세요	La cola se está actualizando - inténtalo de nuevo	A fila está a atualizar - tente novamente	La coda si sta aggiornando - riprova	Warteschlange wird aktualisiert - erneut versuchen	File d'attente en cours de mise à jour - réessayez	Очередь обновляется - повторите попытку
+Couldn't play this track	无法播放此曲目	無法播放此曲目	この曲を再生できません	이 곡을 재생할 수 없음	No se pudo reproducir esta pista	Não foi possível reproduzir esta faixa	Impossibile riprodurre questo brano	Titel konnte nicht abgespielt werden	Impossible de lire ce titre	Не удалось воспроизвести трек
+Queue finished	播放列表已结束	播放清單已結束	キューの再生が終了しました	재생 목록 종료	La cola ha terminado	A fila terminou	Coda terminata	Warteschlange beendet	File d'attente terminée	Очередь закончилась
+This track can't be beamed	此曲目无法投射	此曲目無法傳送	この曲はBeamできません	이 곡을 Beam할 수 없음	Esta pista no se puede enviar con Beam	Esta faixa não pode ser enviada com o Beam	Questo brano non può essere inviato con Beam	Dieser Titel kann nicht gebeamt werden	Ce titre ne peut pas être diffusé avec Beam	Этот трек нельзя передать через Beam
+No playable tracks left	没有可播放的曲目了	沒有可播放的曲目了	再生できる曲がありません	재생할 곡이 없음	No quedan pistas reproducibles	Não restam faixas reproduzíveis	Nessun brano riproducibile rimasto	Keine abspielbaren Titel mehr	Plus aucun titre lisible	Воспроизводимых треков не осталось
+Queue changed	播放列表已更改	播放清單已變更	キューが変更されました	재생 목록이 변경됨	La cola ha cambiado	A fila foi alterada	La coda è cambiata	Warteschlange geändert	File d'attente modifiée	Очередь изменилась
+Volume keys must use Adjust Volume to beam	投射前请把 Vol Keys 都改成 Adjust Volume	傳送前，Vol Keys 須選 Adjust Volume	Beamするには音量キーを Adjust Volume にしてください	Beam하려면 볼륨 키를 Adjust Volume으로 설정하세요	Las teclas de volumen deben usar Adjust Volume para usar Beam	As teclas de volume devem usar Adjust Volume para usar o Beam	I tasti volume devono usare Adjust Volume per usare Beam	Lautstärketasten müssen für Beam auf Adjust Volume stehen	Les touches de volume doivent utiliser Adjust Volume pour Beam	Для Beam клавиши громкости должны быть в режиме Adjust Volume
+Stop beaming to change this	停止投射后才能更改	停止傳送後才能變更	変更するにはBeamを停止してください	변경하려면 Beam을 중지하세요	Detén Beam para cambiar esto	Pare o Beam para alterar isto	Interrompi Beam per cambiarlo	Beam beenden, um dies zu ändern	Arrêtez Beam pour modifier ceci	Остановите Beam, чтобы изменить это
+Stopping beam to switch output	正在停止投射以更改输出	正在停止傳送以更改輸出	出力を切り替えるためBeamを停止しています	출력을 변경하려고 Beam을 중지하는 중	Deteniendo Beam para cambiar la salida	Parando o Beam para mudar a saída	Interruzione di Beam per cambiare uscita	Beam wird beendet, um die Ausgabe zu wechseln	Arrêt de Beam pour changer la sortie	Остановка Beam для смены выхода
+Disc started playing - beam ended	Disc 已开始播放，投射已结束	Disc 已開始播放，傳送已結束	Discが再生を始めたためBeamを終了しました	Disc가 재생을 시작해 Beam이 종료됨	El Disc empezó a reproducir: Beam terminado	O Disc começou a tocar: Beam encerrado	Il Disc ha iniziato a riprodurre: Beam terminato	Disc spielt: Beam beendet	Le Disc a démarré la lecture : Beam terminé	Disc начал воспроизведение - Beam завершён
+Source changed - beam ended	音源已更改，投射已结束	音源已變更，傳送已結束	ソースが変更されたためBeamを終了しました	소스 변경으로 Beam이 종료됨	Fuente cambiada: Beam terminado	Fonte alterada: Beam encerrado	Sorgente cambiata: Beam terminato	Quelle geändert: Beam beendet	Source modifiée : Beam terminé	Источник изменён - Beam завершён
+Beam	Beam	Beam	Beam	Beam	Beam	Beam	Beam	Beam	Beam	Beam
+Beaming to	正在投射到	正在傳送到	送信先	재생 대상	Enviando a	Enviando para	Invio a	Sende an	Envoi vers	Передача на
+Searching...	正在搜索...	正在搜尋...	検索中...	검색 중...	Buscando...	Procurando...	Ricerca...	Suche...	Recherche...	Поиск...
+Looking for speakers and TVs on your Wi-Fi	正在你的无线网络中查找设备	正在你的無線網路中尋找裝置	Wi-Fi上のスピーカーとTVを探しています	Wi-Fi에서 기기를 찾는 중	Buscando altavoces y TV en tu Wi-Fi	Procurando caixas de som e TVs no seu Wi-Fi	Ricerca di altoparlanti e TV sul tuo Wi-Fi	Suche nach Lautsprechern und TVs in deinem WLAN	Recherche d'enceintes et de TV sur votre Wi-Fi	Поиск колонок и телевизоров в вашей сети Wi-Fi
+Search again	重新搜索	重新搜尋	再検索	다시 검색	Buscar de nuevo	Procurar de novo	Cerca di nuovo	Erneut suchen	Rechercher à nouveau	Искать снова
+No devices found	没有找到设备	沒有找到裝置	デバイスが見つかりません	기기를 찾을 수 없음	No se encontraron dispositivos	Nenhum dispositivo encontrado	Nessun dispositivo trovato	Keine Geräte gefunden	Aucun appareil trouvé	Устройства не найдены
+Use the same home Wi-Fi. Guest networks may block discovery.	请使用同一个家庭无线网络。其他网络可能无法搜索到设备。	請使用同一個家用無線網路。訪客網路可能無法搜尋到裝置。	同じ家庭のWi-Fiを使ってください。ゲストネットワークでは検出できない場合があります。	게스트 네트워크에서는 검색할 수 없습니다	Usa la misma Wi-Fi de casa. Las redes de invitados pueden bloquear la búsqueda.	Use o mesmo Wi-Fi de casa. Redes de convidados podem bloquear a busca.	Usa lo stesso Wi-Fi di casa. Le reti ospiti possono bloccare la ricerca.	Nutze dasselbe WLAN zu Hause. Gastnetze können die Suche blockieren.	Utilisez le même Wi-Fi que chez vous. Les réseaux invités peuvent bloquer la recherche.	Используйте домашнюю сеть Wi-Fi. Гостевые сети могут блокировать поиск.
+Connect to Wi-Fi to beam	连接无线网络后才能投射	連接無線網路後才能傳送	BeamするにはWi-Fiに接続してください	Beam하려면 Wi-Fi에 연결하세요	Conéctate al Wi-Fi para usar Beam	Conecte-se ao Wi-Fi para usar o Beam	Collegati al Wi-Fi per usare Beam	Für Beam mit WLAN verbinden	Connectez-vous au Wi-Fi pour utiliser Beam	Подключитесь к Wi-Fi для Beam
+Speakers and TVs are found over your home Wi-Fi.	你的家庭无线网络中的设备会被找到。	裝置透過你的家用無線網路尋找。	スピーカーとTVはご家庭のWi-Fiで見つかります。	기기는 Wi-Fi로 찾습니다	Los altavoces y TV se encuentran por tu Wi-Fi de casa.	Caixas de som e TVs são encontradas pelo Wi-Fi de casa.	Altoparlanti e TV si trovano tramite il Wi-Fi di casa.	Lautsprecher und TVs werden über dein Heim-WLAN gefunden.	Les enceintes et TV se trouvent via votre Wi-Fi.	Колонки и телевизоры находятся через домашний Wi-Fi.
+Wi-Fi settings	无线网络设置	無線網路設定	Wi-Fi設定	Wi-Fi 설정	Ajustes de Wi-Fi	Ajustes de Wi-Fi	Impostazioni Wi-Fi	WLAN-Einstellungen	Réglages Wi-Fi	Настройки Wi-Fi
+Back	返回	返回	戻る	뒤로	Atrás	Voltar	Indietro	Zurück	Retour	Назад
+Music keeps playing on the Disc until it is ready.	音乐仍在 Disc 上播放，直到可用。	準備好之前音樂會繼續在 Disc 上播放。	準備ができるまでDiscで再生を続けます。	Disc에서 재생 중	La música sigue en el Disc hasta que esté listo.	A música continua no Disc até ficar pronto.	La musica continua sul Disc finché non è pronto.	Die Musik läuft auf dem Disc weiter, bis es bereit ist.	La musique continue sur le Disc jusqu'à ce que ce soit prêt.	Музыка играет на Disc, пока всё не будет готово.
+Stop beaming	停止投射	停止傳送	送信を停止	Beam 중지	Detener Beam	Parar Beam	Ferma Beam	Beam beenden	Arrêter Beam	Остановить Beam
+Search failed	无法搜索	搜尋失敗	検索に失敗しました	검색할 수 없음	Falló la búsqueda	A busca falhou	Ricerca non riuscita	Suche fehlgeschlagen	Échec de la recherche	Поиск не удался
+Couldn't look for devices. Try again.	无法查找设备。请重试。	無法尋找裝置。請重試。	デバイスを探せませんでした。もう一度お試しください。	기기를 검색할 수 없습니다. 다시 시도하세요.	No se pudo buscar dispositivos. Inténtalo de nuevo.	Não foi possível procurar dispositivos. Tente de novo.	Impossibile cercare i dispositivi. Riprova.	Geräte konnten nicht gesucht werden. Versuche es erneut.	Impossible de chercher des appareils. Réessayez.	Не удалось найти устройства. Повторите попытку.
+Switching output - try again	正在更改输出，请重试	正在切換輸出，請重試	出力を切り替え中です。もう一度お試しください	출력 변경 중, 다시 시도하세요	Cambiando la salida: inténtalo de nuevo	Trocando a saída: tente de novo	Cambio uscita in corso: riprova	Ausgabe wird gewechselt - bitte erneut versuchen	Changement de sortie : réessayez	Смена выхода - повторите попытку
+This Disc	此 Disc	此 Disc	このDisc	이 Disc	Este Disc	Este Disc	Questo Disc	Dieses Disc	Ce Disc	Этот Disc
+# Custom lock-screen overlay: short weekday and month names for the date line, and AM/PM where a language has its own words (blank = AM / PM). Month cells of zh, tw, ja and ko carry the month unit.
+Sun	周日	週日	日	일	dom	dom	dom	So.	dim.	вс
+Mon	周一	週一	月	월	lun	seg	lun	Mo.	lun.	пн
+Tue	周二	週二	火	화	mar	ter	mar	Di.	mar.	вт
+Wed	周三	週三	水	수	mié	qua	mer	Mi.	mer.	ср
+Thu	周四	週四	木	목	jue	qui	gio	Do.	jeu.	чт
+Fri	周五	週五	金	금	vie	sex	ven	Fr.	ven.	пт
+Sat	周六	週六	土	토	sáb	sáb	sab	Sa.	sam.	сб
+Jan	1月	1月	1月	1월	ene	jan	gen	Jan	janv.	янв
+Feb	2月	2月	2月	2월	feb	fev	feb	Feb	févr.	фев
+Mar	3月	3月	3月	3월	mar	mar	mar	Mär	mars	мар
+Apr	4月	4月	4月	4월	abr	abr	apr	Apr	avr.	апр
+May	5月	5月	5月	5월	may	mai	mag	Mai	mai	мая
+Jun	6月	6月	6月	6월	jun	jun	giu	Jun	juin	июн
+Jul	7月	7月	7月	7월	jul	jul	lug	Jul	juil.	июл
+Aug	8月	8月	8月	8월	ago	ago	ago	Aug	août	авг
+Sep	9月	9月	9月	9월	sep	set	set	Sep	sept.	сен
+Oct	10月	10月	10月	10월	oct	out	ott	Okt	oct.	окт
+Nov	11月	11月	11月	11월	nov	nov	nov	Nov	nov.	ноя
+Dec	12月	12月	12月	12월	dic	dez	dic	Dez	déc.	дек
+AM	上午	上午	午前	오전						
+PM	下午	下午	午後	오후						
+Cached	缓存	快取	キャッシュ	캐시	En caché	Em cache	In cache	Im Cache	En cache	Из кэша
+Custom image unavailable	自定义图片不可用	自訂圖片無法使用	カスタム画像を使用できません	사용자 지정 이미지를 사용할 수 없음	Imagen personalizada no disponible	Imagem personalizada indisponível	Immagine personalizzata non disponibile	Eigenes Bild nicht verfügbar	Image personnalisée indisponible	Пользовательское изображение недоступно
+Choose Image	选择图片	選擇圖片	画像を選択	이미지 선택	Elegir imagen	Imagem	Immagine	Bild wählen	Choisir image	Изображение
+Add images to CustomCover on your SD card.	请将图片添加到SD卡的CustomCover文件夹。	請將圖片加入SD卡的CustomCover資料夾。	SDカードのCustomCoverに画像を追加してください。	SD 카드의 CustomCover에 이미지를 추가하세요.	Añade imágenes a CustomCover en tu tarjeta SD.	Adicione imagens a CustomCover no cartão SD.	Aggiungi immagini a CustomCover sulla scheda SD.	Lege Bilder in CustomCover auf der SD-Karte ab.	Ajoutez des images dans CustomCover sur la carte SD.	Добавьте файлы в CustomCover на SD-карте.
+JPG, PNG, BMP or GIF	JPG、PNG、BMP 或 GIF	JPG、PNG、BMP 或 GIF	JPG、PNG、BMP、GIF	JPG, PNG, BMP 또는 GIF	JPG, PNG, BMP o GIF	JPG, PNG, BMP ou GIF	JPG, PNG, BMP o GIF	JPG, PNG, BMP oder GIF	JPG, PNG, BMP ou GIF	JPG, PNG, BMP или GIF
+Insert an SD card.	请插入SD卡。	請插入SD卡。	SDカードを挿入してください。	SD 카드를 넣으세요.	Inserta una tarjeta SD.	Insira um cartão SD.	Inserisci una scheda SD.	SD-Karte einlegen.	Insérez une carte SD.	Вставьте SD-карту.
+Can't read the CustomCover folder.	无法读取CustomCover文件夹	無法讀取CustomCover資料夾	CustomCoverフォルダを読み込めません。	CustomCover 폴더를 읽을 수 없습니다.	No se puede leer la carpeta CustomCover.	Não é possível ler a pasta CustomCover.	Cartella CustomCover illeggibile.	Ordner CustomCover nicht lesbar.	Dossier CustomCover illisible.	Не удаётся прочитать папку CustomCover.
+Try Again	重试	重試	再試行	다시 시도	Reintentar	Repetir	Riprova	Wiederholen	Réessayer	Повторить
+Looking for images...	正在查找图片...	正在尋找圖片...	画像を探しています...	이미지 찾는 중...	Buscando imágenes...	A procurar imagens...	Ricerca immagini...	Bilder werden gesucht...	Recherche d'images...	Поиск изображений...
+1 file skipped	已跳过1个文件	已略過1個檔案	1件スキップ	파일 1개 건너뜀	1 archivo omitido	1 ficheiro ignorado	1 file saltato	1 Datei übersprungen	1 fichier ignoré	Пропущен 1 файл
+%u files skipped	已跳过%u个文件	已略過%u個檔案	%u件スキップ	파일 %u개 건너뜀	%u archivos omitidos	%u ficheiros ignorados	%u file saltati	%u übersprungen	%u fichiers ignorés	Пропущено файлов: %u
+%u+ files skipped	已跳过%u+个文件	已略過%u+個檔案	%u件以上スキップ	파일 %u개 이상 건너뜀	%u+ archivos omitidos	%u+ ficheiros ignorados	%u+ file saltati	%u+ übersprungen	%u+ fichiers ignorés	Пропущено файлов: %u+
+Some files not checked	部分文件未检查	部分檔案未檢查	一部のファイルは未確認です	일부 파일은 확인하지 않음	Algunos archivos sin comprobar	Alguns ficheiros não verificados	Alcuni file non controllati	Einige Dateien nicht geprüft	Certains fichiers non vérifiés	Часть файлов не проверена
+too large	太大	太大	大きすぎます	너무 큼	demasiado grande	demasiado grande	troppo grande	zu groß	trop volumineux	слишком большой
+unusable	无法使用	無法使用	使用不可	사용 불가	inutilizable	inutilizável	inutilizzabile	unbrauchbar	inutilisable	непригоден
+list full	列表已满	列表已滿	リストが満杯	목록 가득 참	lista llena	lista cheia	elenco pieno	Liste voll	liste pleine	список полон
+Use Image	使用图片	使用圖片	画像を使用	이미지 사용	Usar imagen	Usar imagem	Usa immagine	Bild verwenden	Utiliser l'image	Использовать
+Preview not available for this image	此图片无法预览	此圖片無法預覽	プレビューできません	이 이미지는 미리 볼 수 없습니다	Vista previa no disponible para esta imagen	Pré-visualização indisponível para esta imagem	Anteprima non disponibile per questa immagine	Keine Vorschau für dieses Bild	Aperçu indisponible pour cette image	Предпросмотр для этого изображения недоступен
+That image changed or was removed.	该图片已更改或被移除。	該圖片已變更或被移除。	画像が変更または削除されました。	이미지가 변경되었거나 삭제되었습니다.	Esa imagen cambió o se eliminó.	Essa imagem foi alterada ou removida.	Quell'immagine è cambiata o è stata rimossa.	Das Bild wurde geändert oder entfernt.	Cette image a changé ou a été supprimée.	Изображение изменено или удалено.
+Can't use this image.	无法使用此图片。	無法使用此圖片。	この画像は使用できません。	이 이미지를 사용할 수 없습니다.	No se puede usar esta imagen.	Não é possível usar esta imagem.	Impossibile usare questa immagine.	Bild nicht verwendbar.	Image inutilisable.	Это изображение использовать нельзя.
+Image set	图片已设置	圖片已設定	画像を設定しました	이미지 설정됨	Imagen establecida	Imagem definida	Immagine impostata	Bild festgelegt	Image définie	Изображение установлено
+Applying image...	正在应用图片...	正在套用圖片...	画像を適用しています...	이미지 적용 중...	Aplicando imagen...	A aplicar imagem...	Applicazione immagine...	Bild wird angewendet...	Application de l'image...	Применение изображения...
+Image may still be applying - try again later	图片可能仍在应用，请稍后重试	圖片可能仍在套用，請稍後重試	画像はまだ適用中の可能性があります。後でもう一度お試しください	이미지가 아직 적용 중일 수 있습니다. 나중에 다시 시도하세요	Puede que aún se esté aplicando; inténtalo más tarde	Pode ainda estar a aplicar - tente mais tarde	Potrebbe essere ancora in applicazione, riprova più tardi	Wird evtl. noch angewendet, später erneut versuchen	Peut-être encore en cours, réessayez plus tard	Возможно, ещё применяется, повторите позже
+Could not use this image.	未能使用此图片。	未能使用此圖片。	この画像を使用できませんでした。	이 이미지를 사용하지 못했습니다.	No se pudo usar esta imagen.	Não foi possível usar esta imagem.	Non è stato possibile usare questa immagine.	Bild konnte nicht verwendet werden.	L'image n'a pas pu être utilisée.	Не удалось использовать изображение.
+Not enough storage to set this image.	存储空间不足，无法设置此图片。	儲存空間不足，無法設定此圖片。	空き容量が足りないため画像を設定できません。	저장 공간이 부족하여 이미지를 설정할 수 없습니다.	No hay espacio para establecer esta imagen.	Sem espaço para definir esta imagem.	Spazio insufficiente per impostare l'immagine.	Zu wenig Speicher für dieses Bild.	Espace insuffisant pour cette image.	Недостаточно места для этого изображения.
+Could not restore the previous image.	无法恢复之前的图片。	無法還原先前的圖片。	前の画像を復元できませんでした。	이전 이미지를 복원하지 못했습니다.	No se pudo restaurar la imagen anterior.	Não foi possível restaurar a imagem anterior.	Impossibile ripristinare l'immagine precedente.	Vorheriges Bild nicht wiederherstellbar.	Impossible de restaurer l'image précédente.	Не удалось восстановить прежнее изображение.
+Custom	自定义	自訂	カスタム	사용자 지정	Personalizado	Personalizado	Personalizzato	Eigenes	Personnalisé	Своё
+Could not change style - Custom kept	无法更改样式，已保留自定义	無法變更樣式，已保留自訂	スタイルを変更できません。カスタムのままです	스타일을 변경할 수 없음. 사용자 지정 유지	No se pudo cambiar el estilo; se mantiene Personalizado	Não foi possível mudar o estilo; mantido Personalizado	Impossibile cambiare stile, resta Personalizzato	Stil nicht änderbar, Eigenes bleibt	Changement impossible, Personnalisé conservé	Не удалось сменить стиль, оставлено Своё
+Use Saved Image	使用已保存的图片	使用已儲存的圖片	保存した画像を使用	저장된 이미지 사용	Imagen guardada	Imagem guardada	Immagine salvata	Gespeichertes Bild	Image enregistrée	Сохранённое
+Last image set	上次设置的图片	上次設定的圖片	前回設定した画像	마지막으로 설정한 이미지	Última aplicada	Última imagem definida	Ultima impostata	Zuletzt festgelegtes Bild	Dernière image définie	Последнее установленное
+No saved image yet	尚无已保存的图片	尚無已儲存的圖片	保存画像なし	저장된 이미지 없음	Sin imagen guardada	Sem imagem guardada	Nessuna immagine	Noch kein Bild	Aucune image	Сохранённых нет
+From CustomCover on SD card	来自SD卡的CustomCover	來自SD卡的CustomCover	CustomCover (SD)	SD 카드의 CustomCover에서	Desde CustomCover (SD)	De CustomCover (SD)	Da CustomCover (SD)	Aus CustomCover auf SD	Depuis CustomCover (SD)	Из CustomCover на SD-карте
+Top	顶部	頂部	上	위	Arriba	Topo	Alto	Oben	Haut	Сверху
+Centre	居中	置中	中央	가운데	Centro	Centro	Centro	Mitte	Centre	Центр
+Bottom	底部	底部	下	아래	Abajo	Fundo	Basso	Unten	Bas	Снизу
+Save	保存	儲存	保存	저장	Guardar	Guardar	Salva	Speichern	Enregistrer	Сохранить
+Saved	已保存	已儲存	保存しました	저장됨	Guardado	Guardado	Salvato	Gespeichert	Enregistré	Сохранено
+Saved - not confirmed yet	已保存，尚未确认	已儲存，尚未確認	保存しました。まだ確認されていません	저장됨, 아직 확인되지 않음	Guardado, aún sin confirmar	Guardado, ainda sem confirmação	Salvato, non ancora confermato	Gespeichert, noch nicht bestätigt	Enregistré, pas encore confirmé	Сохранено, пока не подтверждено
+Could not save	无法保存	無法儲存	保存できません	저장할 수 없음	No se pudo guardar	Não foi possível guardar	Impossibile salvare	Speichern fehlgeschlagen	Enregistrement impossible	Не удалось сохранить
+Could not use the saved image - previous kept	无法使用已保存的图片，已保留之前的	無法使用已儲存的圖片，已保留先前的	保存した画像を使用できません。前の設定のままです	저장된 이미지를 사용할 수 없음. 이전 설정 유지	No se pudo usar la imagen guardada; se mantiene la anterior	Não foi possível usar a imagem guardada; mantida a anterior	Impossibile usare l'immagine salvata, mantenuta la precedente	Gespeichertes Bild nicht nutzbar, vorheriges bleibt	Image enregistrée inutilisable, précédente conservée	Не удалось применить сохранённое, оставлено прежнее
+Overlays	叠加信息	疊加資訊	オーバーレイ	오버레이	Superposiciones	Sobreposições	Sovrapposizioni	Einblendungen	Incrustations	Наложения
+Font	字体	字體	フォント	글꼴	Fuente	Tipo de letra	Carattere	Schriftart	Police	Шрифт
+Time	时间	時間	時刻	시간	Hora	Hora	Ora	Uhrzeit	Heure	Время
+Date	日期	日期	日付	날짜	Fecha	Data	Data	Datum	Date	Дата
+Battery	电池	電池	バッテリー	배터리	Batería	Bateria	Batteria	Akku	Batterie	Батарея
+None	无	無	なし	없음	Ninguno	Nenhum	Nessuno	Keine	Aucun	Нет
+Plain	简洁	簡潔	シンプル	기본	Sencilla	Simples	Semplice	Schlicht	Simple	Простой
+Mono	等宽	等寬	等幅	고정폭	Mono	Mono	Mono	Monospace	Mono	Моно
+Rounded	圆体	圓體	丸ゴシック	둥근	Redondeada	Arredondada	Arrotondato	Rund	Arrondie	Округлый
+Preview	预览	預覽	プレビュー	미리보기	Vista previa	Pré-visualização	Anteprima	Vorschau	Aperçu	Просмотр
+Shows the full result	显示完整效果	顯示完整效果	完成形を表示	전체 결과 보기	Ver resultado completo	Resultado completo	Risultato completo	Zeigt das ganze Ergebnis	Résultat complet	Показывает итоговый вид
+Save an image first	请先保存图片	請先儲存圖片	先に画像を保存	먼저 이미지를 저장하세요	Guarda una imagen	Guarde uma imagem	Salva prima un'immagine	Zuerst ein Bild speichern	Enregistrez une image	Сначала сохраните
+Sample data	示例数据	範例資料	サンプルデータ	샘플 데이터	Datos de ejemplo	Dados de exemplo	Dati di esempio	Beispieldaten	Données d'exemple	Образец данных
+Weather is off	天气已关闭	天氣已關閉	天気はオフです	날씨 꺼짐	El tiempo está desactivado	Meteorologia desligada	Meteo disattivato	Wetter ist aus	Météo désactivée	Погода выключена
+No image saved	未保存图片	未儲存圖片	画像が保存されていません	저장된 이미지 없음	Sin imagen guardada	Sem imagem guardada	Nessuna immagine salvata	Kein Bild gespeichert	Aucune image enregistrée	Изображение не сохранено
+Sample Song	示例歌曲	範例歌曲	サンプル曲	샘플 곡	Pista de ejemplo	Faixa de exemplo	Brano di esempio	Beispieltitel	Titre d'exemple	Пример песни
+Sample Artist	示例艺术家	範例藝人	サンプルアーティスト	샘플 아티스트	Artista de ejemplo	Artista de exemplo	Artista di esempio	Beispielinterpret	Artiste d'exemple	Исполнитель
+Enter the PIN shown on										
+Del										
+Pair										
+Play on Disc										
+Wrong PIN										
+Receiver is in use										
+Connection timed out										
+Pairing removed										
+Could not verify this receiver										
+TV stop was not confirmed										
+Connection lost										
+Music stays paused. The TV may still be playing.										
+Choose the receiver to try again.										
+Forget pairing										
+Beam is stopping - try again										
+AirPlay - %s / 16 bit										
+AirPlay - %s / %d bit										
+Receiver volume is unavailable										
+Could not change playback										
+Pairing not accepted										
+Player restarted - press play										
+Pairing storage is unavailable										
+Receiver needs a password										
+Password-protected AirPlay 1 is unavailable.										
+Couldn't prepare the audio decoder										
+Try again.										
+Play next										
+Remove from Up Next										
+Skipped %u unsupported tracks										
+Choose an MP3, FLAC or PCM WAV track.										
+AAC / ALAC can't be beamed										
+Opus can't be beamed										
+Ogg audio can't be beamed										
+WMA can't be beamed										
+APE can't be beamed										
+DSD can't be beamed										
+SACD ISO can't be beamed										
+CUE track can't be beamed										
+CUE tracks can't be beamed										
+Play on Disc?										
+Only this track will play on Disc.										
+Continue the original queue on Disc.										
+The TV may still be playing. Stop it first.										
+You may hear the start before playback resumes.										
+Play this track										
+Keep beaming										
+Disc playback is unavailable										
+Volume unavailable										
+Loading chapters...	正在导入章节...	載入章節...	チャプターを読み込み中...	챕터 로드 중...	Cargando capitulos...	Carregando capitulos...	Caricamento capitoli...	Kapitel werden geladen...	Chargement des chapitres...	Загрузка глав...
+Chapters unavailable	章节不可用	章節無法使用	チャプターを利用できません	챕터를 사용할 수 없음	Capitulos no disponibles	Capitulos indisponiveis	Capitoli non disponibili	Kapitel nicht verfugbar	Chapitres indisponibles	Главы недоступны
+diskOS %s is available										
+Downloading...	正在下载...	正在下載...	ダウンロード中...	다운로드 중...	Descargando...	A descarregar...	Download...	Wird geladen...	Telechargement...	Загрузка...
+Downloading... %d%%	正在下载... %d%%	正在下載... %d%%	ダウンロード中... %d%%	다운로드 중... %d%%	Descargando... %d%%	A descarregar... %d%%	Download... %d%%	Wird geladen... %d%%	Telechargement... %d%%	Загрузка... %d%%
+Verifying...	正在验证...	正在驗證...	検証中...	확인 중...	Verificando...	A verificar...	Verifica...	Wird geprueft...	Verification...	Проверка...
+Saving...	正在保存...	正在儲存...	保存中...	저장 중...	Guardando...	A guardar...	Salvataggio...	Wird gespeichert...	Enregistrement...	Сохранение...
+Cancelling...	正在取消...	正在取消...	キャンセル中...	취소 중...	Cancelando...	A cancelar...	Annullamento...	Wird abgebrochen...	Annulation...	Отмена...
+Automatic Update Checks	自动检查更新	自動檢查更新	更新の自動確認	업데이트 자동 확인	Buscar actualizaciones automáticamente	Verificar atualizações automaticamente	Controllo automatico aggiornamenti	Automatisch nach Updates suchen	Recherche automatique de mises à jour	Автопроверка обновлений
+Unknown	未知	未知	不明	알 수 없음	Desconocido	Desconhecido	Sconosciuto	Unbekannt	Inconnu	Неизвестно
+Checking...	查找中...	檢查中...	確認中...	확인 중...	Comprobando...	A verificar...	Verifica...	Prüfe...	Vérification...	Проверка...
+Pairing failed	配对失败	配對失敗	ペアリングに失敗	페어링 실패	Error al emparejar	Falha no emparelhamento	Associazione non riuscita	Kopplung fehlgeschlagen	Échec de l'association	Ошибка сопряжения
+Trust failed	无法信任	信任失敗	信頼設定に失敗	신뢰 설정 실패	Error de confianza	Falha ao confiar	Attendibilità non riuscita	Vertrauen fehlgeschlagen	Échec de l'approbation	Ошибка доверия
+Connection failed	无法连接	連線失敗	接続に失敗	연결 실패	Error de conexión	Falha na ligação	Connessione non riuscita	Verbindung fehlgeschlagen	Échec de la connexion	Ошибка подключения
+Audio route failed	无法设置音频输出	音訊路由失敗	音声出力の切替に失敗	오디오 출력 전환 실패	Error de ruta de audio	Falha na rota de áudio	Audio non instradato	Audioroute fehlgeschlagen	Échec du routage audio	Ошибка маршрута звука
+diskOS %s is available (you have %s). Download and install it now?										
+Device name										
+Bluetooth name										
+Device nickname										
+Use original name										
+Use original name?										
+Use original										
+Resets look, behaviour, both Disc names and paired nicknames. Keeps music, pairings, Wi-Fi, Last.fm, EQ and audio. Reboot for network; Bluetooth on for nicknames.										
+Names are busy - try again										
+Resetting...										
+Saving name...										
+Name unchanged										
+Reset this name?										
+The remote device's name will be used. Pairing is kept.										
+Returns the Bluetooth name to SNOWSKY DISC.										
+Returns the network name to stock defaults after reboot.										
+Reset this name										
+Stock defaults										
+Active										
+Saved. Applies after reboot.										
+Saved. Applies when Bluetooth is available.										
+Reset partly completed. Nickname clearing is pending.										
+Couldn't start reset - nothing changed										
+Reset partly completed. Pending work will retry.										
+Settings and names reset. Restart to finish.										
+Couldn't save name										
+Name replaced, but saving is uncertain. Restart to check.										
+Name saved. Bluetooth apply is pending.										
+Name saved										
+Reset partly completed. Pending work will retry after restart. Bluetooth stays off if it was off. Network defaults apply after reboot.										
+Settings and names reset. Restart diskOS to finish. Network defaults apply after reboot.										
+Saved. Reflash needed (1.2.2+).										
+Saved. Not active this boot.										
+Active now										
+Saved name is invalid. Stock defaults after reboot.										
+Reflash needed (1.2.2+).										
+Use for audio										
+Saved Bluetooth name is invalid. Edit or reset it.										
+Rename	重命名	重新命名	名前を変更	이름 변경	Renombrar	Renomear	Rinomina	Umbenennen	Renommer	Переименовать
+
+# Receiver return confirmation. Empty cells use the English fallback.
+Stop receiving and return to the Disc's music?					Dejar de recibir y volver a la musica del Disc?	Parar a rececao e voltar a musica do Disc?	Interrompere la ricezione e tornare alla musica del Disc?	Empfang beenden und zur Musik auf dem Disc wechseln?	Arreter la reception et revenir a la musique du Disc ?	
+Return					Volver	Voltar	Torna	Zuruck	Retour	

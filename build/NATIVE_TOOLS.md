@@ -105,3 +105,24 @@ The Linux release uses static tools and has no `vendor/linux-x86_64/lib/` direct
 3. Link `usbboot` against the static libusb; confirm with `ldd` that libudev/libcap
    are gone and only libc (or nothing, if fully static) remains.
 4. Verify it still enters mask-ROM and flashes on a real unit before shipping.
+
+## Durable flash identity helper
+
+`build/build-flashstate.sh` builds `payload/diskos-flashstate` from
+`src/flashstate/diskos_flashstate.c` (MIT). Set `CROSS` to the current
+`mipsel-n2008-musl-cross/bin/mipsel-linux-musl-` prefix. It uses static musl,
+strips symbols and omits the linker build ID; two builds with the same toolchain
+must have identical SHA256 hashes. No host paths or build time are embedded.
+Release builds must use the compiled-in `/etc` and `/usr/data` directories.
+
+`diskos-flashstate check` returns 0 for matching IDs, 1 for a missing writable
+record, 2 for a different valid writable ID, 3 for a malformed ordinary writable
+record, 4 for storage or unexpected path-type errors, and 5 for a missing or
+malformed RO record. Both records require exactly 32 lowercase hex digits and LF.
+`complete` returns 0 only after checked temporary-file write, file fsync, close,
+rename, directory fsync and read-back; errors return 4 (or 5 for invalid RO).
+Both commands return 64 on invalid usage. Missing/inaccessible data roots and
+symlinks are errors. Only `complete` replaces the managed writable ID and its
+ordinary `.diskos-flash-id.tmp`; reset policy and prior data barriers belong to S97.
+The helper is installed and checked via `_BOOT_DECISION_FILES`, independently
+of the unchanged UI-only `/etc/diskos_manifest`.

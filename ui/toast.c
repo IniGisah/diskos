@@ -16,6 +16,11 @@ static void toast_hide_cb(lv_timer_t *t)
     if(g_toast_timer){ lv_timer_delete(g_toast_timer); g_toast_timer = NULL; }
 }
 
+void ui_toast_dismiss(void)
+{
+    toast_hide_cb(NULL);
+}
+
 int ui_toast_hint(const char *msg)
 {
     if(g_toast || !msg) return 0;

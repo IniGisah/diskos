@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import struct
+import stat
 import sys
 import subprocess
 import tempfile
@@ -13,7 +14,7 @@ from diskos_installer import bundle, imagebuild as ib
 from diskos_installer.buildfs import ArchiveFS, archive_extraction_fs
 from diskos_installer.pseudofs import Archive, MARK
 import test_image_edits as edits
-from test_image_edits import BOOT, CFG
+from test_image_edits import BOOT, CFG, FLASH_ID
 
 
 class ValidationTests(unittest.TestCase):
@@ -28,25 +29,27 @@ class ValidationTests(unittest.TestCase):
             # Keep synthetic builds small; UI ELF qualification is a separate gate.
             with tempfile.TemporaryDirectory(dir=os.environ.get('DISKOS_WIN_SCRATCH')) as td:
                 ui = Path(td, 'ui'); ui.write_bytes(b'UI')
-                expected = ib.edit_image(fs, str(ui), 'public', cfg)
+                expected = ib.edit_image(fs, str(ui), 'public', cfg, flash_id=FLASH_ID)
             yield fs, expected
 
     def validate(self, fs, expected, cfg=None):
         boot, bb, sha, size = expected
         if not isinstance(fs, ArchiveFS):
-            return ib.validate_image(fs, sha, size, bb, boot, cfg)
+            return ib.validate_image(fs, sha, size, bb, boot, cfg, flash_id=FLASH_ID)
         with tempfile.TemporaryDirectory(dir=os.environ.get('DISKOS_WIN_SCRATCH')) as td:
             sq = Path(td, 'out.sq'); sq.write_bytes(b'hsqs')
             def export(cmd, **kw):
                 Path(cmd[cmd.index('-pf') + 1]).write_bytes(fs.archive.dump())
                 return SimpleNamespace(returncode=0, stderr='')
             with mock.patch.object(ib, '_run', side_effect=export):
-                ib.validate_archive_output(str(sq), 'unsq', sha, size, td, bb, boot, cfg)
+                ib.validate_archive_output(str(sq), 'unsq', sha, size, td, bb, boot, cfg, flash_id=FLASH_ID)
 
     def test_shared_content_cases(self):
         paths = [BOOT, b'opt/diskos/mq_ui', b'etc/diskos_manifest', b'bin/busybox',
                  b'bin/rm', b'opt/diskos/bin/rm']
-        paths += [rel.encode() for rel, _ in ib._BOOT_DECISION_FILES + ib._SUPPORT_FILES]
+        self.assertIn(("opt/diskos/bin/diskos-flashstate", "diskos-flashstate"),
+                      ib._BOOT_DECISION_FILES)
+        paths += [rel.encode() for rel, _ in ib._BOOT_DECISION_FILES + ib._SUPPORT_FILES + ib._NAMES_FILES]
         for path in paths:
             for change in ('missing', 'bytes', 'symlink', 'mode', 'size'):
                 if change == 'size' and path != b'opt/diskos/mq_ui':
@@ -108,7 +111,7 @@ class ValidationTests(unittest.TestCase):
             boot, bb, sha, size = expected
             args = (str(sq), 'unsquashfs', sha, size, temp.name, bb, boot)
             with mock.patch.object(ib, '_run', side_effect=exporter):
-                ib.validate_archive_output(*args)
+                ib.validate_archive_output(*args, flash_id=FLASH_ID)
             for failure in (FileNotFoundError('tool'), subprocess.TimeoutExpired('tool', 1),
                             SimpleNamespace(returncode=1, stderr='failed'), b'', raw[:-1]):
                 def broken(cmd, **kw):
@@ -120,7 +123,7 @@ class ValidationTests(unittest.TestCase):
                     return failure
                 with mock.patch.object(ib, '_run', side_effect=broken):
                     with self.assertRaises(ib.BuildError) as caught:
-                        ib.validate_archive_output(*args)
+                        ib.validate_archive_output(*args, flash_id=FLASH_ID)
                     self.assertEqual(caught.exception.code, 'E232')
             real = Archive.chunks
             def unreadable(archive, off, size):
@@ -129,11 +132,11 @@ class ValidationTests(unittest.TestCase):
                 yield from real(archive, off, size)
             with mock.patch.object(ib, '_run', side_effect=exporter), mock.patch.object(Archive, 'chunks', unreadable):
                 with self.assertRaises(ib.BuildError) as caught:
-                    ib.validate_archive_output(*args)
+                    ib.validate_archive_output(*args, flash_id=FLASH_ID)
                 self.assertEqual(caught.exception.code, 'E232')
             with mock.patch.object(ib.os.path, 'getsize', return_value=ib.IMG_SIZE + 1):
                 with self.assertRaises(ib.BuildError) as caught:
-                    ib.validate_archive_output(*args)
+                    ib.validate_archive_output(*args, flash_id=FLASH_ID)
                 self.assertEqual(caught.exception.code, 'E231')
 
     def test_real_export_corruption_and_probe(self):
@@ -171,6 +174,33 @@ class ValidationTests(unittest.TestCase):
                     else:
                         with ib._export_archive(str(sq), unsq, td):
                             pass
+                self.assertEqual(caught.exception.code, 'E232')
+
+            # Repack an edited image too: the identity contract must survive real
+            # pseudo-file serialization, LZO packing and independent export.
+            for fs, expected in self.prepared():
+                if not isinstance(fs, ArchiveFS):
+                    continue
+                empty = Path(td, 'empty'); empty.mkdir()
+                pf = Path(td, 'edited.pf'); pf.write_bytes(fs.archive.dump())
+                image = Path(td, 'identity.sq')
+                result = ib._run([mksq, str(empty), str(image), '-pf', str(pf),
+                                  '-comp', 'lzo', '-b', '131072', '-noappend',
+                                  '-no-xattrs', '-all-root', '-processors', '1'],
+                                 msys_paths=(1, 2, 4), capture_output=True)
+                self.assertEqual(result.returncode, 0)
+                boot, bb, sha, size = expected
+                ib.validate_archive_output(str(image), unsq, sha, size, td, bb, boot,
+                                           intended_archive=fs.archive, flash_id=FLASH_ID)
+                with ib._export_archive(str(image), unsq, td) as output:
+                    identity = ArchiveFS(output)
+                    self.assertEqual(identity.read_bytes(b'etc/diskos-flash-id'), FLASH_ID)
+                    info = identity.lstat(b'etc/diskos-flash-id')
+                    self.assertTrue(stat.S_ISREG(info.st_mode))
+                    self.assertEqual(stat.S_IMODE(info.st_mode), 0o644)
+                with self.assertRaises(ib.BuildError) as caught:
+                    ib.validate_archive_output(str(image), unsq, sha, size, td, bb, boot,
+                                               flash_id=b'f' * 32 + b'\n')
                 self.assertEqual(caught.exception.code, 'E232')
 
     def test_policy_and_capability_failures(self):
@@ -261,3 +291,62 @@ class ValidationTests(unittest.TestCase):
             with self.assertRaises(ib.BuildError) as caught:
                 ib.validate_stock_archive(str(sq), 'unsq', td)
             self.assertEqual(caught.exception.code, 'E220')
+
+
+class FlashIdentityValidationTests(unittest.TestCase):
+    setUp = ValidationTests.setUp
+    backends = ValidationTests.backends
+    link = ValidationTests.link
+    prepared = ValidationTests.prepared
+    validate = ValidationTests.validate
+
+    def test_missing_malformed_and_different_identity(self):
+        cases = (None, b'', b'a' * 31 + b'\n', b'a' * 33 + b'\n',
+                 FLASH_ID.rstrip(b'\n'), FLASH_ID + b'\n', FLASH_ID[:-1] + b'\r\n',
+                 FLASH_ID.upper(), b'g' * 32 + b'\n', b'0' * 32 + b'\n',
+                 b' ' + FLASH_ID, FLASH_ID + b'\0', b'\xff' * 32 + b'\n')
+        for cfg in (None, CFG):
+            for bad in cases:
+                for fs, expected in self.prepared(cfg):
+                    with self.subTest(backend=type(fs).__name__, identity=bad, ota=bool(cfg)):
+                        self.validate(fs, expected, cfg)
+                        fs.unlink(b'etc/diskos-flash-id')
+                        if bad is not None:
+                            fs.replace_file(b'etc/diskos-flash-id', bad, 0o644)
+                        with self.assertRaises(ib.BuildError) as caught:
+                            self.validate(fs, expected, cfg)
+                        self.assertEqual(caught.exception.code, 'E232')
+                        self.assertIn('flash identity', str(caught.exception))
+
+    def test_identity_type_and_mode(self):
+        path = b'etc/diskos-flash-id'
+        for change in ('directory', 'symlink', 'outside', 0o600, 0o444, 0o755, 0o664, 0o4644):
+            for fs, expected in self.prepared():
+                with self.subTest(backend=type(fs).__name__, change=change):
+                    fs.unlink(path)
+                    if change == 'directory':
+                        fs.mkdir(path)
+                    elif change in ('symlink', 'outside'):
+                        fs.replace_file(b'copy', FLASH_ID, 0o644)
+                        self.link(fs, path, b'../copy' if change == 'symlink' else b'/outside')
+                    else:
+                        fs.replace_file(path, FLASH_ID, change)
+                    with self.assertRaises(ib.BuildError) as caught:
+                        self.validate(fs, expected)
+                    self.assertEqual(caught.exception.code, 'E232')
+
+    def test_validation_requires_external_expected_identity(self):
+        for fs, expected in self.prepared():
+            boot, bb, sha, size = expected
+            for identity in (None, b'', FLASH_ID.decode(), b'X' * 32 + b'\n',
+                             b'0' * 32 + b'\n'):
+                with self.subTest(backend=type(fs).__name__, identity=identity):
+                    with self.assertRaises(ib.BuildError) as caught:
+                        ib.validate_image(fs, sha, size, bb, boot, flash_id=identity)
+                    self.assertEqual(caught.exception.code, 'E232')
+            # Validation must never generate a replacement or repair the output.
+            import secrets
+            with mock.patch.object(secrets, 'token_hex', side_effect=AssertionError('unexpected generation')):
+                self.validate(fs, expected)
+            self.assertEqual(fs.read_bytes(b'etc/diskos-flash-id'), FLASH_ID)
+            self.assertEqual(stat.S_IMODE(fs.lstat(b'etc/diskos-flash-id').st_mode), 0o644)

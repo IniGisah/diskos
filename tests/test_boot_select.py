@@ -387,7 +387,8 @@ class InstallHookHonoursRecordTests(unittest.TestCase):
         b = text.index('# >>> SUPERVISOR BEGIN')
         e = text.index('# <<< SUPERVISOR END')
         script = tmp / 'S97test'
-        script.write_text('#!/bin/sh\n' + text[b:e] + f': > "{started}"\nexit 0\n')
+        script.write_text('#!/bin/sh\n' + text[b:e].replace('/tmp/', str(tmp) + '/') +
+                          f': > "{started}"\nexit 0\n')
         script.chmod(0o755)
         env = dict(os.environ, DISKOS_BOOT_SELECT=str(rec), DISKOS_SELECTED=str(PAYLOAD / 'diskos-selected'))
         subprocess.run([str(script), 'start'], env=env, timeout=30, check=True)

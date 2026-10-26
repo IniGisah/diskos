@@ -126,6 +126,23 @@ def cmd_doctor(args):
     ui.info(f"version    : {__version__}")
     ui.info(f"host       : {host_desc} ({platform_probe.host_status()})")
     ui.info(f"state dir  : {state.state_dir()}")
+    all_ok = True
+    if o == "macos":
+        try:
+            import tkinter
+            ui.info(f"Tk version : {tkinter.TkVersion}")
+            if tkinter.TkVersion < 8.6:
+                ui.err("macOS requires Tk >= 8.6")
+                all_ok = False
+        except ImportError as exc:
+            ui.err(f"Tk version : unavailable ({exc})")
+            all_ok = False
+        try:
+            platform_probe._bundled_libusb_backend()
+            ui.info(f"libusb     : {platform_probe.LIBUSB_LOADED}")
+        except Exception as exc:
+            ui.err(f"libusb     : cannot load ({exc})")
+            all_ok = False
 
     def _tool_ok(path, need_exec):
         try:
@@ -135,7 +152,6 @@ def cmd_doctor(args):
             return False
 
     ui.info("native tools and device files:")
-    all_ok = True
     for name in ("usbboot", "mksquashfs", "unsquashfs", "my_write6_dram.bin", "disc_spl_lpddr3.bin"):
         p = bundle.native(name, required=False)
         need_exec = not name.endswith(".bin")
@@ -157,7 +173,8 @@ def cmd_doctor(args):
         except Exception as e:
             ui.err(f"  squashfs LZO pack/extract check: FAILED - {e}")
             all_ok = False
-    for name in ("mq_ui", "S97diskos_install", "S99usbserial", "diskos-debug.sh", "dropbearmulti"):
+    for name in ("mq_ui", "S97diskos_install", "S99usbserial", "diskos-debug.sh", "dropbearmulti",
+                 "S97diskos_names", "diskos-names", "diskos-udhcpc", "diskos-network-names-v1"):
         p = bundle.data(name, required=False)
         (ui.ok if p else ui.err)(f"  {name}: {p or 'MISSING'}")
         all_ok = all_ok and bool(p)   # payload files are required to build a flashable image
@@ -334,17 +351,19 @@ def main(argv=None):
 
 
 def _main(argv=None):
-    from diskos_installer import flash_child
+    from diskos_installer import firmware_fetch, flash_child
     child_args = sys.argv[1:] if argv is None else argv
     # Private dispatch enforces parent supervision and normal flash gates itself.
     if child_args and child_args[0] == flash_child.CHILD_MODE:
         return flash_child.main(child_args)
+    if child_args and child_args[0] == firmware_fetch.MODE:  # acquisition helper: no GUI, no lock
+        return firmware_fetch.helper_main(child_args)
     args = build_parser().parse_args(argv)
     # no subcommand, or 'gui' -> launch the graphical installer (under the lock)
     if getattr(args, "cmd", None) in (None, "gui"):
         from diskos_installer import gui
-        with _Lock():
-            return gui.main()
+        with _Lock() as lock:
+            return gui.main(lock)
     try:
         if args.cmd == "doctor":            # doctor is read-only; no lock needed
             return args.func(args)

@@ -46,8 +46,32 @@ Requires:
   Sans + Font Awesome CJK font, plus font/TJPG tweaks), so use the vendored copy to retain these
   customizations.
 
+The embedded stock decoder also needs two external inputs, supplied by the builder:
+
+- `STOCK_AV_HEADERS`: the FFmpeg 4.2.2 archive from
+  <https://ffmpeg.org/releases/ffmpeg-4.2.2.tar.xz>, SHA-256
+  `cb754255ab0ee2ea5f66f8850e1bd6ad5cac1cd855d0a2f4990fb8c668b0d29c`.
+  The build checks this pin and extracts public headers only; it does not compile FFmpeg.
+- `STOCK_SYSROOT`: your own extracted stock V2.57 root filesystem, containing
+  `lib/ld-linux-mipsn8.so.1`, `lib/libc.so.6`, and `usr/lib/libav{format,codec,util}.so.*`.
+  Stock binaries are not supplied in this source tree. The helper links against these
+  stock libraries. It also requires `mipsel-linux-gnu-gcc` and `mipsel-linux-gnu-strip`
+  on PATH (override with `STOCK_CC` and `STOCK_STRIP`).
+
+From the public `ui/` directory, with its bundled `third_party/`, `tools/` and `lvgl/`:
+
 ```sh
-# toolchain on PATH as mipsel-linux-musl-gcc, LVGL at ./lvgl:
+make CROSS=/opt/x-tools/mipsel-linux-musl/bin/mipsel-linux-musl- \
+  STOCK_AV_HEADERS=/path/to/ffmpeg-4.2.2.tar.xz \
+  STOCK_SYSROOT=/path/to/stock-v257 DEP_OUT="$PWD/.build-deps" mq_ui
+```
+
+Keep those same overrides for subsequent builds and `make -q mq_ui`. Native
+vendor dependencies are built offline using the included sources and recipes.
+
+```sh
+# toolchain on PATH as mipsel-linux-musl-gcc, LVGL at ./lvgl;
+# export STOCK_AV_HEADERS and STOCK_SYSROOT before these examples:
 make
 
 # or point at your toolchain / LVGL explicitly:
@@ -69,11 +93,13 @@ source-download hashes from that recipe. It also builds FreeType from the in-tre
 
 ```sh
 docker build -t diskos-ui-builder .                                  # from this ui/ directory
-docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/src" diskos-ui-builder
+docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/src" \
+  -v /path/to/inputs:/inputs:ro -e STOCK_AV_HEADERS=/inputs/ffmpeg-4.2.2.tar.xz \
+  -e STOCK_SYSROOT=/inputs/stock-v257 diskos-ui-builder
 ```
 
-The static `mq_ui` lands in the current directory. LVGL is vendored at `lvgl/`, so nothing else is
-needed. The `-u` flag keeps the build outputs owned by you, not root.
+The static `mq_ui` lands in the current directory. Supply the two external inputs above
+and ensure the container also has the stock helper compiler and strip tool. The `-u` flag keeps the build outputs owned by you, not root.
 
 The first `docker build` compiles GCC, so it takes a while; later UI builds reuse the image.
 
@@ -126,7 +152,8 @@ The installer keeps the stock `mq_player` audio engine; only the UI is replaced.
 
 The "something" theme is an independent design; it is not affiliated with or endorsed by Nothing Technology Limited.
 
-All bundled components are permissive or public-domain and GPL-compatible.
+Bundled components retain their own licences, including LGPL-2.1-or-later for libplist.
+See [the complete component index](../NOTICE.md) and [licence texts](../licenses/README.md).
 
 ## Contributing
 Issues and patches welcome via the [diskOS repo](https://github.com/b0hemia/diskos). By contributing

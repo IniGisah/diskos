@@ -75,6 +75,24 @@ class AsciiGuiText(unittest.TestCase):
                     self.assertTrue(node.value.isascii(), (module.__name__, node.lineno, node.value))
 
 
+class ValidationRefusalText(unittest.TestCase):
+    def test_e304_pre_launch_metadata_suppresses_unknown_guidance_while_flashing(self):
+        message = "The flash could not start because Windows flash validation failed. " \
+                  "Nothing was sent by the flash transfer."
+        action = "See Details for the validation failure. Correct the reported problem " \
+                 "and retry; no flash-recovery wait is needed."
+        error = errors.FlashError(message, code="E304", action=action)
+        info = gui.error_info(str(error), {"code": error.code, "message": error.message,
+                              "action": error.action, "pre_launch": True}, flashing=True)
+        self.assertEqual(info["code"], "E304")
+        self.assertTrue(info["nothing_written"])
+        self.assertFalse(info["unknown"])
+        self.assertEqual(info["action"], action)
+        self.assertNotIn(errors.WAIT_THEN_RECOVER, info["action"])
+        # A text-only E304 cannot claim that the transfer never started.
+        self.assertFalse(gui.error_info(str(error), flashing=True)["nothing_written"])
+
+
 class FontChoice(unittest.TestCase):
     """make_fonts(): on Windows use Segoe UI only when Tk lists it, else keep TkDefaultFont's family."""
 
@@ -166,6 +184,9 @@ class AppFlows(unittest.TestCase):
                            "inv_error": None, "missing_tools": []}),
                        mock.patch.object(gui.platform_probe, "host", return_value=("linux", "x86_64")),
                        mock.patch.object(gui.state, "stock_image_exists", return_value=saved_image),
+                       mock.patch.object(gui.firmware_resolve, "identify_zip", side_effect=lambda path, expected=None: gui.firmware_resolve.ZipIdentity(expected, path)),
+                       mock.patch.object(gui.firmware_resolve, "check_space", return_value=None),
+                       mock.patch.object(gui.firmware_resolve, "plan_restore", return_value=gui.firmware_resolve.RestorePlan("backup", "240")),
                        mock.patch.object(gui.service, "do_install", side_effect=self._svc("install")),
                        mock.patch.object(gui.service, "do_restore", side_effect=self._svc("restore")),
                        mock.patch.object(gui.service, "do_remove", side_effect=self._svc("remove")),
@@ -473,7 +494,7 @@ class AppFlows(unittest.TestCase):
                       for w in ctrls)
         self.assertEqual(desc, sorted([
             "TButton:Restore stock firmware...", "TButton:Remove installer data...", "TButton:Back to install",
-            "TButton:Browse...", "TEntry:", "TRadiobutton:Public (recommended)", "TButton:Advanced",
+            "TButton:Browse...", "TButton:Get firmware", "TEntry:", "TRadiobutton:Public (recommended)", "TButton:Advanced",
             "TRadiobutton:Dev (root shell)", "TCheckbutton:" + gui.OTA_LABEL, "TButton:Install diskOS..."]))
         self.assertFalse(any(self._disabled(w) for w in ctrls))
         self.gate = threading.Event()
@@ -1048,7 +1069,7 @@ class AppFlows(unittest.TestCase):
         self._answer(True)
         self._finish()
         self.assertIn("Installer data removed", self._result_text())
-        self.assertIn("The installer's saved state and logs were removed from this computer.", self._result_text())
+        self.assertIn("Saved firmware, recovery images, installer state and logs were removed from this computer.", self._result_text())
         self.assertIn("The installer app itself is kept. Delete it if you no longer need it.", self._result_text())
 
     def test_close_button_on_result_closes_the_window(self):
@@ -1123,6 +1144,32 @@ class AppFlows(unittest.TestCase):
                      ("E303", "flash timed out - the device stopped responding after 33 min. Result UNKNOWN."),
                      ("E321", "the writer did not report completion"),
                      ("E310", "flash result UNKNOWN or FAILED (device result [F000] UNKNOWN)"))
+
+    def test_windows_validation_refusal_shows_nothing_written_without_wait(self):
+        app = self._make()
+        error = errors.FlashError(
+            "The flash could not start because Windows flash validation failed. "
+            "Nothing was sent by the flash transfer.", code="E304",
+            action="See Details for the validation failure. Correct the reported problem "
+                   "and retry; no flash-recovery wait is needed.")
+        error.pre_launch = True
+        def refuse(rep):
+            rep.phase("Flashing", destructive=True)
+            raise error
+        self.after_confirm = refuse
+        self._go("/fw/disc.zip")
+        self._answer(True)
+        self._finish()
+        self.assertEqual(app.state, gui.FAILED)
+        texts = self._texts(app.result_box)
+        self.assertIn(gui.NOTHING_WRITTEN, texts)
+        self.assertIn(error.action, texts)
+        self.assertNotIn(errors.WAIT_THEN_RECOVER, texts)
+        self.assertNotIn(gui.WAIT_NOTE, texts)
+        self.assertEqual(str(app.phase_lbl.cget("text")), "The flash did not complete")
+        self.assertIn("Error E304", str(app.chip.cget("text")))
+        self.assertIn("Back", self._buttons(app.foot))
+        self.assertEqual(self.errors, [])
 
     def test_unknown_result_codes_show_the_persistent_wait_panel(self):
         for code, message in self.UNKNOWN_CASES:

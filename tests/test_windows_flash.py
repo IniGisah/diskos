@@ -197,7 +197,7 @@ class WindowsFlashTests(unittest.TestCase):
         # Parent death before assignment closes the pipe; the native tool never starts.
         with mock.patch.object(sys, 'stdin', mock.Mock(buffer=io.BytesIO(b''))), \
                 mock.patch.object(subprocess, 'call') as native:
-            self.assertEqual(flash_child.main(popen.call_args.args[0][3:]), 1)
+            self.assertEqual(flash_child.main(popen.call_args.args[0][3:]), flash_child.VALIDATION_REFUSED)
             native.assert_not_called()
 
     def test_writer_hash_and_capacity_still_gate_launch(self):
@@ -211,6 +211,77 @@ class WindowsFlashTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, code)
                 self.assertTrue(caught.exception.pre_launch)
         start.assert_not_called()
+
+    def outcome_mocks(self):
+        self.patch(flasher, 'preflight')
+        self.patch(bundle, 'native', return_value='unused')
+        self.patch(bundle, 'native_env', return_value={})
+        self.patch(flasher, '_writer_descriptor', return_value=(768, 1))
+        self.patch(flasher.basegate, 'build_plan', return_value=b'plan')
+        self.patch(bundle, '_windows_api', return_value=API())
+        make_tmp = tempfile.mkdtemp
+        self.patch(flasher.tempfile, 'mkdtemp', side_effect=lambda **kw: make_tmp(dir=self.tmp, **kw))
+        # Keep every retained log inside this test's TemporaryDirectory.
+        original_file = tempfile.mkstemp
+        self.patch(flasher.tempfile, 'mkstemp', side_effect=lambda **kw: original_file(dir=self.tmp, **kw))
+        return self.patch(flasher, '_start_child')
+
+    def test_proven_child_refusal_is_e304_after_wait_without_interruption(self):
+        start = self.outcome_mocks()
+        child = mock.Mock(spec=flasher._WindowsChild)
+        child.wait.return_value = getattr(flash_child, 'VALIDATION_REFUSED', 65)
+        start.return_value = child
+        kill = self.patch(flasher, '_kill_child')
+        with self.assertRaises(flasher.FlashError) as caught:
+            flasher.flash(str(self.image), '257', rep=self.rep)
+        error = caught.exception
+        self.assertEqual(error.code, 'E304')
+        self.assertTrue(error.pre_launch)
+        self.assertEqual(error.message, 'The flash could not start because Windows flash validation failed. '
+                         'Nothing was sent by the flash transfer.')
+        self.assertEqual(error.action, 'See Details for the validation failure. Correct the reported problem '
+                         'and retry; no flash-recovery wait is needed.')
+        self.assertTrue(str(error).isascii())
+        child.wait.assert_called_once_with(timeout=flasher.FLASH_HARD_TIMEOUT_SECS)
+        child.close.assert_called_once()
+        kill.assert_not_called()
+        events = list(self.rep.q.queue)
+        self.assertFalse(any('interrupted' in str(e) for e in events))
+
+    def test_refusal_log_text_does_not_prove_pre_launch_failure(self):
+        start = self.outcome_mocks()
+        child = mock.Mock(spec=flasher._WindowsChild)
+        child.wait.return_value = 1
+        def launch(cmd, **kw):
+            kw['stdout'].write('Windows flash child: refused: path validation failed\n')
+            kw['stdout'].flush()
+            return child
+        start.side_effect = launch
+        with self.assertRaises(flasher.FlashError) as caught:
+            flasher.flash(str(self.image), '257', rep=self.rep)
+        self.assertEqual(caught.exception.code, 'E301')
+        self.assertFalse(getattr(caught.exception, 'pre_launch', False))
+        self.assertEqual(caught.exception.action, flasher.WAIT_THEN_RECOVER)
+
+    def test_only_windows_child_completed_refusal_status_is_trusted(self):
+        start = self.outcome_mocks()
+        kill = self.patch(flasher, '_kill_child')
+        for windows, result in ((True, 1), (True, 0), (True, 0xc0000005),
+                                (False, getattr(flash_child, 'VALIDATION_REFUSED', 65)),
+                                (True, OSError('post-launch failure')),
+                                (True, subprocess.TimeoutExpired('child', 1))):
+            with self.subTest(windows=windows, result=result):
+                child = mock.Mock(spec=flasher._WindowsChild if windows else subprocess.Popen)
+                if isinstance(result, Exception): child.wait.side_effect = result
+                else: child.wait.return_value = result
+                start.return_value = child
+                with self.assertRaises(flasher.FlashError) as caught:
+                    flasher.flash(str(self.image), '257', rep=self.rep)
+                error = caught.exception
+                self.assertEqual(error.code, 'E303' if isinstance(result, subprocess.TimeoutExpired) else 'E301')
+                self.assertFalse(getattr(error, 'pre_launch', False))
+                self.assertEqual(error.action, flasher.WAIT_THEN_RECOVER)
+        self.assertEqual(kill.call_count, 2)
 
     def test_sleep_failure_timeout_and_incomplete_result(self):
         self.patch(flasher, 'preflight')

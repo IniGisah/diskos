@@ -4,6 +4,7 @@
  * SYSTEM_CORE_ONLY); the bottom half is the LVGL flow. */
 #include "system.h"
 #include "config.h"
+#include "ota_policy.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -104,10 +105,34 @@ int sys_is_mounted(const char *mounts, const char *dir){   /* 1 = dir is a mount
     fclose(f);
     return found;
 }
+/* The fuel gauge's temperature (tenths of a degree C in the power-supply ABI) as "30.5 C" with a degree sign; 0 ok, -1 unreadable. */
+static int battery_temp_text(const sys_paths_t *p, char *buf, size_t n){
+    char path[200], raw[16];
+    snprintf(path, sizeof path, "%s/temp", p->batt_dir);
+    if(read_small(path, raw, sizeof raw) != 0 || !raw[0]) return -1;
+    char *e; long t = strtol(raw, &e, 10);
+    if(*e || t < -2000 || t > 2000) return -1;
+    unsigned long at = t < 0 ? (unsigned long)(-t) : (unsigned long)t;
+    snprintf(buf, n, "%s%lu.%lu\xC2\xB0""C", t < 0 ? "-" : "", at / 10, at % 10);   /* 305 -> "30.5 degrees C", -5 -> "-0.5 degrees C" */
+    return 0;
+}
+/* One line about the battery as the fuel gauge reports it: percent, health, cycle count and (with_temp) temperature.
+ * A reading that is not there is left out; no percent reads "--". Used by Device Info and by Battery & Power. */
+void sys_battery_text(const sys_paths_t *pp, int with_temp, char *buf, size_t n){
+    const sys_paths_t *p = pp ? pp : &SYS_DEV_PATHS;
+    char path[200], hl[24] = "", cy[16] = "", tp[24] = "";
+    int pct = sys_read_battery(p);
+    snprintf(path, sizeof path, "%s/health", p->batt_dir);   if(read_small(path, hl, sizeof hl) != 0) hl[0] = 0;
+    snprintf(path, sizeof path, "%s/cycle_count", p->batt_dir); if(read_small(path, cy, sizeof cy) != 0) cy[0] = 0;
+    if(pct >= 0) snprintf(buf, n, "%d%%", pct); else snprintf(buf, n, "--");
+    if(hl[0]){ size_t l = strlen(buf); snprintf(buf + l, n - l, ", %s", hl); }
+    if(cy[0]){ size_t l = strlen(buf); snprintf(buf + l, n - l, ", %s cycles", cy); }
+    if(with_temp && battery_temp_text(p, tp, sizeof tp) == 0){ size_t l = strlen(buf); snprintf(buf + l, n - l, ", %s", tp); }
+}
 int sys_about_collect(const sys_paths_t *pp, const char *diskos_id, sys_about_row_t *rows, int max){
     const sys_paths_t *p = pp ? pp : &SYS_DEV_PATHS;
     int n = 0;
-    char vi[512] = "", prod[48] = "", mainv[16] = "", recv[16] = "", mac[32], path[200], b[64];
+    char vi[512] = "", prod[48] = "", mainv[16] = "", recv[16] = "", mac[32], b[64];
     read_small(p->version_in, vi, sizeof vi);
     if(sys_kv(vi, "PRODUCT", prod, sizeof prod) != 0) snprintf(prod, sizeof prod, "--");
     for(char *c = prod; *c; c++) if(*c == '_') *c = ' ';
@@ -131,32 +156,7 @@ int sys_about_collect(const sys_paths_t *pp, const char *diskos_id, sys_about_ro
         char c[16]; sys_fmt_bytes((unsigned long long)sv.f_bavail * sv.f_frsize, c, sizeof c);
         add_row(rows, &n, max, "Internal", "%s free", c);
     }
-    int pct = sys_read_battery(p);
-    char cur_s[16] = "", tech[24] = "";
-    int chg = -1;
-    snprintf(path, sizeof path, "%s/current_now", p->batt_dir);
-    if(read_small(path, cur_s, sizeof cur_s) == 0 && cur_s[0]){
-        chg = (strtol(cur_s, NULL, 10) > 0);
-    }
-    snprintf(path, sizeof path, "%s/technology", p->batt_dir);
-    if(read_small(path, tech, sizeof tech) != 0) tech[0] = 0;
-
-    if(pct >= 0){
-        if(chg == 1){
-            if(pct == 100) snprintf(b, sizeof b, "100%% (Charging / Full)");
-            else           snprintf(b, sizeof b, "%d%% (Charging)", pct);
-        } else if(chg == 0){
-            snprintf(b, sizeof b, "%d%% (Discharging)", pct);
-        } else {
-            snprintf(b, sizeof b, "%d%%", pct);
-        }
-    } else {
-        snprintf(b, sizeof b, "--");
-    }
-    if(tech[0]){
-        size_t l = strlen(b);
-        snprintf(b + l, sizeof b - l, ", %s", tech);
-    }
+    sys_battery_text(p, 0, b, sizeof b);
     add_row(rows, &n, max, "Battery", "%s", b);
 
     /* Battery Voltage */
@@ -325,20 +325,28 @@ static const char *const RESET_KEYS[] = {
     "brightness", "swipe_thresh", "saver_idx", "saver_style", "screenoff_idx",
     "anim", "time_24h", "accent_mode", "accent_color", "np_style", "theme_preset", "theme_variant",
     "outdoor", "boot_default", "weather_on", "weather_loc", "artcache", "sleep_idx", "sleep_action", "idle_off_idx",
-    "qs_transport", "track_numbers", "album_view", "online_art", "online_lyrics", NULL
+    "qs_transport", "track_numbers", "album_view", "online_art", "online_lyrics", "ota_auto",
+    "custom_ov_mask", "custom_ov_font", "custom_ov_pos", NULL
 };
 int sys_reset_match(const char *key){
     if(!key) return 0;
     for(int i = 0; RESET_KEYS[i]; i++) if(!strcmp(key, RESET_KEYS[i])) return 1;
     return 0;
 }
-int sys_reset_settings(void){ return cfg_remove_if(sys_reset_match); }
+int sys_reset_settings(void){
+    int r=cfg_remove_if(sys_reset_match);
+    /* A previous replacement may have removed every key but missed directory
+     * sync. The no-keys retry must flush that pending durable save as well. */
+    return r ? r : cfg_flush();
+}
 
 #ifndef SYSTEM_CORE_ONLY
 /* ================================================================ LVGL flow */
 #include "screens.h"
 #include "theme.h"
 #include "theme_kit.h"
+#include "ui_dialog.h"
+#include "device_names_ui.h"
 #include "scanner.h"
 #include "version.h"
 #include "ota.h"
@@ -350,101 +358,63 @@ void settings_diskos_id(char *buf, int n);    /* settings.c */
 void settings_restart_prompt(const char *note);           /* settings.c */
 
 static lv_obj_t *g_m;                          /* the one open modal (top layer) */
-static void modal_close(void){ if(g_m){ lv_obj_delete_async(g_m); g_m = NULL; } }
+static void dl_forget(lv_obj_t *o);
+static void modal_close(void){ if(g_m){ dl_forget(g_m); lv_obj_delete_async(g_m); g_m = NULL; } }
 static void cb_close(lv_event_t *e){ if(lv_event_get_code(e) == LV_EVENT_CLICKED){ modal_close(); } }
 
-static lv_obj_t *modal_card(const char *title, int h){
+/* All floating dialogs use the shared content-sized shell and theme panel identity. */
+static ui_dialog_t dlg_open(const char *title){
     modal_close();
-    g_m = lv_obj_create(lv_layer_top());
-    lv_obj_remove_style_all(g_m);
-    lv_obj_set_size(g_m, 360, 360); lv_obj_center(g_m);
-    lv_obj_set_style_bg_color(g_m, TC(SCRIM), 0);
-    lv_obj_set_style_bg_opa(g_m, LV_OPA_70, 0);
-    lv_obj_clear_flag(g_m, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(g_m, LV_OBJ_FLAG_CLICKABLE);        /* absorb taps */
-    lv_obj_t *card = lv_obj_create(g_m);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, 296, h); lv_obj_center(card);
-    lv_obj_set_style_radius(card, 18, 0);
-    lv_obj_set_style_bg_color(card, TC(SURFACE), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *t = lv_label_create(card);
-    lv_label_set_text(t, title);
+    ui_dialog_cfg_t cfg = { .width = 296, .margin = 4, .scrim = 1, .actions = 1,
+                            .fit_width = 1 };
+    ui_dialog_t d = ui_dialog_create(lv_layer_top(), &cfg);
+    g_m = d.scrim;
+    lv_obj_t *t = ui_dialog_label(&d, title);
     lv_obj_set_style_text_font(t, TF(UI_16), 0);
     lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
-    lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 16);
-    return card;
+    return d;
 }
-static lv_obj_t *modal_text(lv_obj_t *card, const char *txt, int y, theme_color_role_t col){
-    lv_obj_t *s = lv_label_create(card);
-    lv_label_set_text(s, txt);
-    lv_label_set_long_mode(s, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s, 256);
-    lv_obj_set_style_text_align(s, LV_TEXT_ALIGN_CENTER, 0);
+static lv_obj_t *dlg_text(const ui_dialog_t *d, const char *txt, theme_color_role_t col){
+    lv_obj_t *s = ui_dialog_label(d, txt);
     lv_obj_set_style_text_font(s, TF(UI_14), 0);
     lv_obj_set_style_text_color(s, theme_color(col), 0);
-    lv_obj_align(s, LV_ALIGN_TOP_MID, 0, y);
     return s;
 }
-static void modal_pill(lv_obj_t *card, int x, const char *txt, theme_color_role_t col, lv_event_cb_t cb, const char *action){
-    lv_obj_t *b = lv_button_create(card);
-    lv_obj_remove_style_all(b);
-    lv_obj_set_size(b, 108, 40); lv_obj_align(b, LV_ALIGN_BOTTOM_MID, x, -14);
-    lv_obj_set_ext_click_area(b, 4);
-    lv_obj_set_style_radius(b, 12, 0);
-    lv_obj_set_style_bg_color(b, TC(SURFACE_RAISED), 0);
-    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-    ui_on(b, cb, LV_EVENT_CLICKED, NULL, action, UI_CORE);
-    lv_obj_t *l = lv_label_create(b);
-    lv_label_set_text(l, txt);
-    lv_obj_set_style_text_font(l, TF(UI_16), 0);
-    lv_obj_set_style_text_color(l, theme_color(col), 0);
-    lv_obj_center(l);
-}
 static void modal_simple(const char *title, const char *body){          /* one "OK" */
-    lv_obj_t *c = modal_card(title, 190);
-    lv_obj_t *s = modal_text(c, body, 46, THEME_CLR_TEXT_MUTED);
-    /* grow the card to fit the wrapped text above the pill (46 top + text + 12 gap + 40 pill + 14 margin), so a
-     * long or translated message (up to ~10 lines) clears OK; capped at 300 like About so it stays on the round screen */
-    lv_obj_update_layout(s);
-    int32_t h = 46 + lv_obj_get_height(s) + 12 + 40 + 14;
-    if(h > 190) { lv_obj_set_height(c, h > 300 ? 300 : h); lv_obj_center(c); }
-    modal_pill(c, 0, "OK", THEME_CLR_ACCENT_EMPHASIS, cb_close, "system.ok");
+    ui_dialog_t d = dlg_open(title);
+    dlg_text(&d, body, THEME_CLR_TEXT_MUTED);
+    ui_dialog_button(&d, "OK", THEME_CLR_ACCENT_EMPHASIS, cb_close, "system.ok");
+    ui_dialog_finalize(&d);
 }
 
-/* ---- About ---- */
+/* ---- Device Info (what the old About row showed is in its diskOS line) ---- */
 void system_about_open(int v){
     (void)v;
     sys_about_row_t rows[16];
     char id[40]; settings_diskos_id(id, sizeof id);
     int n = sys_about_collect(NULL, id, rows, 16);
     int rb = ota_rollback_take(&OTA_DEV);                    /* boot rolled a failed update back: tell the user once */
-    lv_obj_t *card = modal_card("Device Info", 300);
+    ui_dialog_t d = dlg_open("Device Info");
     if(rb){
         char note[80]; snprintf(note, sizeof note, "Update failed to start - back on %s", DISKOS_VERSION);
-        modal_text(card, note, 40, THEME_CLR_STATUS_WARNING);
+        dlg_text(&d, note, THEME_CLR_STATUS_WARNING);
     }
-    lv_obj_t *list = lv_obj_create(card);
-    lv_obj_remove_style_all(list);
-    lv_obj_set_size(list, 272, rb ? 150 : 190); lv_obj_align(list, LV_ALIGN_TOP_MID, 0, rb ? 84 : 44);
-    lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(list, 6, 0);
-    lv_obj_set_scroll_dir(list, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
-    for(int i = 0; i < n; i++){
-        lv_obj_t *l = lv_label_create(list);
+    lv_obj_set_style_pad_row(d.content, 6, 0);
+    for(int i = 0; i < n; i++){                              /* the rows live in the dialog body: it scrolls, no nested list */
+        lv_obj_t *l = lv_label_create(d.content);
         lv_label_set_text(l, rows[i].label);
+        lv_obj_set_width(l, LV_PCT(100));                    /* rows read left to right, as before */
         lv_obj_set_style_text_font(l, TF(UI_12), 0);
         lv_obj_set_style_text_color(l, TC(TEXT_MUTED), 0);
-        lv_obj_t *v = lv_label_create(list);
+        lv_obj_t *v = lv_label_create(d.content);
         lv_label_set_text(v, rows[i].value);
         lv_label_set_long_mode(v, LV_LABEL_LONG_WRAP);
-        lv_obj_set_width(v, 268);
+        lv_obj_set_width(v, LV_PCT(100));
         lv_obj_set_style_text_font(v, TF(UI_14), 0);
         lv_obj_set_style_text_color(v, TC(TEXT_PRIMARY), 0);
     }
-    modal_pill(card, 0, "Close", THEME_CLR_ACCENT_EMPHASIS, cb_close, "system.about_close");
+    ui_dialog_button(&d, "Close", THEME_CLR_ACCENT_EMPHASIS, cb_close, "system.about_close");
+    ui_dialog_finalize(&d);
 }
 
 /* ---- Update from SD card: information only. diskOS never starts a firmware update. ---- */
@@ -454,36 +424,138 @@ void system_update_sd_open(int v){
     if(!sys_is_mounted(SYS_DEV_PATHS.mounts, SYS_DEV_PATHS.sd_root) || !sys_find_update(SYS_DEV_PATHS.sd_root, &u)){ ui_toast("No update file found on the SD card"); return; }
     char body[300], ver[16]; sys_fw_label(u.version, ver, sizeof ver);
     snprintf(body, sizeof body, "Found a file named like a stock update (%s, unchecked). diskOS does not use it. A stock update replaces diskOS: set Default UI to stock, run stock's updater, then reinstall diskOS with the installer.", ver);
-    lv_obj_t *c = modal_card("Update file", 290);
-    modal_text(c, body, 46, THEME_CLR_STATUS_WARNING);
-    modal_pill(c, 0, "OK", THEME_CLR_ACCENT_EMPHASIS, cb_close, "system.ok");
+    ui_dialog_t d = dlg_open("Update file");
+    dlg_text(&d, body, THEME_CLR_STATUS_WARNING);
+    ui_dialog_button(&d, "OK", THEME_CLR_ACCENT_EMPHASIS, cb_close, "system.ok");
+    ui_dialog_finalize(&d);
 }
 
 /* ---- Check for diskOS updates, then (when the release carries the signed bundle) download + verify + stage ---- */
-static struct { pthread_t th; _Atomic int state; char tag[40]; int bundle; } g_chk;   /* state: 0 idle, 1 running, 2 ok, 3 failed; tag/bundle are written before the release store of 2 */
+/* UI thread owns origin/drop and the timer; the worker owns tag/bundle until
+ * its release store. A cancelled job retains its slot until completion is reaped. */
+enum { CHECK_MANUAL, CHECK_AUTO };
+static struct { pthread_t th; _Atomic int state; char tag[40]; int bundle; } g_chk; /* worker: 0 idle, 1 running, 2 ok, 3 failed */
+static struct { _Atomic int cancel; int origin, drop; } g_check;
 static lv_timer_t *g_chk_tm;
-static void *chk_thread(void *a){ (void)a; int ok = ota_fetch_release(&OTA_DEV, g_chk.tag, sizeof g_chk.tag, &g_chk.bundle) == 0; atomic_store_explicit(&g_chk.state, ok ? 2 : 3, memory_order_release); return NULL; }
+/* UI-thread cache: publish only durably saved records. Failed storage blocks
+ * notices until reinitialization, including uncertain directory fsync results. */
+static struct { char available[24], announced[24], dismissed[24]; int bundle, blocked, waiting; } g_notice;
+static int notice_version(const char *s, char out[24]){
+    unsigned v[3] = {0};
+    if(*s == 'v' || *s == 'V') s++;
+    for(int i = 0; i < 3; i++){
+        if(*s < '0' || *s > '9') return 0;
+        do { v[i] = v[i] * 10 + (unsigned)(*s++ - '0'); if(v[i] > 100000) return 0; }
+        while(*s >= '0' && *s <= '9');
+        if(i < 2 && *s++ != '.') return 0;
+    }
+    if(*s) return 0;
+    snprintf(out, 24, "%u.%u.%u", v[0], v[1], v[2]); return 1;
+}
+static int notice_save(const char *key, const char *version, int bundle){
+    if(g_notice.blocked) return 0;
+    cfg_begin();
+    cfg_set_str_deferred(key, version);
+    if(bundle >= 0) cfg_set_str_deferred("ota_bundle", bundle ? "1" : "0");
+    if(cfg_commit() != 0){ g_notice.blocked = 1; return 0; }
+    return 1;
+}
+int system_ota_available(void){
+    return !g_notice.blocked && ota_allowed() && *g_notice.available &&
+        sys_ver_cmp(DISKOS_VERSION, g_notice.available) == -1 &&
+        sys_ver_cmp(g_notice.dismissed, g_notice.available) == -1;
+}
+static void notice_result(const char *tag, int bundle){
+    char v[24];
+    if(!notice_version(tag, v)) return;
+    if(!notice_save("ota_available", v, bundle)) return;
+    strcpy(g_notice.available, v); g_notice.bundle = !!bundle;
+    settings_row_values_refresh();
+}
+static void notice_poll(void){
+    char pending[40];
+    int cmp = sys_ver_cmp(g_notice.announced, g_notice.available);
+    if(!system_ota_available() || (cmp != -1 && !(g_notice.waiting && cmp == 0)) ||
+       !ui_ota_idle() || g_m ||
+       ota_pcm_running(&OTA_DEV) || ota_pending(&OTA_DEV, pending, sizeof pending)) return;
+    /* Save once before display, then retry a refused hint on later idle polls.
+     * Reboot clears waiting: a crash may suppress a note, but cannot repeat it. */
+    if(cmp == -1){
+        if(!notice_save("ota_announced", g_notice.available, -1)) return;
+        strcpy(g_notice.announced, g_notice.available);
+        g_notice.waiting = 1;
+    }
+    char msg[80]; snprintf(msg, sizeof msg, tr("diskOS %s is available"), g_notice.available);
+    if(ui_toast_hint(msg)) g_notice.waiting = 0;
+}
+static void cb_ota_later(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    const char *tag = lv_obj_get_user_data(lv_event_get_target(e));
+    char v[24];
+    if(notice_version(tag, v) && sys_ver_cmp(g_notice.dismissed, v) == -1){
+        if(!notice_save("ota_dismissed", v, -1)){
+            ui_toast(tr("Couldn't save your choice. Try again.")); return;
+        }
+        strcpy(g_notice.dismissed, v);
+    }
+    modal_close(); settings_row_values_refresh();
+}
 
-/* the download/verify worker: state 0 idle, 1 running, 2 finished (rc is written before the release store of 2) */
+static void *chk_thread(void *a){
+    (void)a;
+    int ok = ota_fetch_release_cancel(&OTA_DEV, g_chk.tag, sizeof g_chk.tag, &g_chk.bundle, &g_check.cancel) == 0;
+    atomic_store_explicit(&g_chk.state, ok ? 2 : 3, memory_order_release);
+    return NULL;
+}
+
+/* Download state: 0 idle, 1 running, 2 finished (release publishes rc), 3 joined, awaiting presentation. */
 static struct { pthread_t th; _Atomic int state; ota_prog_t pg; char tag[40]; int rc; } g_dl;
 static lv_timer_t *g_dl_tm;
-static lv_obj_t *g_dl_lbl;
+static lv_obj_t *g_dl_lbl, *g_dl_bar, *g_dl_cancel, *g_dl_owner;
+static int g_dl_value, g_dl_disabled;
+static char g_dl_text[128];
+static void dl_forget(lv_obj_t *o){
+    if(o != g_dl_owner) return;
+    g_dl_lbl = g_dl_bar = g_dl_cancel = g_dl_owner = NULL;
+}
+static void dl_delete(lv_event_t *e){
+    lv_obj_t *o = lv_event_get_target(e);
+    dl_forget(o);
+    if(g_m == o) g_m = NULL;
+}
 static void *dl_thread(void *a){ (void)a; g_dl.rc = ota_stage(&OTA_DEV, DISKOS_VERSION, g_dl.tag, &g_dl.pg); atomic_store_explicit(&g_dl.state, 2, memory_order_release); return NULL; }
 static void dl_status(void){
-    if(!g_dl_lbl || !g_m || !lv_obj_is_valid(g_dl_lbl)) return;
-    char t[64]; int ph = atomic_load(&g_dl.pg.phase);
-    long long tot = atomic_load(&g_dl.pg.total), done = atomic_load(&g_dl.pg.done);   /* long -> long long */
-    if(atomic_load(&g_dl.pg.cancel) && ph < 3) snprintf(t, sizeof t, "Cancelling...");
-    else if(ph == 2) snprintf(t, sizeof t, "Verifying...");
-    else if(ph == 3) snprintf(t, sizeof t, "Saving...");
-    else if(tot > 0) snprintf(t, sizeof t, "Downloading... %d%%", (int)(done * 100 / tot > 100 ? 100 : done * 100 / tot));
-    else snprintf(t, sizeof t, "Downloading...");
-    lv_label_set_text(g_dl_lbl, t);
+    if(!ui_screen_backlight_on() || !g_dl_owner || g_m != g_dl_owner) return;
+    char t[128]; int ph = atomic_load(&g_dl.pg.phase);
+    int cancel = atomic_load(&g_dl.pg.cancel);
+    if(cancel == 2) ph = 3;
+    long long tot = atomic_load(&g_dl.pg.total), done = atomic_load(&g_dl.pg.done);
+    int value = ph >= 2 ? 100 : tot <= 0 ? -1 : done <= 0 ? 0 : done >= tot ? 100 : (int)(done * 100 / tot);
+    if(cancel == 1 && ph < 3) snprintf(t, sizeof t, "%s", tr("Cancelling..."));
+    else if(ph == 2) snprintf(t, sizeof t, "%s", tr("Verifying..."));
+    else if(ph == 3) snprintf(t, sizeof t, "%s", tr("Saving..."));
+    else if(value >= 0) snprintf(t, sizeof t, tr("Downloading... %d%%"), value);
+    else snprintf(t, sizeof t, "%s", tr("Downloading..."));
+    if(strcmp(t, g_dl_text)){ lv_label_set_text(g_dl_lbl, t); snprintf(g_dl_text, sizeof g_dl_text, "%s", t); }
+    if(value != g_dl_value){
+        lv_bar_set_start_value(g_dl_bar, 0, LV_ANIM_OFF);
+        lv_bar_set_value(g_dl_bar, value < 0 ? 65 : value, LV_ANIM_OFF);
+        if(value < 0) lv_bar_set_start_value(g_dl_bar, 35, LV_ANIM_OFF);
+        g_dl_value = value;
+    }
+    if((ph >= 3) != g_dl_disabled){
+        if(ph >= 3) lv_obj_add_state(g_dl_cancel, LV_STATE_DISABLED);
+        else lv_obj_remove_state(g_dl_cancel, LV_STATE_DISABLED);
+        g_dl_disabled = ph >= 3;
+    }
 }
 static void dl_tick(lv_timer_t *t){
-    if(atomic_load_explicit(&g_dl.state, memory_order_acquire) < 2){ dl_status(); return; }
-    pthread_join(g_dl.th, NULL);
-    lv_timer_delete(t); g_dl_tm = NULL; g_dl_lbl = NULL;
+    if(t != g_dl_tm) return;
+    int state = atomic_load_explicit(&g_dl.state, memory_order_acquire);
+    if(state < 2){ dl_status(); return; }
+    if(state == 2){ pthread_join(g_dl.th, NULL); atomic_store(&g_dl.state, 3); }
+    if(!ui_screen_backlight_on() || (g_m && g_m != g_dl_owner)) return;
+    lv_timer_delete(t); g_dl_tm = NULL;
     int rc = g_dl.rc; char body[120];
     atomic_store(&g_dl.state, 0);
     modal_close();
@@ -496,24 +568,41 @@ static void dl_tick(lv_timer_t *t){
         modal_simple("Update failed", body);
     } else modal_simple("Update failed", ota_err_text(rc));
 }
-static void cb_dl_cancel(lv_event_t *e){ if(lv_event_get_code(e) == LV_EVENT_CLICKED) atomic_store(&g_dl.pg.cancel, 1); }
+static void cb_dl_cancel(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED)
+        (void)ota_request_cancel(&g_dl.pg);
+}
+static void offer_delete(lv_event_t *e){ free(lv_event_get_user_data(e)); }
 static void cb_ota_go(lv_event_t *e){
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     int idle = 0;
     if(!atomic_compare_exchange_strong(&g_dl.state, &idle, 1)){ ui_toast("Already updating"); return; }
     memset(&g_dl.pg, 0, sizeof g_dl.pg);
-    snprintf(g_dl.tag, sizeof g_dl.tag, "%s", g_chk.tag);
+    const char *tag = lv_obj_get_user_data(lv_event_get_target(e));
+    snprintf(g_dl.tag, sizeof g_dl.tag, "%s", tag);
     if(pthread_create(&g_dl.th, NULL, dl_thread, NULL) != 0){ atomic_store(&g_dl.state, 0); modal_close(); ui_toast("Couldn't start the update"); return; }
-    lv_obj_t *c = modal_card("Updating diskOS", 190);
-    g_dl_lbl = modal_text(c, "Downloading...", 60, THEME_CLR_TEXT_MUTED);
-    modal_pill(c, 0, "Cancel", THEME_CLR_TEXT_SECONDARY, cb_dl_cancel, "system.ota_cancel");
+    ui_dialog_t d = dlg_open("Updating diskOS");
+    g_dl_owner = g_m;
+    lv_obj_add_event_cb(g_dl_owner, dl_delete, LV_EVENT_DELETE, NULL);
+    g_dl_lbl = dlg_text(&d, tr("Downloading..."), THEME_CLR_TEXT_MUTED);
+    g_dl_bar = lv_bar_create(d.content);
+    lv_obj_set_size(g_dl_bar, lv_pct(100), 12);
+    lv_obj_clear_flag(g_dl_bar, LV_OBJ_FLAG_CLICKABLE);
+    lv_bar_set_range(g_dl_bar, 0, 100); lv_bar_set_mode(g_dl_bar, LV_BAR_MODE_RANGE);
+    g_dl_cancel = ui_dialog_button(&d, tr("Cancel"), THEME_CLR_TEXT_SECONDARY, cb_dl_cancel, "system.ota_cancel");
+    ui_dialog_finalize(&d);
+    g_dl_value = -2; g_dl_disabled = 0; g_dl_text[0] = 0;
+    dl_status();
     g_dl_tm = lv_timer_create(dl_tick, 200, NULL);
 }
 static void chk_tick(lv_timer_t *t){
     int st = atomic_load_explicit(&g_chk.state, memory_order_acquire);
-    if(st < 2) return;
+    if(st < 2 || t != g_chk_tm) return;
     pthread_join(g_chk.th, NULL);
     lv_timer_delete(t); g_chk_tm = NULL;
+    if(g_check.drop){ atomic_store(&g_chk.state, 0); return; }
+    if(st == 2) notice_result(g_chk.tag, g_chk.bundle);
+    if(g_check.origin == CHECK_AUTO){ atomic_store(&g_chk.state, 0); return; }
     if(st == 3){ atomic_store(&g_chk.state, 0); modal_simple("Check failed", "Couldn't reach GitHub. Check the Wi-Fi connection and try again."); return; }
     char body[260]; int c = sys_ver_cmp(DISKOS_VERSION, g_chk.tag);
     atomic_store(&g_chk.state, 0);
@@ -523,11 +612,17 @@ static void chk_tick(lv_timer_t *t){
         return;
     }
     if(c == -1 && g_chk.bundle && ota_supported(&OTA_DEV)){
-        snprintf(body, sizeof body, "diskOS %s is available (you have %s). Download and install it now?", g_chk.tag, DISKOS_VERSION);
-        lv_obj_t *card = modal_card("diskOS update", 210);
-        modal_text(card, body, 46, THEME_CLR_TEXT_MUTED);
-        modal_pill(card, -58, "Later", THEME_CLR_TEXT_SECONDARY, cb_close, "system.ota_later");
-        modal_pill(card,  58, "Update", THEME_CLR_ACCENT_EMPHASIS, cb_ota_go, "system.ota_go");
+        snprintf(body, sizeof body, tr("diskOS %s is available (you have %s). Download and install it now?"), g_chk.tag, DISKOS_VERSION);
+        char *offer = strdup(g_chk.tag);
+        if(!offer){ ui_toast("Couldn't start the check"); return; }
+        ui_dialog_t d = dlg_open("diskOS update");
+        dlg_text(&d, body, THEME_CLR_TEXT_MUTED);
+        lv_obj_t *later = ui_dialog_button(&d, "Later", THEME_CLR_TEXT_SECONDARY, cb_ota_later, "system.ota_later");
+        lv_obj_t *go = ui_dialog_button(&d, "Update", THEME_CLR_ACCENT_EMPHASIS, cb_ota_go, "system.ota_go");
+        lv_obj_set_user_data(later, offer);
+        lv_obj_set_user_data(go, offer);
+        lv_obj_add_event_cb(go, offer_delete, LV_EVENT_DELETE, offer);
+        ui_dialog_finalize(&d);
         return;
     }
     if(c == -1) snprintf(body, sizeof body, "diskOS %s is available (you have %s), but it has no in-app update. Download it from github.com/b0hemia/diskos and install it with the installer.", g_chk.tag, DISKOS_VERSION);
@@ -535,6 +630,93 @@ static void chk_tick(lv_timer_t *t){
     else if(c == 1) snprintf(body, sizeof body, "You have %s, newer than the latest release (%s).", DISKOS_VERSION, g_chk.tag);
     else snprintf(body, sizeof body, "Latest release: %s. Couldn't compare it with %s.", g_chk.tag, DISKOS_VERSION);
     modal_simple("diskOS updates", body);
+}
+/* All coordinator entry points run on the UI thread. Eligibility wiring
+ * cancels automatic-only work; attached manual work is unaffected. */
+void system_ota_check_cancel_auto(void){
+    if(atomic_load(&g_chk.state) && g_check.origin == CHECK_AUTO){
+        g_check.drop = 1;
+        atomic_store(&g_check.cancel, 1);
+    }
+}
+static int chk_start(int origin){
+    g_check.origin = origin; g_check.drop = 0;
+    atomic_store(&g_check.cancel, 0);
+    atomic_store(&g_chk.state, 1);
+    if(pthread_create(&g_chk.th, NULL, chk_thread, NULL) != 0){ atomic_store(&g_chk.state, 0); return 0; }
+    g_chk_tm = lv_timer_create(chk_tick, 300, NULL);
+    return 1;
+}
+int system_ota_check_auto(void){
+    char pv[40];
+    if(atomic_load(&g_chk.state) || atomic_load(&g_dl.state)) return 0; /* busy: defer */
+    if(!ota_allowed() || ota_pending(&OTA_DEV, pv, sizeof pv)) return 0;
+    return chk_start(CHECK_AUTO);
+}
+/* Automatic scheduling belongs to the UI thread. Poll cheaply from the main
+ * loop: eligibility/cancellation once a second, new attempts once a minute.
+ * No timer, wake request, radio command or worker touches configuration. */
+#ifdef DISKOS_HOST
+/* The renderer has no live media/power ownership snapshot. Never admit traffic. */
+int ui_ota_idle(void){ return 0; }
+#endif
+static ota_policy_t g_auto_policy;
+static int g_auto_enabled;
+static uint32_t g_auto_poll_at, g_auto_attempt_at;
+static int auto_wifi_up(void){
+    char b[8] = {0};
+    FILE *f = fopen(OTA_DEV.operstate, "r");
+    if(!f) return 0;
+    size_t n = fread(b, 1, sizeof b, f);
+    int bad = ferror(f);
+    if(fclose(f) != 0) bad = 1;
+    return !bad && n == 3 && !memcmp(b, "up\n", 3);
+}
+void system_ota_auto_init(void){
+    memset(&g_notice, 0, sizeof g_notice);
+    const char *keys[] = {"ota_available", "ota_announced", "ota_dismissed"};
+    char *values[] = {g_notice.available, g_notice.announced, g_notice.dismissed};
+    for(int i = 0; i < 3; i++){
+        const char *v = cfg_get_str(keys[i], "0.0.0");
+        if(!notice_version(v, values[i]) || strcmp(v, values[i])) g_notice.blocked = 1;
+    }
+    const char *bundle = cfg_get_str("ota_bundle", "0");
+    if(strcmp(bundle, "0") && strcmp(bundle, "1")) g_notice.blocked = 1;
+    g_notice.bundle = !strcmp(bundle, "1");
+    ota_policy_io_t io = ota_policy_device_io();
+    ota_policy_init(&g_auto_policy, &io);
+    g_auto_enabled = !strcmp(cfg_get_str("ota_auto", "0"), "1") && ota_policy_enable(&g_auto_policy);
+    g_auto_poll_at = lv_tick_get(); g_auto_attempt_at = g_auto_poll_at - 60000;
+}
+void system_ota_auto_changed(int v){
+    /* Generic set_val must not save this key first: cfg memory may already
+     * contain the new value after an unsuccessful durable rewrite. */
+    g_auto_enabled = 0;
+    system_ota_check_cancel_auto();
+    if(cfg_set_str("ota_auto", v ? "1" : "0") != 0){
+        ui_toast("Couldn't save your choice. Try again."); return;
+    }
+    if(v) g_auto_enabled = ota_policy_enable(&g_auto_policy);
+}
+void system_ota_auto_poll(void){
+    if(!g_auto_enabled) return;
+    if(strcmp(cfg_get_str("ota_auto", "0"), "1")){
+        g_auto_enabled = 0; system_ota_check_cancel_auto(); return;
+    }
+    uint32_t now = lv_tick_get();
+    if((uint32_t)(now - g_auto_poll_at) < 1000) return;
+    g_auto_poll_at = now;
+    int active = atomic_load(&g_chk.state) && g_check.origin == CHECK_AUTO;
+    notice_poll();
+    if(!active && (uint32_t)(now - g_auto_attempt_at) < 60000) return;
+    if(!active) g_auto_attempt_at = now;
+    char pending[40];
+    int eligible = ota_allowed() && ota_supported(&OTA_DEV) && ui_ota_idle() &&
+        !g_m && !atomic_load(&g_dl.state) && !ota_pcm_running(&OTA_DEV) && auto_wifi_up() &&
+        !ota_pending(&OTA_DEV, pending, sizeof pending);
+    if(!eligible){ system_ota_check_cancel_auto(); return; }
+    if(atomic_load(&g_chk.state)) return;
+    if(ota_policy_reserve(&g_auto_policy, g_auto_enabled)) system_ota_check_auto();
 }
 /* Promotion proof for a TRIAL build (contract 4a). Navigation alone never promotes. After >= 3 minutes up, the trial is
  * kept when (a) a real playback start was confirmed (main.c: g_play_pending cleared by a genuine track change) AND a
@@ -566,10 +748,11 @@ static void cb_goback(lv_event_t *e){
 }
 static void ota_keep_prompt(void){
     char t[64]; snprintf(t, sizeof t, tr("Keep diskOS %s?"), g_hl.ver);
-    lv_obj_t *c = modal_card(t, 230);
-    modal_text(c, tr("This update has been running for a few minutes. Keep it, or go back to the previous version (the device restarts)."), 50, THEME_CLR_TEXT_MUTED);
-    modal_pill(c, -58, tr("Go back"), THEME_CLR_STATUS_DANGER, cb_goback, "system.ota_goback");
-    modal_pill(c,  58, tr("Keep"), THEME_CLR_ACCENT_EMPHASIS, cb_keep, "system.ota_keep");
+    ui_dialog_t d = dlg_open(t);
+    dlg_text(&d, tr("This update has been running for a few minutes. Keep it, or go back to the previous version (the device restarts)."), THEME_CLR_TEXT_MUTED);
+    ui_dialog_button(&d, tr("Go back"), THEME_CLR_STATUS_DANGER, cb_goback, "system.ota_goback");
+    ui_dialog_button(&d, tr("Keep"), THEME_CLR_ACCENT_EMPHASIS, cb_keep, "system.ota_keep");
+    ui_dialog_finalize(&d);
 }
 static void ota_health_cb(lv_timer_t *t){
     if(atomic_load(&g_hl.busy)) return;                                     /* a save is still running */
@@ -618,12 +801,15 @@ static void cb_discard_go(lv_event_t *e){
 }
 void system_ota_allow_changed(int v){
     char pv[40];
-    if(v || !ota_pending(&OTA_DEV, pv, sizeof pv)) return;
+    if(!v) system_ota_check_cancel_auto();
+    if(v || !ota_pending(&OTA_DEV, pv, sizeof pv)){ settings_row_values_refresh(); return; }
     cfg_set_int("ota_allow", 1);                                  /* stays ON until the user confirms the discard */
-    lv_obj_t *c = modal_card(tr("Turn off updates?"), 230);
-    modal_text(c, tr("Turning updates off discards the downloaded update."), 46, THEME_CLR_TEXT_MUTED);
-    modal_pill(c, -58, tr("Cancel"), THEME_CLR_TEXT_SECONDARY, cb_close, "system.ota_off_cancel");
-    modal_pill(c,  58, tr("Discard"), THEME_CLR_STATUS_DANGER, cb_discard_go, "system.ota_discard");
+    settings_row_values_refresh();
+    ui_dialog_t d = dlg_open(tr("Turn off updates?"));
+    dlg_text(&d, tr("Turning updates off discards the downloaded update."), THEME_CLR_TEXT_MUTED);
+    ui_dialog_button(&d, tr("Cancel"), THEME_CLR_TEXT_SECONDARY, cb_close, "system.ota_off_cancel");
+    ui_dialog_button(&d, tr("Discard"), THEME_CLR_STATUS_DANGER, cb_discard_go, "system.ota_discard");
+    ui_dialog_finalize(&d);
 }
 void system_check_update_open(int v){
     (void)v;
@@ -635,10 +821,16 @@ void system_check_update_open(int v){
         return;
     }
     if(ota_wifi_down(&OTA_DEV)){ modal_simple("Check failed", "Wi-Fi is not connected. Connect to Wi-Fi and try again."); return; }
-    int idle = 0;
-    if(!atomic_compare_exchange_strong(&g_chk.state, &idle, 1)){ ui_toast("Already checking"); return; }
-    if(pthread_create(&g_chk.th, NULL, chk_thread, NULL) != 0){ atomic_store(&g_chk.state, 0); ui_toast("Couldn't start the check"); return; }
-    g_chk_tm = lv_timer_create(chk_tick, 300, NULL);
+    if(atomic_load(&g_chk.state) != 0){
+        if(g_check.origin == CHECK_AUTO && !g_check.drop){
+            ota_policy_note_manual(&g_auto_policy, g_auto_enabled);
+            g_check.origin = CHECK_MANUAL;
+            ui_toast("Checking for updates...");
+        } else ui_toast("Already checking");
+        return;
+    }
+    ota_policy_note_manual(&g_auto_policy, g_auto_enabled);
+    if(!chk_start(CHECK_MANUAL)){ ui_toast("Couldn't start the check"); return; }
     ui_toast("Checking for updates...");
 }
 
@@ -646,15 +838,20 @@ void system_check_update_open(int v){
 static void cb_reset_go(lv_event_t *e){
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     modal_close();
-    int rc = sys_reset_settings();
-    if(rc == -1){ ui_toast("Couldn't reset - nothing changed"); return; }
-    settings_restart_prompt(rc == -2 ? "Settings reset, but may not be saved. Restart to check." : NULL);
+    dnui_reset();
+}
+void system_names_reset_applied(void){
+    /* Only synchronize after committed worker progress. A refused intent must
+     * leave the automatic-check policy as it was. */
+    if(!cfg_get_int("ota_auto",0)){ g_auto_enabled=0; system_ota_check_cancel_auto(); }
+    settings_row_values_refresh();
 }
 void system_reset_open(int v){
     (void)v;
-    lv_obj_t *c = modal_card("Reset diskOS settings?", 250);
-    modal_text(c, "Look and behaviour settings go back to defaults, then diskOS restarts. Music, Wi-Fi, Bluetooth, Last.fm, EQ and audio settings are kept.", 46, THEME_CLR_TEXT_MUTED);
-    modal_pill(c, -58, "Cancel", THEME_CLR_TEXT_SECONDARY, cb_close, "system.reset_cancel");
-    modal_pill(c,  58, "Reset", THEME_CLR_STATUS_DANGER, cb_reset_go, "system.reset_go");
+    ui_dialog_t d = dlg_open("Reset diskOS settings?");
+    dlg_text(&d, "Resets look, behaviour, both Disc names and paired nicknames. Keeps music, pairings, Wi-Fi, Last.fm, EQ and audio. Reboot for network; Bluetooth on for nicknames.", THEME_CLR_TEXT_MUTED);
+    ui_dialog_button(&d, "Cancel", THEME_CLR_TEXT_SECONDARY, cb_close, "system.reset_cancel");
+    ui_dialog_button(&d, "Reset", THEME_CLR_STATUS_DANGER, cb_reset_go, "system.reset_go");
+    ui_dialog_finalize(&d);
 }
 #endif

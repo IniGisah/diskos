@@ -31,6 +31,14 @@ int  power_apply_charge_via(int (*send)(const char *), int on);
 int  power_temp_state(int tenths_c);
 const char *power_temp_msg(int state);
 
+/* Charging, one rule for every consumer (Home bolt, the idle power-off hold, the "Idle & Charging" art prewarm).
+ * report: the stock player's own charging report (aa1f, ipc.h) in this player generation: -1 none yet, 0, 1.
+ * current_now: the gauge's current_now (-1 = unreadable), which reads 0 at full charge and at the Charging Limit.
+ * The report wins once one has arrived; before that the old rule current_now > 0. Returns 1 charging, 0 not charging,
+ * -1 unknown (no report and no reading). The report is one bit: 0 also means "cable in, battery full or held at the
+ * Charging Limit", which it cannot tell apart from "no cable". */
+int  power_charging_decide(int report, long current_now);
+
 /* SYSCONFIG.POWER_SAVE / CHARGE_PROTECT, read-only: value, or -1 when unreadable (missing, locked, NULL). */
 int  power_read_sysconfig(const char *db_path, const char *column);
 
@@ -40,6 +48,9 @@ int  power_read_sysconfig(const char *db_path, const char *column);
  * so it is tried again later. `last_input_ms` is a lv_tick timestamp of the latest touch or key. */
 int  power_idle_tick(uint32_t now_ms, uint32_t limit_secs, int playing, uint32_t last_input_ms, int (*request)(void));
 void power_idle_reset(void);
+enum { POWER_HOLD_RECEIVER = 1u << 0, POWER_HOLD_CAST = 1u << 1, POWER_HOLD_AIRPLAY = 1u << 2, POWER_HOLD_EXTERNAL = 1u << 3 };
+/* UI thread only. Each source releases only its own hold. */
+void power_set_hold(unsigned source, int on);
 /* Takeover: the player's own idle power-off (unsynced kill) must be off before diskOS's idle timer may run. One step of the
  * retry loop, called every few seconds and reset (power_takeover_reset) on a new ipc generation:
  *   first: read POWER_SAVE; if it is on, record its seconds in *stock_secs (never touches diskOS's own setting); ALWAYS send 0664 = 0 (even when it reads 0 or
@@ -87,8 +98,15 @@ void power_shutdown_new_generation(void);            /* the player restarted (ne
 #ifndef POWER_CORE_ONLY
 /* product wiring (main.c / settings.c): real SD quiesce, `sync` child, ipc_send_cmd, toast */
 int  power_apply_charge(int on);
+/* The one "is it charging" answer: power_charging_decide() of the stock report (ipc_charge_snapshot) and
+ * /sys/class/power_supply/cw221X-bat/current_now, read on every call. Any thread. *current_now (when not NULL) gets the
+ * reading, *report the report state, for logging. */
+int  power_charging(long *current_now, int *report);
 int  power_shutdown_request(void);
 int  power_shutdown_request_from_player(void);
+/* power_shutdown_request with the ops and the panel state given (the host tests drive it with fakes): power_shutdown_begin, then
+ * the closing animation only when it returned 0. */
+int  power_shutdown_request_with(const power_ops_t *o, int screen_lit);
 void power_tick(uint32_t last_input_ms, int playing);   /* main loop: shutdown state machine, idle timer, temperature notice */
 void power_note_input(void);    /* a physical key was pressed (volume) */
 int  power_supported(void);     /* the stock backends above are mapped for this firmware (V2.57) */

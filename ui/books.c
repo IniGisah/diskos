@@ -9,7 +9,8 @@
 #include "screens.h"
 #include "musicdb.h"
 #include "artcache.h"
-#include "scanner.h"   /* scan_read_chapters for the chapter-navigation screen */
+#include "ui.h"
+#include "i18n.h"
 #include "ipc.h"       /* ipc_get_state: current book + position for the chapter list */
 
 #include <stdio.h>
@@ -110,7 +111,7 @@ static void books_add_cover(lv_obj_t *row, const book_t *b, int i){
     }
 }
 
-static void books_rebuild(void){
+static void books_rebuild_read(void){
     if(!g_list) return;
     lv_obj_clean(g_list);
     books_covers_cleanup();
@@ -172,6 +173,11 @@ static void books_rebuild(void){
     }
     lv_obj_scroll_to_y(g_list, 0, LV_ANIM_OFF);
 }
+static void books_rebuild(void){
+    if(!mdb_ui_read_begin()){ ui_toast("Library busy - reopen to refresh"); return; }
+    books_rebuild_read();
+    mdb_ui_read_end();
+}
 
 void books_create(lv_obj_t *root){
     lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
@@ -204,7 +210,10 @@ void books_open(void){
 static lv_obj_t *g_chap_list;
 static chapter_t g_chlist[CHAPS_MAX];
 static int       g_chlist_n;
-static char      g_chlist_path[512];   /* the book these chapters belong to (a jump must target THAT book) */
+static uint64_t g_chlist_request, g_chlist_token;
+static unsigned g_chlist_player;
+static bookmeta_state g_chlist_state;
+static char      g_chlist_path[1024];   /* the book these chapters belong to (a jump must target THAT book) */
 
 static void chap_fmt_dur(long ms, char *out, size_t n){
     if(ms < 0) ms = 0;
@@ -221,7 +230,10 @@ static void chap_row_cb(lv_event_t *e){
     /* Only seek if the track that was current when this list was built is STILL current - otherwise a
      * queue advance or a transport change since the screen opened would seek the wrong track. */
     track_state_t st; ipc_get_state(&st);
-    if(!st.path[0] || strcmp(st.path, g_chlist_path) != 0){ screen_show(SCR_NOWPLAYING); return; }
+    const bookmeta_snapshot *m = ui_bookmeta_snapshot(&st);
+    if(!m || m->request_generation != g_chlist_request ||
+       st.playback_token != g_chlist_token || st.player_generation != g_chlist_player ||
+       strcmp(st.path, g_chlist_path) != 0){ screen_show(SCR_NOWPLAYING); return; }
     long tgt = g_chlist[i].start_ms;
     if(st.duration_ms > 0 && tgt >= st.duration_ms) tgt = st.duration_ms - 1;   /* clamp to a valid position */
     if(tgt < 0) tgt = 0;
@@ -231,7 +243,7 @@ static void chap_row_cb(lv_event_t *e){
 
 static void chap_empty(const char *msg){
     lv_obj_t *l = lv_label_create(g_chap_list);
-    lv_label_set_text(l, msg);
+    lv_label_set_text(l, tr(msg));
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(l, 260);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
@@ -239,15 +251,29 @@ static void chap_empty(const char *msg){
     lv_obj_set_style_text_font(l, TF(UI_16), 0);
 }
 
-static void chapters_rebuild(void){
-    if(!g_chap_list) return;
+void chapters_update(const track_state_t *current){
+    if(!g_chap_list || screen_current() != SCR_CHAPTERS) return;
+    track_state_t st = *current;
+    const bookmeta_snapshot *m = ui_bookmeta_snapshot(&st);
+    uint64_t request = m ? m->request_generation : 0;
+    bookmeta_state state = m ? m->state : BOOKMETA_NONE;
+    if(!strcmp(g_chlist_path, st.path) && g_chlist_token == st.playback_token &&
+       g_chlist_player == st.player_generation && g_chlist_request == request &&
+       g_chlist_state == state) return;
     lv_obj_clean(g_chap_list);
-    g_chlist_n = 0; g_chlist_path[0] = 0;
-    track_state_t st; ipc_get_state(&st);
-    if(!st.path[0] || !mdb_is_book_path(st.path)){ chap_empty("No audiobook playing"); return; }
-    snprintf(g_chlist_path, sizeof g_chlist_path, "%s", st.path);   /* pin this list to its book */
-    g_chlist_n = scan_read_chapters(st.path, g_chlist, CHAPS_MAX);
+    g_chlist_n = 0;
+    snprintf(g_chlist_path, sizeof g_chlist_path, "%s", st.path);
+    g_chlist_token = st.playback_token; g_chlist_player = st.player_generation;
+    g_chlist_request = request; g_chlist_state = state;
+    if(!st.have_track || !mdb_is_book_path(st.path)){ chap_empty("No audiobook playing"); return; }
+    if(m && m->state == BOOKMETA_PENDING){ chap_empty("Loading chapters..."); return; }
+    if(!m || m->state != BOOKMETA_COMPLETE ||
+       (m->result.chapters != BOOK_META_OK && m->result.chapters != BOOK_META_ABSENT)){
+        chap_empty("Chapters unavailable"); return;
+    }
+    g_chlist_n = m->result.count;
     if(g_chlist_n <= 0){ chap_empty("This book has no chapters"); return; }
+    memcpy(g_chlist, m->chapters, g_chlist_n * sizeof g_chlist[0]);
     long dur = st.duration_ms;
     int cur = 0;
     for(int i = 0; i < g_chlist_n; i++){ if(g_chlist[i].start_ms <= st.position_ms) cur = i; else break; }
@@ -313,6 +339,9 @@ void chapters_create(lv_obj_t *root){
 lv_obj_t *chapters_scroller(void){ return g_chap_list; }
 
 void chapters_open(void){
-    chapters_rebuild();
+    track_state_t st; ipc_get_state(&st);
+    ui_bookmeta_retry(&st); /* only a failed request is retried; pending/absence stay put */
+    g_chlist_state = (bookmeta_state)-1; /* rebuild even for an unchanged completed book */
     screen_show(SCR_CHAPTERS);
+    chapters_update(&st);
 }

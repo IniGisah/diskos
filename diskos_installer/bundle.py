@@ -156,6 +156,9 @@ def native(name, required=True):
 
     Raises PreflightError (E102) if required and unresolved. System copies are returned
     as an absolute path and are NOT chmod'd (we never modify a system binary)."""
+    if platform_probe.host()[0] == "macos":
+        from .macos_runtime import prepare_tools
+        prepare_tools(vendor_dir())
     windows = platform_probe.host()[0] == "windows"
     filename = name + ".exe" if windows and not name.endswith((".bin", ".exe")) else name
     p = os.path.join(vendor_dir(), filename)
