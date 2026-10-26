@@ -196,8 +196,16 @@ static void apply_rescan(int v){ (void)v;
 }
 
 /* ---- Date & Time (parity with stock: automatic time switch, set by hand, time zone) ---------------------------- */
+static int g_bt_codec_pending = -1;
+static int g_bt_codec_pending_ticks = 0;
 static void apply_bt_codec(int v){
-    ui_bt_codec_set(v);  /* the normal IPC failure toast handles a rejected send */
+    if(ui_bt_codec_set(v) != 0){
+        g_bt_codec_pending = -1;
+        ui_toast("Couldn't change Bluetooth codec");
+        return;
+    }
+    g_bt_codec_pending = v;
+    g_bt_codec_pending_ticks = 0;
 }
 /* Drop the old diskOS-only preference without touching stock or playback.
  * Idempotent: after a durable removal there is nothing to migrate again. */
@@ -754,19 +762,19 @@ static const setting_t TABLE[] = {
     /* Display order: a category page lists its rows in this order, and a heading appears wherever "section" changes
      * (NULL = no heading). The rows of one section are contiguous (tests/host/test_settings_reorg.py). */
     /* ---- Playback ---- */
-    { "Playback", "Playing music", "Play Mode",   ST_CYCLER, "work_mode", 0,0,0, OPT_MODE, 5, NULL, apply_mode, 0 },
-    { "Playback", "Playing music", "Resume Playback", ST_CYCLER, "memory_play", 0,0,0, OPT_MEMORY, 3, NULL, apply_memory, 0 },
+    { "Playback", "Playing music", "Play Mode",   ST_CHOICE, "work_mode", 0,0,0, OPT_MODE, 5, NULL, apply_mode, 0 },
+    { "Playback", "Playing music", "Resume Playback", ST_CHOICE, "memory_play", 0,0,0, OPT_MEMORY, 3, NULL, apply_memory, 0 },
     { "Playback", "Playing music", "Play Through Folders", ST_TOGGLE, "folder_jump", 0,1,1, NULL, 0, NULL, apply_folder_jump, 0 },
-    { "Playback", "Bedtime", "Sleep Timer", ST_CYCLER, "sleep_idx", 0,0,0, OPT_SLEEP, 6, NULL, apply_sleep, 0 },
-    { "Playback", "Bedtime", "When Sleep Ends", ST_CYCLER, "sleep_action", 0,0,0, OPT_SLEEP_ACT, 2, NULL, NULL, POWER_SLEEP_PAUSE },
+    { "Playback", "Bedtime", "Sleep Timer", ST_CHOICE, "sleep_idx", 0,0,0, OPT_SLEEP, 6, NULL, apply_sleep, 0 },
+    { "Playback", "Bedtime", "When Sleep Ends", ST_CHOICE, "sleep_action", 0,0,0, OPT_SLEEP_ACT, 2, NULL, NULL, POWER_SLEEP_PAUSE },
     /* ---- Audio ---- */
     { "Audio", "Equalizer", "Equalizer",   ST_CHOICE, "eq_preset", 0,0,0, OPT_EQ,  21, NULL, apply_eq,   0 },
     { "Audio", "Equalizer", "Custom EQ",    ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_eq_custom, 0 },
     { "Audio", "Sound", "Gain",        ST_TOGGLE, "audio_gain",   0,0,0, OPT_GAIN, 2, NULL, apply_gain, 0,
       "For demanding headphones" },
-    { "Audio", "Sound", "DAC Filter",  ST_CYCLER, "audio_filter", 0,0,0, OPT_DFILTER, 6, NULL, apply_dac_filter, 1,
+    { "Audio", "Sound", "DAC Filter",  ST_CHOICE, "audio_filter", 0,0,0, OPT_DFILTER, 6, NULL, apply_dac_filter, 1,
       "Digital filter shape" },
-    { "Audio", "Sound", "ReplayGain",  ST_CYCLER, "replay_gain",  0,0,0, OPT_REPLAYGAIN, 3, NULL, apply_replay_gain, 0,
+    { "Audio", "Sound", "ReplayGain",  ST_CHOICE, "replay_gain",  0,0,0, OPT_REPLAYGAIN, 3, NULL, apply_replay_gain, 0,
       "Evens out track volume" },
     { "Audio", "Sound", "DRE",         ST_TOGGLE, "audio_dre",    0,0,0, OPT_DRE, 2, NULL, apply_dre, 1,
       "Dynamic Range Enhancement" },
@@ -779,47 +787,47 @@ static const setting_t TABLE[] = {
     /* ---- Network ---- */
     { "Network", NULL, "Wi-Fi",       ST_ACTION, NULL, 0,0,0, NULL,0, NULL, apply_wifi, 0 },   /* radio row: inline power switch */
     { "Network", NULL, "Bluetooth", ST_ACTION, NULL, 0,0,0, NULL,0, NULL, apply_bt, 0 },          /* radio row: inline power switch */
-    { "Network", NULL, "Bluetooth Codec", ST_CYCLER, "bt_codec", 0,0,0, BT_CODEC_LABEL, BT_CODEC_N, NULL, apply_bt_codec, 0 },
+    { "Network", NULL, "Bluetooth Codec", ST_CHOICE, "bt_codec", 0,0,0, BT_CODEC_LABEL, BT_CODEC_N, NULL, apply_bt_codec, 0 },
     { "Network", NULL, "Device name", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, dnui_open, 0 },
     { "Network", NULL, "Bluetooth name", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_bluetooth_name, 0 },
     { "Network", NULL, "Audio Source", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_workmode, 0 },
     { "Network", NULL, "Web Server", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_webui, 0 },
     /* ---- Display ---- */
     { "Display", "Screen", "Brightness",  ST_SLIDER, "brightness", 4,40,2, NULL,0, NULL, apply_brightness_row, 16 },
-    { "Display", "Screen", "Font Size",   ST_CYCLER, "font_size", 0,0,0, OPT_FONTSIZE, 3, NULL, apply_font_size, 1 },
-    { "Display", "Screen", "Screen Rotation", ST_CYCLER, CTL_CFG_ROT, 0,0,0, OPT_ROTATION, CTL_ROT_N, NULL, apply_screen_rot, 0 },
+    { "Display", "Screen", "Font Size",   ST_CHOICE, "font_size", 0,0,0, OPT_FONTSIZE, 3, NULL, apply_font_size, 1 },
+    { "Display", "Screen", "Screen Rotation", ST_CHOICE, CTL_CFG_ROT, 0,0,0, OPT_ROTATION, CTL_ROT_N, NULL, apply_screen_rot, 0 },
     { "Display", "Screen", "Outdoor Mode", ST_TOGGLE, "outdoor",  0,1,1, NULL, 0, NULL, apply_outdoor, 0 },
     { "Display", "Appearance", "Theme",       ST_CHOICE, "theme_preset", 0,0,0, theme_preset_names, THEME_PRESET_COUNT, NULL, apply_theme_preset, 0 },
-    { "Display", "Appearance", "Appearance",  ST_CYCLER, "theme_variant", 0,0,0, OPT_APPEARANCE, 2, NULL, apply_appearance, 0 },
+    { "Display", "Appearance", "Appearance",  ST_CHOICE, "theme_variant", 0,0,0, OPT_APPEARANCE, 2, NULL, apply_appearance, 0 },
     { "Display", "Appearance", "Accent Colour", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_open_colorpick, 0 },
     { "Display", "Appearance", "Animations",  ST_TOGGLE, "anim",      0,1,1, NULL, 0, NULL, apply_anim, 1 },
-    { "Display", "Music and Home", "Now Playing", ST_CYCLER, "np_style",   0,0,0, OPT_NPSTYLE, 2, NULL, apply_np_style, 0 },
+    { "Display", "Music and Home", "Now Playing", ST_CHOICE, "np_style",   0,0,0, OPT_NPSTYLE, 2, NULL, apply_np_style, 0 },
     { "Display", "Music and Home", "Weather on Home", ST_TOGGLE, "weather_on", 0,1,1, NULL, 0, NULL, apply_weather, 1 },
-    { "Display", "Screensaver", "Screensaver", ST_CYCLER, "saver_idx",  0,0,0, OPT_POWER, 5, NULL, NULL, 2 },
+    { "Display", "Screensaver", "Screensaver", ST_CHOICE, "saver_idx",  0,0,0, OPT_POWER, 5, NULL, NULL, 2 },
     { "Display", "Screensaver", "Saver Style", ST_CHOICE, "saver_style", 0,0,0, OPT_SAVERSTYLE, 6, NULL, NULL, 0 },
-    { "Display", "Screensaver", "Screen Off",  ST_CYCLER, "screenoff_idx", 0,0,0, OPT_POWER, 5, NULL, NULL, 3 },
+    { "Display", "Screensaver", "Screen Off",  ST_CHOICE, "screenoff_idx", 0,0,0, OPT_POWER, 5, NULL, NULL, 3 },
     { "Display", "Screensaver", "Touch to Wake", ST_TOGGLE, "touch_wake", 0,1,1, NULL, 0, NULL, NULL, 0 },
     /* ---- Library ---- */
-    { "Library", "Browsing", "Artists",     ST_CYCLER, "artist_class", 0,0,0, OPT_ARTISTCLASS, 2, NULL, apply_artist_class, 0 },
+    { "Library", "Browsing", "Artists",     ST_CHOICE, "artist_class", 0,0,0, OPT_ARTISTCLASS, 2, NULL, apply_artist_class, 0 },
     { "Library", "Browsing", "Track Numbers", ST_TOGGLE, "track_numbers", 0,1,1, NULL, 0, NULL, apply_track_numbers, 0 },
-    { "Library", "Browsing", "Album View",  ST_CYCLER, "album_view", 0,0,0, OPT_ALBUMVIEW, 2, NULL, NULL, 0 },
+    { "Library", "Browsing", "Album View",  ST_CHOICE, "album_view", 0,0,0, OPT_ALBUMVIEW, 2, NULL, NULL, 0 },
     { "Library", "Artwork and lyrics", "Online Album Art", ST_TOGGLE, "online_art", 0,1,1, NULL, 0, NULL, apply_online_art, 0 },
-    { "Library", "Artwork and lyrics", "Album Art Cache", ST_CYCLER, "artcache", 0,0,0, OPT_ARTCACHE, 3, NULL, apply_artcache, 0,
+    { "Library", "Artwork and lyrics", "Album Art Cache", ST_CHOICE, "artcache", 0,0,0, OPT_ARTCACHE, 3, NULL, apply_artcache, 0,
       "Loads covers in advance" },
     { "Library", "Artwork and lyrics", "Online Lyrics", ST_TOGGLE, "online_lyrics", 0,1,1, NULL, 0, NULL, NULL, 1 },
-    { "Library", "Maintenance", "Tag Encoding", ST_CYCLER, "old_tags", 0,0,0, OPT_OLDTAGS, 3, NULL, apply_old_tags, OLD_TAGS_AUTO,
+    { "Library", "Maintenance", "Tag Encoding", ST_CHOICE, "old_tags", 0,0,0, OPT_OLDTAGS, 3, NULL, apply_old_tags, OLD_TAGS_AUTO,
       "Text encoding of old tags" },
     { "Library", "Maintenance", "Rescan Library", ST_ACTION, NULL, 0,0,0, NULL,0, "Scan", apply_rescan, 0 },
     { "Library", "Maintenance", "Import Playlists", ST_ACTION, NULL, 0,0,0, NULL,0, "Import", apply_import_m3u, 0 },
     /* ---- Controls ---- */
     { "Controls", NULL, "Quick Settings", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_qsconfig, 0 },
-    { "Controls", NULL, "Vol Keys: Press", ST_CYCLER, "key_single", 0,0,0, OPT_VOLKEY, 2, NULL, apply_key_single, CTL_ACT_VOLUME },
-    { "Controls", NULL, "Vol Keys: Double Press", ST_CYCLER, "key_double", 0,0,0, OPT_VOLKEY, 2, NULL, apply_key_double, CTL_ACT_VOLUME },
-    { "Controls", NULL, "Vol Keys: Long Press", ST_CYCLER, "key_long", 0,0,0, OPT_VOLKEY, 2, NULL, apply_key_long, CTL_ACT_VOLUME },
+    { "Controls", NULL, "Vol Keys: Press", ST_CHOICE, "key_single", 0,0,0, OPT_VOLKEY, 2, NULL, apply_key_single, CTL_ACT_VOLUME },
+    { "Controls", NULL, "Vol Keys: Double Press", ST_CHOICE, "key_double", 0,0,0, OPT_VOLKEY, 2, NULL, apply_key_double, CTL_ACT_VOLUME },
+    { "Controls", NULL, "Vol Keys: Long Press", ST_CHOICE, "key_long", 0,0,0, OPT_VOLKEY, 2, NULL, apply_key_long, CTL_ACT_VOLUME },
     { "Controls", NULL, "Back-swipe",  ST_SLIDER, "swipe_thresh", 30,120,5, NULL,0, NULL, apply_swipe, 60 },
     /* ---- Battery & Power ---- */
     { "Battery & Power", NULL, "Charging Limit", ST_TOGGLE, "charge_protect", 0,1,1, NULL, 0, NULL, apply_charge_protect, 0 },
-    { "Battery & Power", NULL, "Idle Power-off", ST_CYCLER, "idle_off_idx", 0,0,0, OPT_IDLE_OFF, POWER_IDLE_N, NULL, NULL, 0 },
+    { "Battery & Power", NULL, "Idle Power-off", ST_CHOICE, "idle_off_idx", 0,0,0, OPT_IDLE_OFF, POWER_IDLE_N, NULL, NULL, 0 },
     { "Battery & Power", NULL, "Battery Usage History", ST_ACTION, NULL, 0,0,0, NULL, 0, LV_SYMBOL_RIGHT, apply_usage_history, 0 },
     /* ---- Device ---- */
     { "Device", "Language and clock", "Language",    ST_CHOICE, "language", 0,0,0, i18n_lang_names, LANG_COUNT, NULL, apply_language, LANG_EN },
@@ -827,7 +835,7 @@ static const setting_t TABLE[] = {
     { "Device", "Language and clock", "Set Date & Time", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_open_datetime, 0 },
     { "Device", "Language and clock", "Time Zone",   ST_CHOICE, "tz_idx", 0,0,0, TZ_LABEL, TZ_COUNT, NULL, apply_timezone, 0 },
     { "Device", "Language and clock", "24-Hour Time", ST_TOGGLE, "time_24h",  0,1,1, NULL, 0, NULL, apply_time, 1 },
-    { "Device", "Startup", "Default UI",  ST_CYCLER, "boot_default", 0,0,0, OPT_BOOTDEF, 2, NULL, apply_boot_default, 0 },
+    { "Device", "Startup", "Default UI",  ST_CHOICE, "boot_default", 0,0,0, OPT_BOOTDEF, 2, NULL, apply_boot_default, 0 },
     { "Device", "Information", "Device Info", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, system_about_open, 0 },
     { "Device", "Updates", "Allow diskOS Updates", ST_TOGGLE, "ota_allow", 0,1,1, NULL, 0, NULL, system_ota_allow_changed, 1 },
     { "Device", "Updates", "Automatic Update Checks", ST_TOGGLE, "ota_auto", 0,1,1, NULL, 0, NULL, system_ota_auto_changed, 0 },
@@ -841,7 +849,14 @@ static const setting_t TABLE[] = {
 #define N_SETTINGS ((int)(sizeof(TABLE)/sizeof(TABLE[0])))
 
 static int get_val(const setting_t *s){
-    if(s->cfg_key && !strcmp(s->cfg_key, "bt_codec")) return mdb_sysconfig_bt_codec();
+    if(s->cfg_key && !strcmp(s->cfg_key, "bt_codec")){
+        int v = mdb_sysconfig_bt_codec();
+        if(g_bt_codec_pending >= 0){
+            if(v == g_bt_codec_pending) g_bt_codec_pending = -1;
+            else return g_bt_codec_pending;
+        }
+        return v;
+    }
     if(s->cfg_key && !strcmp(s->cfg_key, "ota_auto"))
         return !strcmp(cfg_get_str(s->cfg_key, "0"), "1");
     return s->cfg_key ? cfg_get_int(s->cfg_key, s->def) : 0;
@@ -1014,10 +1029,17 @@ static void detail_slider_release_cb(lv_event_t *e){
     else if(g_active->cfg_key) cfg_set_int(g_active->cfg_key, lv_slider_get_value(sl));
 }
 static void bt_codec_saved_tick(lv_timer_t *t){
-    if(screen_current() != SCR_SETTING_DETAIL) return;
-    lv_obj_t *label = lv_timer_get_user_data(t);
+    (void)t;
+    if(screen_current() != SCR_SETTING_DETAIL || !g_active || !g_active->cfg_key || strcmp(g_active->cfg_key, "bt_codec")) return;
     int v = mdb_sysconfig_bt_codec();
-    if(v >= 0 && v < BT_CODEC_N) lv_label_set_text(label, tr(BT_CODEC_LABEL[v]));   /* busy: keep the last read */
+    if(g_bt_codec_pending >= 0){
+        if(v == g_bt_codec_pending || ++g_bt_codec_pending_ticks > 3){
+            g_bt_codec_pending = -1;
+            setting_detail_refresh();
+        }
+    } else if(v >= 0 && v < BT_CODEC_N && v != get_val(g_active)){
+        setting_detail_refresh();
+    }
 }
 static void bt_codec_saved_del(lv_event_t *e){
     lv_timer_delete(lv_event_get_user_data(e));
@@ -1107,6 +1129,10 @@ static void saver_style_tap(int i){
 }
 static void detail_choice_cb(lv_event_t *e){
     int i = (int)(intptr_t)lv_event_get_user_data(e);
+    if(g_active && theme_outdoor() && g_active->cfg_key && !strcmp(g_active->cfg_key, "theme_variant")){
+        ui_toast("Outdoor Mode keeps Light on");
+        return;
+    }
     if(g_active && is_saver_row(g_active)){ saver_style_tap(i); return; }
     if(!g_active || i == get_val(g_active)) return;
     set_val(g_active, i);                               /* a theme re-launches the UI from here */
@@ -1149,7 +1175,7 @@ void setting_detail_refresh(void){
          * accent) in the current Dark/Light variant, so each can be judged before picking. */
         lv_obj_t *list = make_list(g_detail_root);
         g_detail_list = list;
-        if(s->opts == i18n_lang_names) lv_obj_set_height(list, 215);
+        if(s->opts == i18n_lang_names || (s->desc && s->desc[0])) lv_obj_set_height(list, 215);
         int is_theme = !strcmp(s->cfg_key, "theme_preset");
         int is_saver = is_saver_row(s);
         lv_obj_t *sel = NULL;
@@ -1197,6 +1223,22 @@ void setting_detail_refresh(void){
             }
             theme_list_row(row);
         }
+        if(s->apply == apply_old_tags){
+            lv_obj_t *bt = setting_card(list);
+            lv_obj_set_style_opa(bt, LV_OPA_40, LV_STATE_DISABLED);
+            old_tags_rescan_watch(bt);
+            lv_obj_t *l = lv_label_create(bt);
+            lv_label_set_text(l, tr("Rescan Library"));
+            lv_obj_set_style_text_font(l, TF(UI_16), 0);
+            lv_obj_set_style_text_color(l, TC(TEXT_PRIMARY), 0);
+            lv_obj_center(l);
+            ui_on(bt, old_tags_rescan_cb, LV_EVENT_CLICKED, NULL, "settings.old_tags_rescan", UI_CORE);
+            theme_list_row(bt);
+        }
+        if(s->apply == apply_bt_codec){
+            lv_timer_t *poll = lv_timer_create(bt_codec_saved_tick, 1000, list);
+            if(poll) lv_obj_add_event_cb(list, bt_codec_saved_del, LV_EVENT_DELETE, poll);
+        }
         if(sel) lv_obj_scroll_to_view(sel, LV_ANIM_OFF);   /* every picker opens with its current choice in view */
     } else if(s->type == ST_CYCLER){
         /* < value > stepper */
@@ -1233,7 +1275,7 @@ void setting_detail_refresh(void){
     }
 
     /* Offer the existing scan action here; choosing a decoder never starts or cancels a scan. */
-    if(s->apply == apply_old_tags){
+    if(s->type == ST_CYCLER && s->apply == apply_old_tags){
         lv_obj_t *bt = lv_button_create(g_detail_root);
         lv_obj_remove_style_all(bt);
         lv_obj_set_size(bt, 240, 44);
