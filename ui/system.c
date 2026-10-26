@@ -160,7 +160,7 @@ int sys_about_collect(const sys_paths_t *pp, const char *diskos_id, sys_about_ro
     add_row(rows, &n, max, "Battery", "%s", b);
 
     /* Battery Voltage */
-    char v_s[32] = "";
+    char path[128] = "", v_s[32] = "";
     snprintf(path, sizeof path, "%s/voltage_now", p->batt_dir);
     if(read_small(path, v_s, sizeof v_s) == 0 && v_s[0]){
         long uv = strtol(v_s, NULL, 10);

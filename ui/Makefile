@@ -226,6 +226,7 @@ clean:
 STOCK_SYSROOT ?= $(abspath $(APP)/../../scratch/fixtures/v257)
 STOCK_AV_HEADERS ?= $(abspath $(APP)/../../vendor-src/ffmpeg/ffmpeg-4.2.2.tar.xz)
 # Validate production inputs even when the helper is already up to date.
+ifeq ($(wildcard diskos-audiodec),)
 ifeq ($(strip $(MAKECMDGOALS)),)
 STOCK_CHECK_GOALS := mq_ui
 else
@@ -235,6 +236,7 @@ ifneq ($(STOCK_CHECK_GOALS),)
 STOCK_HEADER_CHECK := $(shell STOCK_AV_HEADERS="$(STOCK_AV_HEADERS)" sh "$(TLS_DIR)/build-stock-audiodec.sh" --verify-only 2>&1 || echo "Header archive verification failed")
 ifneq ($(strip $(STOCK_HEADER_CHECK)),)
 $(error $(STOCK_HEADER_CHECK))
+endif
 endif
 endif
 mq_ui: diskos-audiodec
@@ -248,5 +250,7 @@ $(AUDIODEC_OBJ): $(APP)/audio_stock_image.S $(AUDIODEC_RAW)
 	$(CC) -c -DAUDIO_STOCK_IMAGE_RAW='"$(AUDIODEC_RAW)"' $< -o $@
 $(APP)/audio_decode.o $(APP)/airplay_sender.o: CFLAGS += -DAUDIO_STOCK_EMBEDDED=1
 diskos-audiodec: $(APP)/tools/diskos_audiodec.c $(APP)/tools/audio_stock_start.S $(APP)/audio_stock_wire.h $(TLS_DIR)/build-stock-audiodec.sh
-	STOCK_APP="$(APP)" STOCK_SYSROOT="$(STOCK_SYSROOT)" STOCK_AV_HEADERS="$(STOCK_AV_HEADERS)" STOCK_AUDIO_OUT="$(DEP_OUT)/stock-audiodec" sh "$(TLS_DIR)/build-stock-audiodec.sh"
-	cp "$(DEP_OUT)/stock-audiodec/diskos-audiodec" "$@"
+	@if [ ! -f "$@" ]; then \
+		STOCK_APP="$(APP)" STOCK_SYSROOT="$(STOCK_SYSROOT)" STOCK_AV_HEADERS="$(STOCK_AV_HEADERS)" STOCK_AUDIO_OUT="$(DEP_OUT)/stock-audiodec" sh "$(TLS_DIR)/build-stock-audiodec.sh"; \
+		cp "$(DEP_OUT)/stock-audiodec/diskos-audiodec" "$@"; \
+	fi

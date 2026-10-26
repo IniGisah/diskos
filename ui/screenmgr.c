@@ -152,25 +152,6 @@ static void anim_done_push(lv_anim_t *a)
 
 static void screen_refresh_entry(int to)
 {
-
-    lv_obj_t *nw = (to >= 0 && to < SCR_COUNT) ? s_roots[to] : NULL;
-    lv_obj_t *od = (from >= 0 && from < SCR_COUNT) ? s_roots[from] : NULL;
-
-    /* Any screen change dismisses transient lv_layer_top popups (e.g. the duplicate-add
-     * confirm dialog) so they can't survive onto another screen and act on stale state. */
-    npmenu_close_transients();
-    ui_np_close_overlays();   /* dismiss the sleep-timer popover so it can't float onto another screen */
-    if (custom_area(from) && !custom_area(to)) custom_ov_draft_discard();
-    if (from == SCR_CUSTOM_PREVIEW && to != from) custom_preview_leave();   /* every way off the Preview: STOP */
-    if (from == SCR_CUSTOM_PICKER && to != from) custom_picker_leave();   /* every way off the image list: timer and scan end */
-    if (from == SCR_SAVER && to != SCR_SAVER) saver_leave();   /* every way off the saver: wake, screen off, Back, a screen_show; deletes Custom (slice 14) */
-
-    /* Re-sync screens built once, on EVERY entry incl. back-navigation (screen_back also
-     * routes through here - screen_show alone missed the back case, leaving stale labels
-     * e.g. after editing Custom EQ / a setting detail page). */
-    if (from == SCR_CASTPICK && to != from) cast_ui_leave();   /* 17a: every exit stops discovery */
-    if(from == SCR_NPHUB && to != from) nphub_poll_sync(0);
-    if (to == SCR_CASTPICK && to != from) cast_ui_enter();
     if (to == SCR_SETTINGS) settings_refresh_list();
     else if (to == SCR_SETLIST) setlist_refresh();          /* one category's rows, rebuilt per entry */
     else if (to == SCR_SETTING_DETAIL) setting_detail_refresh();  /* stay live if changed elsewhere (e.g. drawer EQ) */
@@ -205,6 +186,17 @@ static void transition(int from, int to, int dir)
      * confirm dialog) so they can't survive onto another screen and act on stale state. */
     npmenu_close_transients();
     ui_np_close_overlays();   /* dismiss the sleep-timer popover so it can't float onto another screen */
+    if (custom_area(from) && !custom_area(to)) custom_ov_draft_discard();
+    if (from == SCR_CUSTOM_PREVIEW && to != from) custom_preview_leave();   /* every way off the Preview: STOP */
+    if (from == SCR_CUSTOM_PICKER && to != from) custom_picker_leave();   /* every way off the image list: timer and scan end */
+    if (from == SCR_SAVER && to != SCR_SAVER) saver_leave();   /* every way off the saver: wake, screen off, Back, a screen_show; deletes Custom (slice 14) */
+
+    /* Re-sync screens built once, on EVERY entry incl. back-navigation (screen_back also
+     * routes through here - screen_show alone missed the back case, leaving stale labels
+     * e.g. after editing Custom EQ / a setting detail page). */
+    if (from == SCR_CASTPICK && to != from) cast_ui_leave();   /* 17a: every exit stops discovery */
+    if (from == SCR_NPHUB && to != from) nphub_poll_sync(0);
+    if (to == SCR_CASTPICK && to != from) cast_ui_enter();
 
     /* Re-sync screens built once, on EVERY entry incl. back-navigation */
     screen_refresh_entry(to);
@@ -524,7 +516,12 @@ void screenmgr_qs_pull_move(int dy)
     lv_obj_set_y(s_roots[SCR_QUICK], y);
     if (s_scrim) {
         int opa = (int)((y + SCR_W) * 36 / SCR_W);
-        if (opa < 0) opa = 0; if (opa > 36) opa = 36;
+        if (opa < 0) {
+            opa = 0;
+        }
+        if (opa > 36) {
+            opa = 36;
+        }
         lv_obj_set_style_opa(s_scrim, (lv_opa_t)opa, 0);
     }
 }
@@ -545,15 +542,19 @@ void screenmgr_qs_pull_end(int dy, uint32_t dt)
         return;
     }
     if (commit) {
-        int dist = 0 - cur_y; if (dist < 0) dist = 0;
+        int dist = 0 - cur_y;
+        if (dist < 0) dist = 0;
         uint32_t ms = (uint32_t)(dist * PUSH_MS / SCR_W);
-        if (ms < 100) ms = 100; if (ms > PUSH_MS) ms = PUSH_MS;
+        if (ms < 100) ms = 100;
+        if (ms > PUSH_MS) ms = PUSH_MS;
         if (s_scrim) anim_scrim_fade(s_scrim, 1, ms);
         anim_page_slide_y(s_roots[SCR_QUICK], cur_y, 0, ms, qs_pull_commit_done);
     } else {
-        int dist = cur_y - (-SCR_W); if (dist < 0) dist = 0;
+        int dist = cur_y - (-SCR_W);
+        if (dist < 0) dist = 0;
         uint32_t ms = (uint32_t)(dist * POP_MS / SCR_W);
-        if (ms < 80) ms = 80; if (ms > POP_MS) ms = POP_MS;
+        if (ms < 80) ms = 80;
+        if (ms > POP_MS) ms = POP_MS;
         if (s_scrim) anim_scrim_fade(s_scrim, 0, ms);
         anim_page_slide_y(s_roots[SCR_QUICK], cur_y, -SCR_W, ms, qs_pull_cancel_done);
     }
@@ -649,7 +650,12 @@ void screenmgr_qs_close_move(int dy)
     lv_obj_set_y(s_roots[SCR_QUICK], y);
     if (s_scrim) {
         int opa = (int)((y + SCR_W) * 36 / SCR_W);
-        if (opa < 0) opa = 0; if (opa > 36) opa = 36;
+        if (opa < 0) {
+            opa = 0;
+        }
+        if (opa > 36) {
+            opa = 36;
+        }
         lv_obj_set_style_opa(s_scrim, (lv_opa_t)opa, 0);
     }
 }
@@ -670,15 +676,19 @@ void screenmgr_qs_close_end(int dy, uint32_t dt)
         return;
     }
     if (commit) {
-        int dist = cur_y - (-SCR_W); if (dist < 0) dist = 0;
+        int dist = cur_y - (-SCR_W);
+        if (dist < 0) dist = 0;
         uint32_t ms = (uint32_t)(dist * POP_MS / SCR_W);
-        if (ms < 80) ms = 80; if (ms > POP_MS) ms = POP_MS;
+        if (ms < 80) ms = 80;
+        if (ms > POP_MS) ms = POP_MS;
         if (s_scrim) anim_scrim_fade(s_scrim, 0, ms);
         anim_page_slide_y(s_roots[SCR_QUICK], cur_y, -SCR_W, ms, qs_close_commit_done);
     } else {
-        int dist = 0 - cur_y; if (dist < 0) dist = 0;
+        int dist = 0 - cur_y;
+        if (dist < 0) dist = 0;
         uint32_t ms = (uint32_t)(dist * PUSH_MS / SCR_W);
-        if (ms < 80) ms = 80; if (ms > PUSH_MS) ms = PUSH_MS;
+        if (ms < 80) ms = 80;
+        if (ms > PUSH_MS) ms = PUSH_MS;
         if (s_scrim) anim_scrim_fade(s_scrim, 1, ms);
         anim_page_slide_y(s_roots[SCR_QUICK], cur_y, 0, ms, qs_close_cancel_done);
     }

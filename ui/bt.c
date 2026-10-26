@@ -113,7 +113,6 @@ static int run_cap_bounded(const char *cmd, char *out, int cap, int timeout_ms){
         if(r != PROC_COMPLETE) out[0] = 0; /* incomplete query is unknown */
         return r;
     }
-    }
     return PROC_FAILED;
 }
 /* Legacy workflows and scan/codec workers: bounded wait; their state migration is separate. */
@@ -694,14 +693,12 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
 
 static void bt_autoroute_start(void){
     if(g_bt_autoroute_timer) return;
-    g_bt_autoroute_misses = 0;
     g_bt_autoroute_timer = lv_timer_create(bt_autoroute_poll_cb, 3000, NULL);
 }
 static void bt_autoroute_stop(void){
     bt_capture_drop_except(NULL);
     if(g_bt_autoroute_timer){ lv_timer_del(g_bt_autoroute_timer); g_bt_autoroute_timer = NULL; }
     g_bt_autorouted[0] = 0;
-    g_bt_autoroute_misses = 0;
 }
 /* The player restarted: a fresh mq_player defaults to local/analog output, so any "already routed to X"
  * memory is stale. Forget it so the auto-route poll re-routes the still-connected speaker (and so the
@@ -711,7 +708,6 @@ void bt_notify_player_restart(void){
     ui_bt_route_prepare_cancel();
 #endif
     g_bt_autorouted[0] = 0;
-    g_bt_autoroute_misses = 0;
     if(bt_on() && !g_bt_autoroute_timer) bt_autoroute_start();
 }
 
@@ -1221,7 +1217,7 @@ static int             g_scan_pending = 0;   /* main-thread: a re-enumerate was 
 
 static void *scan_worker(void *arg){
     unsigned my_gen = (unsigned)(intptr_t)arg;
-    char buf[8192]; bt_probe_run("bluetoothctl devices 2>/dev/null", buf, sizeof buf, 800);
+    char buf[8192]; run_cap("bluetoothctl devices 2>/dev/null", buf, sizeof buf);
     bt_scan_dev_t res[40]; int n = 0;
     char *l = buf;
     while(l && *l && n < 40){

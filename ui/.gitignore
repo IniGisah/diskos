@@ -28,4 +28,5 @@ tests/playstate_test
 
 # UI and FreeType build products
 mq_ui
+diskos-audiodec
 third_party/out/

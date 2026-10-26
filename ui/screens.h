@@ -40,6 +40,12 @@ void screen_set_anim(int on);
 int  screen_current(void);
 void ui_toast(const char *msg);
 void splash_start(void);
+int  splash_active(void);
+void splash_shutdown_start(void);
+int  splash_shutdown_active(void);
+void splash_shutdown_sync_done(void);
+int  splash_shutdown_finished(void);
+void splash_shutdown_cancel(void);
 /* the "something" block-matrix clock (home.c): handle 0 = Home, 1 = screensaver */
 int  mclock_new(int h, lv_obj_t *parent, int y);
 void mclock_set(int h, const char *time_text);
@@ -122,6 +128,7 @@ void cast_ui_stop(void);                        /* theme reload: same as leave *
 int  ui_cast_keys_ok(void);                     /* 16b: all three volume-key gestures are Adjust Volume (controls.c; unreadable = no) */
 int  ui_set_source_mode(int mode);         /* replay the stock V2.28 switch sequence; 0=ok -1=bad arg */
 int  ui_get_source_mode(void);
+int  ui_usb_dac_connected(void);
 int  ui_receiver_active(void); /* Default receiver view hides the entire local theme subtree. */
 int  ui_receiver_in_use(void); /* any non-Local receiver state (owned, switching, uncertain, wire AirPlay): local-only actions refuse */
 int  ui_receiver_transport(const char *cmd); /* receiver prev/play-pause/next from Home, Quick Settings and Now Playing; 0 sent, -1 refused */

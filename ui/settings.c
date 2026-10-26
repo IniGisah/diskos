@@ -627,7 +627,8 @@ static void backlight_write(int v){
  * alike - and the release lights the latest. Zero still goes out at once (screen off is immediate). */
 static int g_bl_hold, g_bl_held;   /* UI thread */
 void ui_backlight(int v){
-    if(v < 0) v = 0; if(v > 40) v = 40;
+    if(v < 0) v = 0;
+    if(v > 40) v = 40;
     if(g_bl_hold){ g_bl_held = v; if(v > 0) return; }
     backlight_write(v);
 }
@@ -660,7 +661,8 @@ void settings_apply_startup(int restore_brightness){
 
 /* shared brightness API (used by Quick Settings too) - persists the value */
 void ui_set_brightness(int v){
-    if(v < 1) v = 1; if(v > 40) v = 40;
+    if(v < 1) v = 1;
+    if(v > 40) v = 40;
     apply_brightness(v);
     cfg_set_int("brightness", v);
 }
@@ -964,7 +966,9 @@ static void rescan_row_del_cb(lv_event_t *e){
 static const setting_t *g_active;           /* setting shown in the detail screen */
 static lv_obj_t *g_detail_root;
 static lv_obj_t *g_setlist_root;            /* SCR_SETLIST root: one category's rows, rebuilt per entry */
+static lv_obj_t *g_settings_list;
 static lv_obj_t *g_setlist_list;            /* current column; old-list delete events must not reset its offset */
+static lv_obj_t *g_detail_list;
 static const char *g_active_group;          /* which category SCR_SETLIST is currently showing */
 /* Category order for the top-level Settings screen (must match the group strings used in TABLE). */
 static const char *const GROUPS[] = { "Playback", "Audio", "Network", "Display", "Library", "Controls", "Battery & Power", "Device" };
@@ -1111,6 +1115,7 @@ static void detail_choice_cb(lv_event_t *e){
 
 void setting_detail_refresh(void){
     if(!g_detail_root || !g_active) return;
+    g_detail_list = NULL;
     lv_obj_clean(g_detail_root);
     lv_obj_set_style_bg_color(g_detail_root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(g_detail_root, LV_OPA_COVER, 0);
@@ -1143,6 +1148,7 @@ void setting_detail_refresh(void){
         /* every option as a row; the current one ticked. Themes also show three colour dots (background, surface,
          * accent) in the current Dark/Light variant, so each can be judged before picking. */
         lv_obj_t *list = make_list(g_detail_root);
+        g_detail_list = list;
         if(s->opts == i18n_lang_names) lv_obj_set_height(list, 215);
         int is_theme = !strcmp(s->cfg_key, "theme_preset");
         int is_saver = is_saver_row(s);
@@ -1324,7 +1330,7 @@ static lv_obj_t *make_list(lv_obj_t *root){
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);   /* rows on the centre line */
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
+    ui_setup_scrollbar(list);
     lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLL_MOMENTUM);
     return list;
 }
@@ -1628,6 +1634,7 @@ void settings_create(lv_obj_t *root){
     ui_header_cb(root, "Settings", list_back_cb);   /* shared header */
 
     lv_obj_t *list = make_list(root);
+    g_settings_list = list;
     for(int g=0; g<N_GROUPS; g++){
         lv_obj_t *row = setting_card(list);
         ui_on(row, cat_cb, LV_EVENT_CLICKED, (void*)(uintptr_t)g, "settings.cat", UI_CORE);
