@@ -21,6 +21,7 @@
 #include "i18n.h"
 #include "screens.h"
 #include "modelock.h"
+#include "device_names.h"
 #include "cast_ui.h"
 #include "modes.h"
 #include "sdio.h"
@@ -62,6 +63,14 @@ static lv_obj_t *cover;
 static lv_obj_t *cover_img;
 static lv_obj_t *cover_note;
 static lv_obj_t *spindle;       /* vinyl-style centre label (hidden in Cover mode) */
+/* Bluetooth Receiving View on SCR_NOWPLAYING */
+static lv_obj_t *g_bt_view, *g_bt_arc, *g_bt_disc, *g_bt_tag, *g_bt_tag_lbl;
+static lv_obj_t *g_bt_title, *g_bt_sub, *g_bt_codec_badge, *g_bt_codec_lbl;
+static lv_obj_t *g_bt_btn_prev, *g_bt_btn_pp, *g_bt_btn_next, *g_bt_lbl_pp;
+static lv_obj_t *g_bt_elapsed, *g_bt_sep, *g_bt_remain;
+static int g_bt_disc_spinning = 0;
+static lv_color32_t s_bt_disc_pixels[140 * 140];
+static lv_image_dsc_t s_bt_disc_dsc;
 /* full-screen album-art view - reuses the stock player's /usr/data/fiio/cover.png (364px sharp,
  * incl. its online-fetched art). Tap the cover to open, tap again to close. Overlay on the NP root. */
 static lv_obj_t *fsart, *fsart_img, *fsart_title, *fsart_artist;
@@ -708,6 +717,60 @@ static void make_clickable(lv_obj_t *o, const char *cmd)
     lv_obj_add_event_cb(o, transport_cb, LV_EVENT_PRESS_LOST, (void *)cmd);
     ui_on(o, transport_cb, LV_EVENT_CLICKED, (void *)cmd, ui_transport_action(cmd, "np", an, sizeof an), UI_CORE);
 }
+static void bt_disc_render(lv_color_t acc){
+    s_bt_disc_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    s_bt_disc_dsc.header.cf = LV_COLOR_FORMAT_ARGB8888;
+    s_bt_disc_dsc.header.flags = 0;
+    s_bt_disc_dsc.header.w = 140;
+    s_bt_disc_dsc.header.h = 140;
+    s_bt_disc_dsc.header.stride = 140 * 4;
+    s_bt_disc_dsc.data_size = sizeof s_bt_disc_pixels;
+    s_bt_disc_dsc.data = (const uint8_t *)s_bt_disc_pixels;
+
+    uint8_t *raw = (uint8_t *)s_bt_disc_pixels;
+    for(int y = 0; y < 140; y++){
+        float dy = (float)y - 69.5f;
+        for(int x = 0; x < 140; x++){
+            float dx = (float)x - 69.5f;
+            float r = sqrtf(dx * dx + dy * dy);
+            int idx = (y * 140 + x) * 4;
+            if(r > 69.5f){
+                raw[idx + 0] = 0; raw[idx + 1] = 0; raw[idx + 2] = 0; raw[idx + 3] = 0;
+            } else if(r > 68.0f){
+                raw[idx + 0] = 80; raw[idx + 1] = 72; raw[idx + 2] = 70; raw[idx + 3] = 255;
+            } else if(r < 4.0f){
+                raw[idx + 0] = 17; raw[idx + 1] = 15; raw[idx + 2] = 14; raw[idx + 3] = 255;
+            } else if(r < 19.0f){
+                if(r >= 18.0f){
+                    raw[idx + 0] = (uint8_t)(acc.blue * 7 / 10);
+                    raw[idx + 1] = (uint8_t)(acc.green * 7 / 10);
+                    raw[idx + 2] = (uint8_t)(acc.red * 7 / 10);
+                } else {
+                    raw[idx + 0] = acc.blue;
+                    raw[idx + 1] = acc.green;
+                    raw[idx + 2] = acc.red;
+                }
+                raw[idx + 3] = 255;
+            } else {
+                uint8_t base = 28;
+                if(fabsf(r - 36.0f) < 0.8f || fabsf(r - 53.0f) < 0.8f){
+                    base = 42;
+                }
+                if(fabsf((float)y - 30.0f) < 0.9f ||
+                   fabsf((float)y - 50.0f) < 0.9f ||
+                   fabsf((float)y - 70.0f) < 1.1f ||
+                   fabsf((float)y - 90.0f) < 0.9f ||
+                   fabsf((float)y - 110.0f) < 0.9f){
+                    base = 56;
+                }
+                raw[idx + 0] = (uint8_t)(base * 28 / 25);
+                raw[idx + 1] = (uint8_t)(base * 26 / 25);
+                raw[idx + 2] = base;
+                raw[idx + 3] = 255;
+            }
+        }
+    }
+}
 
 static void apply_accent(void)
 {
@@ -735,6 +798,15 @@ static void apply_accent(void)
     if(spindle) {
         lv_obj_set_style_bg_color(spindle, accent, LV_PART_MAIN);
     }
+
+    if(g_bt_arc) lv_obj_set_style_arc_color(g_bt_arc, accent, LV_PART_INDICATOR);
+    if(g_bt_disc){
+        bt_disc_render(accent);
+        lv_obj_invalidate(g_bt_disc);
+    }
+    if(g_bt_codec_badge) lv_obj_set_style_border_color(g_bt_codec_badge, accent, 0);
+    if(g_bt_codec_lbl) lv_obj_set_style_text_color(g_bt_codec_lbl, accent, 0);
+    if(g_bt_tag_lbl) lv_obj_set_style_text_color(g_bt_tag_lbl, accent, 0);
 
     /* keep the other accent-bearing surfaces in lockstep so no screen shows a stale
      * (hardcoded-pink) accent: Home's now-playing capsule + the saver decorations. */
@@ -2631,10 +2703,11 @@ static struct { int on, pending, failed, wifi, art; uint64_t now; receiver_snaps
 static lv_timer_t *g_rx_timer;
 static receiver_art_key g_rx_shown_art;
 static int g_rx_visible, g_rx_return, g_rx_retry, g_rx_recovery;
+static int g_bt_visible;
 int ui_receiver_active(void){
     receiver_snapshot r; rx_snapshot(&r);
     return r.target == RECEIVER_SOURCE_AIRPLAY || r.source == RECEIVER_SOURCE_AIRPLAY ||
-        g_rx_visible;
+        g_rx_visible || g_bt_visible;
 }
 /* Confirm departure from observed or dispatched AirPlay reception.
  * Pending/failed presentation state does not prove reception has ended. */
@@ -2709,6 +2782,11 @@ int ui_receiver_transport(const char *cmd){
 /* The receiver's state byte (0 = playing) while receiving; otherwise the view's play state (the Cast facade while beaming, else the
  * local inference, which is frozen while receiving and never consulted then). */
 int ui_transport_playing(void){
+    if(ui_get_source_mode() == 2){
+        bt_rx_state_t st;
+        bt_rx_get_state(&st);
+        return st.connected && st.is_playing;
+    }
     if(!ui_receiver_active()) return ui_view_playing();
     ipc_receiver_meta m; rx_metadata(&m);
     return m.transport_valid && (m.transport_state & 0xff) == 0;
@@ -2739,8 +2817,420 @@ static void receiver_show(lv_obj_t *o, int on){
     if(on) lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
 }
+
+static void bt_disc_spin_cb(void *var, int32_t val){
+    static uint32_t last = 0;
+    static uint32_t count = 0;
+    uint32_t now = lv_tick_get();
+    if(now - last < 33) return;
+    last = now;
+    if(count++ < 5 || (count % 100 == 0)){
+        diskos_trace("bt_disc_spin_cb: count=%u val=%d rot=%d", count, val, val % 3600);
+    }
+    lv_image_set_rotation((lv_obj_t*)var, val % 3600);
+}
+
+static void bt_disc_spin_set(int want){
+    if(!g_bt_disc) return;
+    if(want == g_bt_disc_spinning) return;
+    diskos_trace("bt_disc_spin_set: want=%d was=%d g_bt_disc=%p", want, g_bt_disc_spinning, g_bt_disc);
+    g_bt_disc_spinning = want;
+    if(want){
+        int32_t cur = lv_image_get_rotation(g_bt_disc);
+        lv_anim_t a; lv_anim_init(&a);
+        lv_anim_set_var(&a, g_bt_disc);
+        lv_anim_set_exec_cb(&a, bt_disc_spin_cb);
+        lv_anim_set_values(&a, cur, cur + 3600);
+        lv_anim_set_time(&a, 7000);
+        lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+        lv_anim_start(&a);
+    } else {
+        lv_anim_delete(g_bt_disc, bt_disc_spin_cb);
+    }
+}
+
+static void bt_exit_cancel_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    lv_obj_t *dlg = (lv_obj_t *)lv_event_get_user_data(e);
+    if(dlg) lv_obj_delete_async(dlg);
+}
+
+static void bt_exit_confirm_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    lv_obj_t *dlg = (lv_obj_t *)lv_event_get_user_data(e);
+    if(dlg) lv_obj_delete_async(dlg);
+    ui_set_source_mode(0);
+}
+
+static void bt_tag_click_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    ui_dialog_cfg_t cfg = { .width = 280, .margin = 8, .scrim = 1, .actions = 1, .fit_width = 1 };
+    ui_dialog_t d = ui_dialog_create(lv_layer_top(), &cfg);
+    ui_on(d.scrim, bt_exit_cancel_cb, LV_EVENT_CLICKED, d.scrim, "bt.exit_cancel", UI_CORE);
+    lv_obj_t *t = ui_dialog_label(&d, tr("Stop receiving and return to the Disc's music?"));
+    lv_obj_set_style_text_font(t, TF(UI_18), 0);
+    lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
+    ui_dialog_button(&d, tr("Cancel"), THEME_CLR_TEXT_SECONDARY, bt_exit_cancel_cb, "bt.exit_cancel");
+    ui_dialog_button(&d, tr("Return"), THEME_CLR_ACCENT_EMPHASIS, bt_exit_confirm_cb, "bt.exit_ok");
+    ui_dialog_finalize(&d);
+}
+
+static void bt_transport_btn_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    const char *action = (const char *)lv_event_get_user_data(e);
+    if(!action) return;
+    if(!strcmp(action, "pp"))   bt_rx_play_pause();
+    else if(!strcmp(action, "next")) bt_rx_next();
+    else if(!strcmp(action, "prev")) bt_rx_prev();
+}
+
+static void bt_view_create(lv_obj_t *root){
+    g_bt_view = lv_obj_create(root);
+    lv_obj_remove_style_all(g_bt_view);
+    lv_obj_set_size(g_bt_view, 360, 360);
+    lv_obj_set_style_bg_color(g_bt_view, TC(CANVAS), 0);
+    lv_obj_set_style_bg_opa(g_bt_view, LV_OPA_COVER, 0);
+    if(theme_screen_plain(THEME_PLAIN_NOWPLAYING)) theme_screen_solid(g_bt_view);
+    lv_obj_clear_flag(g_bt_view, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 1. Outer circular progress ring */
+    lv_obj_t *arc = g_bt_arc = lv_arc_create(g_bt_view);
+    lv_obj_set_size(arc, 344, 344);
+    lv_obj_center(arc);
+    lv_arc_set_range(arc, 0, 1000);
+    lv_arc_set_value(arc, 0);
+    lv_arc_set_bg_angles(arc, 0, ARC_SWEEP);
+    lv_arc_set_rotation(arc, ARC_ROT);
+    lv_obj_set_style_arc_width(arc, 6, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(arc, TC(CONTROL_TRACK), LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(arc, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arc, 6, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(arc, ui_current_accent(), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_opa(arc, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(arc, LV_OPA_TRANSP, LV_PART_KNOB);
+    lv_obj_remove_flag(arc, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 2. Top source badge / exit button */
+    g_bt_tag = lv_button_create(g_bt_view);
+    lv_obj_remove_style_all(g_bt_tag);
+    lv_obj_set_size(g_bt_tag, LV_SIZE_CONTENT, 24);
+    lv_obj_set_style_pad_hor(g_bt_tag, 12, 0);
+    lv_obj_set_style_pad_ver(g_bt_tag, 2, 0);
+    lv_obj_align(g_bt_tag, LV_ALIGN_TOP_MID, 0, 16);
+    lv_obj_set_style_radius(g_bt_tag, 12, 0);
+    lv_obj_set_style_bg_color(g_bt_tag, TC(SURFACE_RAISED), 0);
+    lv_obj_set_style_bg_opa(g_bt_tag, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_bt_tag, 1, 0);
+    lv_obj_set_style_border_color(g_bt_tag, TC(BORDER), 0);
+    ui_on(g_bt_tag, bt_tag_click_cb, LV_EVENT_CLICKED, NULL, "bt.tag", UI_CORE);
+
+    g_bt_tag_lbl = lv_label_create(g_bt_tag);
+    lv_label_set_text(g_bt_tag_lbl, "BLUETOOTH");
+    lv_obj_center(g_bt_tag_lbl);
+    lv_obj_set_style_text_font(g_bt_tag_lbl, TF(UI_12), 0);
+    lv_obj_set_style_text_color(g_bt_tag_lbl, ui_current_accent(), 0);
+
+    /* 3. Hero 140px Vinyl Disc (Single rotatable image - exactly like Now Playing cover_img) */
+    bt_disc_render(ui_current_accent());
+    g_bt_disc = lv_image_create(g_bt_view);
+    lv_obj_set_size(g_bt_disc, 140, 140);
+    lv_obj_align(g_bt_disc, LV_ALIGN_TOP_MID, 0, 44);
+    lv_image_set_inner_align(g_bt_disc, LV_IMAGE_ALIGN_CENTER);
+    lv_image_set_pivot(g_bt_disc, 70, 70);
+    lv_image_set_src(g_bt_disc, &s_bt_disc_dsc);
+    lv_obj_clear_flag(g_bt_disc, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Center Bluetooth Icon (stationary on top of spindle) */
+    lv_obj_t *bt_icon = lv_label_create(g_bt_view);
+    lv_label_set_text(bt_icon, LV_SYMBOL_BLUETOOTH);
+    lv_obj_align_to(bt_icon, g_bt_disc, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_color(bt_icon, TC(ON_ACCENT), 0);
+    lv_obj_set_style_text_font(bt_icon, TF(UI_16), 0);
+    lv_obj_clear_flag(bt_icon, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 4. Track Title */
+    g_bt_title = lv_label_create(g_bt_view);
+    lv_obj_set_width(g_bt_title, 260);
+    style_text(g_bt_title, TF(USER_20), TC(TEXT_PRIMARY));
+    lv_label_set_long_mode(g_bt_title, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_label_set_text(g_bt_title, tr("Ready to Connect"));
+    lv_obj_align(g_bt_title, LV_ALIGN_TOP_MID, 0, 196);
+    lv_obj_set_style_text_align(g_bt_title, LV_TEXT_ALIGN_CENTER, 0);
+
+    /* 5. Artist • Album Subtitle */
+    g_bt_sub = lv_label_create(g_bt_view);
+    lv_obj_set_width(g_bt_sub, 260);
+    style_text(g_bt_sub, TF(USER_14), TC(TEXT_SECONDARY));
+    lv_label_set_long_mode(g_bt_sub, LV_LABEL_LONG_DOT);
+    char init_bname[64];
+    dn_bt_name_copy(init_bname, sizeof init_bname);
+    char init_sub[128];
+    snprintf(init_sub, sizeof init_sub, "Select '%s' on phone", init_bname);
+    lv_label_set_text(g_bt_sub, init_sub);
+    lv_obj_align(g_bt_sub, LV_ALIGN_TOP_MID, 0, 224);
+    lv_obj_set_style_text_align(g_bt_sub, LV_TEXT_ALIGN_CENTER, 0);
+
+    /* 6. Codec Badge */
+    g_bt_codec_badge = lv_obj_create(g_bt_view);
+    lv_obj_remove_style_all(g_bt_codec_badge);
+    lv_obj_set_size(g_bt_codec_badge, LV_SIZE_CONTENT, 20);
+    lv_obj_set_style_min_width(g_bt_codec_badge, 70, 0);
+    lv_obj_set_style_pad_hor(g_bt_codec_badge, 10, 0);
+    lv_obj_set_style_pad_ver(g_bt_codec_badge, 1, 0);
+    lv_obj_align(g_bt_codec_badge, LV_ALIGN_TOP_MID, 0, 248);
+    lv_obj_set_style_radius(g_bt_codec_badge, 10, 0);
+    lv_obj_set_style_bg_color(g_bt_codec_badge, TC(SURFACE_RAISED), 0);
+    lv_obj_set_style_bg_opa(g_bt_codec_badge, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_bt_codec_badge, 1, 0);
+    lv_obj_set_style_border_color(g_bt_codec_badge, ui_current_accent(), 0);
+    lv_obj_clear_flag(g_bt_codec_badge, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_bt_codec_lbl = lv_label_create(g_bt_codec_badge);
+    lv_label_set_text(g_bt_codec_lbl, "Bluetooth Audio");
+    lv_obj_center(g_bt_codec_lbl);
+    lv_obj_set_style_text_font(g_bt_codec_lbl, TF(UI_12), 0);
+    lv_obj_set_style_text_color(g_bt_codec_lbl, ui_current_accent(), 0);
+
+    /* 7. Transport Controls */
+    lv_obj_t *ctrl_row = lv_obj_create(g_bt_view);
+    lv_obj_remove_style_all(ctrl_row);
+    lv_obj_set_size(ctrl_row, 240, 56);
+    lv_obj_align(ctrl_row, LV_ALIGN_TOP_MID, 0, 272);
+    lv_obj_set_flex_flow(ctrl_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(ctrl_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(ctrl_row, 22, 0);
+
+    /* Prev button */
+    g_bt_btn_prev = lv_button_create(ctrl_row);
+    lv_obj_remove_style_all(g_bt_btn_prev);
+    lv_obj_set_size(g_bt_btn_prev, 44, 44);
+    lv_obj_set_ext_click_area(g_bt_btn_prev, 4);
+    lv_obj_set_style_radius(g_bt_btn_prev, 22, 0);
+    lv_obj_set_style_bg_color(g_bt_btn_prev, TC(SURFACE_RAISED), 0);
+    lv_obj_set_style_bg_opa(g_bt_btn_prev, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(g_bt_btn_prev, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
+    ui_on(g_bt_btn_prev, bt_transport_btn_cb, LV_EVENT_CLICKED, (void*)"prev", "bt.prev", UI_CORE);
+    lv_obj_t *lbl_prev = lv_label_create(g_bt_btn_prev);
+    lv_label_set_text(lbl_prev, LV_SYMBOL_PREV);
+    lv_obj_center(lbl_prev);
+    lv_obj_set_style_text_color(lbl_prev, TC(TEXT_PRIMARY), 0);
+    lv_obj_set_style_text_font(lbl_prev, TF(UI_20), 0);
+
+    /* Play/Pause button */
+    g_bt_btn_pp = lv_button_create(ctrl_row);
+    lv_obj_remove_style_all(g_bt_btn_pp);
+    lv_obj_set_size(g_bt_btn_pp, 54, 54);
+    lv_obj_set_ext_click_area(g_bt_btn_pp, 4);
+    lv_obj_set_style_radius(g_bt_btn_pp, 27, 0);
+    lv_obj_set_style_bg_opa(g_bt_btn_pp, LV_OPA_COVER, 0);
+    if(theme_trait(THEME_TRAIT_NP_BIG_PLAY)){
+        lv_obj_set_style_bg_color(g_bt_btn_pp, ui_current_accent(), 0);
+        lv_obj_set_style_border_width(g_bt_btn_pp, 0, 0);
+    } else {
+        lv_obj_set_style_bg_color(g_bt_btn_pp, TC(SURFACE_RAISED), 0);
+        lv_obj_set_style_border_width(g_bt_btn_pp, 2, 0);
+        lv_obj_set_style_border_color(g_bt_btn_pp, ui_current_accent(), 0);
+    }
+    lv_obj_set_style_bg_color(g_bt_btn_pp, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
+    ui_on(g_bt_btn_pp, bt_transport_btn_cb, LV_EVENT_CLICKED, (void*)"pp", "bt.pp", UI_CORE);
+    g_bt_lbl_pp = lv_label_create(g_bt_btn_pp);
+    lv_label_set_text(g_bt_lbl_pp, LV_SYMBOL_PLAY);
+    lv_obj_center(g_bt_lbl_pp);
+    lv_obj_set_style_text_color(g_bt_lbl_pp, theme_trait(THEME_TRAIT_NP_BIG_PLAY) ? TC(ON_ACCENT) : ui_current_accent(), 0);
+    lv_obj_set_style_text_font(g_bt_lbl_pp, TF(UI_24), 0);
+
+    /* Next button */
+    g_bt_btn_next = lv_button_create(ctrl_row);
+    lv_obj_remove_style_all(g_bt_btn_next);
+    lv_obj_set_size(g_bt_btn_next, 44, 44);
+    lv_obj_set_ext_click_area(g_bt_btn_next, 4);
+    lv_obj_set_style_radius(g_bt_btn_next, 22, 0);
+    lv_obj_set_style_bg_color(g_bt_btn_next, TC(SURFACE_RAISED), 0);
+    lv_obj_set_style_bg_opa(g_bt_btn_next, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(g_bt_btn_next, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
+    ui_on(g_bt_btn_next, bt_transport_btn_cb, LV_EVENT_CLICKED, (void*)"next", "bt.next", UI_CORE);
+    lv_obj_t *lbl_next = lv_label_create(g_bt_btn_next);
+    lv_label_set_text(lbl_next, LV_SYMBOL_NEXT);
+    lv_obj_center(lbl_next);
+    lv_obj_set_style_text_color(lbl_next, TC(TEXT_PRIMARY), 0);
+    lv_obj_set_style_text_font(lbl_next, TF(UI_20), 0);
+
+    /* 8. Times in bottom arc gap */
+    g_bt_elapsed = lv_label_create(g_bt_view);
+    lv_obj_set_width(g_bt_elapsed, 76);
+    style_text(g_bt_elapsed, TF(UI_14), TC(TEXT_MUTED));
+    lv_label_set_text(g_bt_elapsed, "0:00");
+    lv_obj_set_style_text_align(g_bt_elapsed, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(g_bt_elapsed, LV_ALIGN_TOP_MID, -44, 322);
+
+    g_bt_sep = lv_label_create(g_bt_view);
+    style_text(g_bt_sep, TF(UI_14), TC(TEXT_SEPARATOR));
+    lv_label_set_text(g_bt_sep, "/");
+    lv_obj_align(g_bt_sep, LV_ALIGN_TOP_MID, 0, 322);
+
+    g_bt_remain = lv_label_create(g_bt_view);
+    lv_obj_set_width(g_bt_remain, 76);
+    style_text(g_bt_remain, TF(UI_14), TC(TEXT_MUTED));
+    lv_label_set_text(g_bt_remain, "0:00");
+    lv_obj_set_style_text_align(g_bt_remain, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(g_bt_remain, LV_ALIGN_TOP_MID, 44, 322);
+
+    receiver_show(g_bt_view, 0);
+}
+
+static void bt_view_tick(void){
+    int is_bt = (ui_get_source_mode() == 2);
+    if(is_bt != g_bt_visible){
+        g_bt_visible = is_bt;
+        receiver_show(g_bt_view, is_bt);
+        if(is_bt){
+            receiver_show(g_local_view, 0);
+            receiver_show(g_rx_view, 0);
+            bt_rx_worker_ensure();
+            ui_np_close_overlays();
+            ui_np_fsart_close();
+            g_track_dur = 0; g_seek_on = g_seek_cand = g_scrubbing = 0;
+            g_seek_hold_until = 0; g_np_curpath[0] = 0; g_favp_active = 0;
+            if(screen_current() == SCR_WORKMODE) screen_show(SCR_NOWPLAYING);
+        } else {
+            bt_disc_spin_set(0);
+            home_release_receiver();
+            if(!ui_receiver_active()) receiver_show(g_local_view, 1);
+            return;
+        }
+    }
+    if(!is_bt) return;
+
+    bt_rx_state_t st;
+    bt_rx_get_state(&st);
+
+    uint32_t elapsed_ms = 0, dur_ms = 0;
+    int frac = 0;
+    bt_rx_get_progress(&elapsed_ms, &dur_ms, &frac);
+
+    /* Update colors */
+    lv_color_t acc = ui_current_accent();
+    if(g_bt_codec_badge) lv_obj_set_style_border_color(g_bt_codec_badge, acc, 0);
+    if(g_bt_codec_lbl) lv_obj_set_style_text_color(g_bt_codec_lbl, acc, 0);
+    if(g_bt_tag_lbl) lv_obj_set_style_text_color(g_bt_tag_lbl, acc, 0);
+    if(g_bt_arc) lv_obj_set_style_arc_color(g_bt_arc, acc, LV_PART_INDICATOR);
+
+    /* Update Title */
+    if(g_bt_title){
+        if(st.connected && st.title[0]){
+            set_label_text_changed(g_bt_title, st.title);
+        } else if(st.connected && st.is_playing){
+            set_label_text_changed(g_bt_title, tr("Bluetooth Audio Playing"));
+        } else if(st.connected){
+            set_label_text_changed(g_bt_title, st.dev_name[0] ? st.dev_name : "Connected Device");
+        } else {
+            set_label_text_changed(g_bt_title, tr("Ready to Connect"));
+        }
+    }
+
+    /* Update Subtitle */
+    if(g_bt_sub){
+        if(st.connected && (st.artist[0] || st.album[0])){
+            char sub[256];
+            if(st.artist[0] && st.album[0]) snprintf(sub, sizeof sub, "%s • %s", st.artist, st.album);
+            else snprintf(sub, sizeof sub, "%s", st.artist[0] ? st.artist : st.album);
+            set_label_text_changed(g_bt_sub, sub);
+        } else if(st.connected && (st.is_playing || st.title[0])){
+            set_label_text_changed(g_bt_sub, st.dev_name[0] ? st.dev_name : "Bluetooth Audio");
+        } else if(st.connected){
+            set_label_text_changed(g_bt_sub, tr("Play audio from your phone"));
+        } else {
+            char sub[128];
+            const char *bname = st.local_name[0] ? st.local_name : "SNOWSKY DISC";
+            snprintf(sub, sizeof sub, "Select '%s' on phone", bname);
+            set_label_text_changed(g_bt_sub, sub);
+        }
+    }
+
+    /* Update Codec */
+    if(g_bt_codec_lbl){
+        if(st.connected && st.codec[0]){
+            set_label_text_changed(g_bt_codec_lbl, st.codec);
+            receiver_show(g_bt_codec_badge, 1);
+        } else if(st.connected){
+            set_label_text_changed(g_bt_codec_lbl, "BT Audio");
+            receiver_show(g_bt_codec_badge, 1);
+        } else {
+            receiver_show(g_bt_codec_badge, 0);
+        }
+    }
+
+    /* Update Play/Pause icon */
+    if(g_bt_lbl_pp){
+        set_label_text_changed(g_bt_lbl_pp, st.is_playing ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+        if(theme_trait(THEME_TRAIT_NP_BIG_PLAY)){
+            lv_obj_set_style_text_color(g_bt_lbl_pp, TC(ON_ACCENT), 0);
+            lv_obj_set_style_bg_color(g_bt_btn_pp, acc, 0);
+        } else {
+            lv_obj_set_style_text_color(g_bt_lbl_pp, acc, 0);
+            lv_obj_set_style_border_color(g_bt_btn_pp, acc, 0);
+        }
+    }
+
+    /* Progress & times */
+    if(g_bt_arc){
+        int val = (st.connected && dur_ms > 0) ? frac : 0;
+        lv_arc_set_value(g_bt_arc, val);
+        lv_opa_t opa = (st.connected && dur_ms > 0) ? (st.is_playing ? LV_OPA_COVER : LV_OPA_50) : LV_OPA_TRANSP;
+        lv_obj_set_style_arc_opa(g_bt_arc, opa, LV_PART_INDICATOR);
+    }
+
+    if(g_bt_elapsed && g_bt_remain && g_bt_sep){
+        if(st.connected && dur_ms > 0){
+            char tel[16], trem[16];
+            mmss((long)elapsed_ms, tel, sizeof tel);
+            mmss((long)dur_ms, trem, sizeof trem);
+            set_label_text_changed(g_bt_elapsed, tel);
+            set_label_text_changed(g_bt_remain, trem);
+            receiver_show(g_bt_elapsed, 1);
+            receiver_show(g_bt_sep, 1);
+            receiver_show(g_bt_remain, 1);
+        } else if(st.connected && elapsed_ms > 0){
+            char tel[16];
+            mmss((long)elapsed_ms, tel, sizeof tel);
+            set_label_text_changed(g_bt_elapsed, tel);
+            receiver_show(g_bt_elapsed, 1);
+            receiver_show(g_bt_sep, 0);
+            receiver_show(g_bt_remain, 0);
+        } else {
+            receiver_show(g_bt_elapsed, 0);
+            receiver_show(g_bt_sep, 0);
+            receiver_show(g_bt_remain, 0);
+        }
+    }
+
+    /* Vinyl spin */
+    bt_disc_spin_set(st.connected && st.is_playing && screen_current() == SCR_NOWPLAYING && ui_screen_backlight_on());
+
+    /* Sync Home capsule & Quick Settings only when state/track changed */
+    const char *htitle = (st.connected && st.title[0]) ? st.title : "Bluetooth";
+    const char *hartist = (st.connected && st.artist[0]) ? st.artist : (st.connected ? st.dev_name : "Ready to Connect");
+    static char s_bt_last_title[128] = {0};
+    static char s_bt_last_artist[128] = {0};
+    static int s_bt_last_playing = -1;
+    static int s_bt_last_connected = -1;
+    if(st.connected != s_bt_last_connected || st.is_playing != s_bt_last_playing ||
+       strcmp(s_bt_last_title, htitle) != 0 || strcmp(s_bt_last_artist, hartist) != 0){
+        s_bt_last_connected = st.connected;
+        s_bt_last_playing = st.is_playing;
+        snprintf(s_bt_last_title, sizeof s_bt_last_title, "%s", htitle);
+        snprintf(s_bt_last_artist, sizeof s_bt_last_artist, "%s", hartist);
+        diskos_trace("bt_view_tick: state_changed conn=%d play=%d title='%s' artist='%s'",
+                     st.connected, st.is_playing, htitle, hartist);
+        home_set_receiver(htitle, hartist, acc, st.is_playing);
+        quicksettings_refresh(st.is_playing);
+    }
+}
+
 static void receiver_view_tick(lv_timer_t *timer){
     (void)timer;
+    bt_view_tick();
+    if(g_bt_visible) return;
     receiver_snapshot r; rx_snapshot(&r);
     if(g_rx_dlg && !rx_exit_needs_confirm()) rx_exit_close();   /* reception ended another way: no stale prompt */
     int active = r.target == RECEIVER_SOURCE_AIRPLAY || r.source == RECEIVER_SOURCE_AIRPLAY ||
@@ -2933,6 +3423,7 @@ static void receiver_view_create(lv_obj_t *root){
         { g_rx_labels[0], g_rx_labels[1], g_rx_labels[2], g_rx_labels[3], g_rx_labels[4] }, g_rx_fill, g_rx_elapsed, g_rx_remain };
     if(theme_kit()->receiver){ rx_state_t st = { .mode = RX_OTHER, .first = 1 }; theme_kit()->receiver(&g_rx_parts, &st); }
     receiver_show(g_rx_view,0);
+    bt_view_create(root);
     if(g_rx_timer) lv_timer_delete(g_rx_timer);
     g_rx_timer = lv_timer_create(receiver_view_tick,100,NULL);
 }

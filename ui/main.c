@@ -1400,6 +1400,11 @@ int ui_set_source_mode(int mode){
         g_sd_deadline = lv_tick_get() + 20000;
         if(source_send(mode) < 0){ storage_unknown("return request failed"); return -1; }
         if(mode == 0 || mode == 4) modelock_close();
+        else if(mode == 2){
+            modelock_close();
+            bt_rx_worker_ensure();
+            screen_show(SCR_NOWPLAYING);
+        }
         else modelock_open(mode);
         return 0;
     }
@@ -1407,8 +1412,16 @@ int ui_set_source_mode(int mode){
     if(was_playing && ipc_send_cmd("0201000C0000") < 0){ ui_toast("Player is busy - try again"); return -1; }
     if(source_send(mode) < 0){ ui_toast("Couldn't switch mode"); return -1; }
     g_source_mode = mode;
-    if(mode == 1 || mode == 2) modelock_open(mode);
-    else if(mode == 0 || mode == 4) modelock_close();
+    if(mode == 1) modelock_open(mode);
+    else if(mode == 2){
+        modelock_close();
+        bt_rx_worker_ensure();
+        screen_show(SCR_NOWPLAYING);
+    }
+    else if(mode == 0 || mode == 4){
+        modelock_close();
+        if(screen_current() == SCR_WORKMODE) screen_show(SCR_NOWPLAYING);
+    }
     if(mode == 0 && was_playing) ipc_send_cmd("0201000C0000");
     return 0;
 }
@@ -2893,15 +2906,115 @@ static void ipc_health_cb(lv_timer_t *t){
 /* Advances a still-image apply (a810 wait, deadline, finish, image cache drop); idle cost is one lock. */
 static void custom_still_cb(lv_timer_t *t){ (void)t; custom_still_tick(); }
 
-/* async-signal-safe: log the fatal signal number to the boot log so a hard crash
+/* Trace breadcrumb ring buffer (async-signal-safe to read in crash_log) */
+#define TRACE_RING_SIZE 32
+typedef struct {
+    uint32_t ms;
+    char msg[80];
+} trace_entry_t;
+static trace_entry_t g_trace_ring[TRACE_RING_SIZE];
+static volatile uint32_t g_trace_idx = 0;
+
+void diskos_trace(const char *fmt, ...){
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint32_t ms = (uint32_t)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+
+    uint32_t idx = __sync_fetch_and_add(&g_trace_idx, 1) % TRACE_RING_SIZE;
+    g_trace_ring[idx].ms = ms;
+
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(g_trace_ring[idx].msg, sizeof(g_trace_ring[idx].msg), fmt, ap);
+    va_end(ap);
+
+    /* Also write to /usr/data/bt_rx.log in real time */
+    int fd = open("/usr/data/bt_rx.log", O_WRONLY|O_CREAT|O_APPEND, 0666);
+    if(fd >= 0){
+        char line[128];
+        int len = snprintf(line, sizeof line, "[%u.%03u] %s\n", ms / 1000, ms % 1000, g_trace_ring[idx].msg);
+        if(len > 0) write(fd, line, len);
+        close(fd);
+    }
+}
+
+/* async-signal-safe: log the fatal signal number, fault address, registers and trace ring to the boot and crash logs so a hard crash
  * is visible after the watchdog respawns. Runs on a dedicated alt stack. */
 static void crash_log(int sig, siginfo_t *si, void *ucv){
+    int fd1 = open("/usr/data/diskos_boot.log", O_WRONLY|O_APPEND);
+    int fd2 = open("/usr/data/diskos_crash.log", O_WRONLY|O_CREAT|O_APPEND, 0666);
+    int fds[2] = { fd1, fd2 };
+
+    char b[512]; int len=0;
     const char *m = "=== diskos CAUGHT FATAL SIGNAL ";
-    int fd = open("/usr/data/diskos_boot.log", O_WRONLY|O_APPEND);
-    if(fd>=0){ (void)si; (void)ucv;
-        char b[8]; int n=sig, i=0; b[i++]=' ';
-        if(n>=10){ b[i++]='0'+(n/10); } b[i++]='0'+(n%10); b[i++]='\n';
-        write(fd,m,30); write(fd,b,i); close(fd); }
+    while(*m) b[len++] = *m++;
+    if(sig>=10) b[len++] = '0'+(sig/10);
+    b[len++] = '0'+(sig%10);
+    b[len++] = ' '; b[len++] = 'a'; b[len++] = 'd'; b[len++] = 'd'; b[len++] = 'r'; b[len++] = '=';
+    uintptr_t a = (uintptr_t)(si ? si->si_addr : 0);
+    for(int s=28; s>=0; s-=4){
+        int nib = (a >> s) & 0xf;
+        b[len++] = nib < 10 ? '0'+nib : 'a'+(nib-10);
+    }
+    uintptr_t pc = 0, ra = 0, sp = 0;
+#if defined(__mips__)
+    if(ucv){
+        ucontext_t *uc = (ucontext_t*)ucv;
+        pc = (uintptr_t)uc->uc_mcontext.pc;
+        ra = (uintptr_t)uc->uc_mcontext.gregs[31];
+        sp = (uintptr_t)uc->uc_mcontext.gregs[29];
+    }
+#endif
+    const char *mpc = " pc=";
+    while(*mpc) b[len++] = *mpc++;
+    for(int s=28; s>=0; s-=4){
+        int nib = (pc >> s) & 0xf;
+        b[len++] = nib < 10 ? '0'+nib : 'a'+(nib-10);
+    }
+    const char *mra = " ra=";
+    while(*mra) b[len++] = *mra++;
+    for(int s=28; s>=0; s-=4){
+        int nib = (ra >> s) & 0xf;
+        b[len++] = nib < 10 ? '0'+nib : 'a'+(nib-10);
+    }
+    const char *msp = " sp=";
+    while(*msp) b[len++] = *msp++;
+    for(int s=28; s>=0; s-=4){
+        int nib = (sp >> s) & 0xf;
+        b[len++] = nib < 10 ? '0'+nib : 'a'+(nib-10);
+    }
+    const char *mbase = " base=";
+    while(*mbase) b[len++] = *mbase++;
+    uintptr_t base = (uintptr_t)crash_log;
+    for(int s=28; s>=0; s-=4){
+        int nib = (base >> s) & 0xf;
+        b[len++] = nib < 10 ? '0'+nib : 'a'+(nib-10);
+    }
+    b[len++] = '\n';
+
+    for(int i = 0; i < 2; i++){
+        if(fds[i] >= 0){
+            write(fds[i], b, len);
+            const char *hdr = "--- Recent trace breadcrumbs ---\n";
+            write(fds[i], hdr, strlen(hdr));
+            uint32_t cur = g_trace_idx;
+            uint32_t start = cur > TRACE_RING_SIZE ? (cur - TRACE_RING_SIZE) : 0;
+            for(uint32_t k = start; k < cur; k++){
+                uint32_t r_idx = k % TRACE_RING_SIZE;
+                if(g_trace_ring[r_idx].msg[0]){
+                    char tb[160];
+                    int tlen = snprintf(tb, sizeof tb, " [%u.%03u] %s\n",
+                                        g_trace_ring[r_idx].ms / 1000,
+                                        g_trace_ring[r_idx].ms % 1000,
+                                        g_trace_ring[r_idx].msg);
+                    if(tlen > 0) write(fds[i], tb, tlen);
+                }
+            }
+            const char *foot = "--------------------------------\n";
+            write(fds[i], foot, strlen(foot));
+            close(fds[i]);
+        }
+    }
     signal(sig, SIG_DFL); raise(sig);
 }
 
@@ -4797,6 +4910,7 @@ int main(int argc, char **argv){
       sa.sa_sigaction = crash_log; sa.sa_flags = SA_SIGINFO | SA_ONSTACK; sigemptyset(&sa.sa_mask);
       sigaction(SIGSEGV,&sa,NULL); sigaction(SIGBUS,&sa,NULL);
       sigaction(SIGABRT,&sa,NULL); sigaction(SIGFPE,&sa,NULL); }
+    signal(SIGPIPE, SIG_IGN);
     /* Boot-hang backstop: if we don't reach the main loop + first paint within
      * BOOT_DEADLINE_S, SIGALRM _exit()s us so fiio_init respawns a fresh mq_ui
      * (an alive-but-hung mq_ui is invisible to its `pgrep -x` watchdog). The
@@ -4863,6 +4977,9 @@ int main(int argc, char **argv){
     } else if(boot_sm == 1 || boot_sm == 3){
         g_source_mode = boot_sm;
         modelock_open(boot_sm);
+    } else if(boot_sm == 2){
+        g_source_mode = 2;
+        bt_rx_worker_ensure();
     }
 #ifdef DISKOS_AIRPLAY_PROOF
     ap_proof_init();
@@ -4964,7 +5081,7 @@ int main(int argc, char **argv){
         else if(!strcmp(argv[1],"upnext")) start = SCR_UPNEXT;
         else if(!strcmp(argv[1],"datetime")) start = SCR_DATETIME;
         else if(!strcmp(argv[1],"modelock")) start = SCR_MODELOCK;
-        else if(!strcmp(argv[1],"btlock")){ start = SCR_MODELOCK; modelock_open(2); }
+        else if(!strcmp(argv[1],"btlock")){ start = SCR_NOWPLAYING; g_source_mode = 2; bt_rx_worker_ensure(); }
         else if(!strcmp(argv[1],"daclock")){ start = SCR_MODELOCK; modelock_open(1); }
         else if(!strcmp(argv[1],"storagelock")){ start = SCR_MODELOCK; modelock_open(3); }
     }

@@ -142,6 +142,7 @@ void ui_receiver_sleep_expired(void); /* sleep expiry cancels queued receiver re
 int  ui_source_switch_pending(void);
 int  ui_source_switch_failed(void);
 int ui_local_playback_allowed(void);
+int ui_sd_is_held(void);
 int  ui_detect_source_mode(void);          /* M17: the ACTUAL mode from the USB gadget state (0/1/3; BT reads as 0) */
 void npmenu_set(const track_state_t *st, int playing, const void *thumb_src);
 void npmenu_close_transients(void);   /* dismiss lv_layer_top popups on navigation */

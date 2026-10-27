@@ -103,6 +103,10 @@ static void ui_toast(const char *s){ (void)s; }
 static void art_cancel(void){}
 static void modelock_open(int mode){ (void)mode; }
 static void modelock_close(void){}
+static void bt_rx_worker_ensure(void){}
+typedef enum { SCR_NOWPLAYING = 0, SCR_WORKMODE } screen_id_t;
+static void screen_show(int s){ (void)s; }
+static int screen_current(void){ return 0; }
 void modes_output_reset(void){}   /* output routing is not under test here */
 int fw_os_ver(void){ return 257; }   /* source_send() refuses unverified firmware */
 static void route_loss_invalidate_seek(void){}
