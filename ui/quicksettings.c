@@ -495,8 +495,22 @@ void quicksettings_set_clock(const char *time_text, const char *date_text){
     if(g_qs_date) lv_label_set_text(g_qs_date, s_qs_date);
 }
 
+static void qs_read_battery_fallback(void){
+    if(s_qs_batt >= 0) return;
+    FILE *bf = fopen("/sys/class/power_supply/cw221X-bat/capacity", "r");
+    if(!bf) bf = fopen("/sys/class/power_supply/battery/capacity", "r");
+    if(bf){
+        int b = -1;
+        if(fscanf(bf, "%d", &b) == 1 && b >= 0 && b <= 100){
+            s_qs_batt = b;
+        }
+        fclose(bf);
+    }
+}
+
 static void build_status(lv_obj_t *root, int y){
     if(!s_qs_time[0] || !s_qs_date[0]) qs_update_time_now();
+    if(s_qs_batt < 0) qs_read_battery_fallback();
     g_qs_hdr = lv_obj_create(root);
     lv_obj_remove_style_all(g_qs_hdr);
     lv_obj_set_size(g_qs_hdr, 184, 30);

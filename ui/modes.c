@@ -362,25 +362,29 @@ void modes_open(void){
     screen_show(SCR_WORKMODE);
 }
 
+static lv_obj_t *g_col = NULL;
+lv_obj_t *modes_scroller(void){ return g_col; }
+
 void modes_create(lv_obj_t *root){
     if(cfg_get_int("spdif", 0)) cfg_set_int("spdif", 0);   /* the route is per player run: a fresh UI has not switched anything */
     lv_obj_set_style_bg_color(root, TC(CANVAS), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
 
     /* back button (kept out of the clipped top-left corner) */
-    lv_obj_t *title = ui_header(root, tr("Source"));
-    if(theme_preset() == 0) lv_obj_set_y(title, 54);
+    ui_header(root, tr("Source"));
 
     /* vertical list of mode rows */
-    lv_obj_t *col = lv_obj_create(root);
+    g_col = lv_obj_create(root);
+    lv_obj_t *col = g_col;
     lv_obj_remove_style_all(col);
-    lv_obj_set_size(col, 260, 176); lv_obj_set_pos(col, 50, 100);
+    lv_obj_set_size(col, 280, 248); lv_obj_set_pos(col, 40, 72);
     lv_obj_set_style_pad_bottom(col, 44, 0);   /* last mode row scrolls clear of the round bezel */
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(col, 6, 0);
     lv_obj_set_scroll_dir(col, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(col, LV_SCROLLBAR_MODE_OFF);
+    ui_setup_scrollbar(col);
+    lv_obj_add_flag(col, LV_OBJ_FLAG_SCROLL_MOMENTUM);
 
     for(int i=0;i<N_MODES;i++){
         if(MODES[i].action == SOURCE_AIRPLAY && !receiver_available()) continue;

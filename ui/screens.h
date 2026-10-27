@@ -69,6 +69,8 @@ void quicksettings_build(void);            /* rebuild the drawer from config (ca
 void qsconfig_create(lv_obj_t *root);      /* SCR_QSCONFIG: pick which drawer tiles appear */
 void qsconfig_refresh(void);
 void quicksettings_refresh(int playing);
+void quicksettings_set_status(int batt, int charging);
+void quicksettings_set_clock(const char *time_text, const char *date_text);
 /* song info (songinfo.c) */
 void songinfo_create(lv_obj_t *root);
 void songinfo_set(const track_state_t *st);
@@ -115,6 +117,7 @@ void colorpick_create(lv_obj_t *root);    /* accent colour picker screen */
 void colorpick_open(void);                /* seed sliders from cfg + show */
 void modes_create(lv_obj_t *root);        /* Audio Source picker screen (stock: Working mode) */
 void modes_open(void);                     /* refresh selection + show SCR_WORKMODE */
+lv_obj_t *modes_scroller(void);
 /* source/working mode: 0=Local 1=USB-DAC 2=BT-Receiving 3=USB-Storage */
 int  ui_cast_session_active(void);              /* 16b: the Cast handoff machine is anywhere between PREPARING and STOPPING */
 void ui_cast_end_request(void);                 /* 16b: ask the machine to end the session (the existing user-stop path, consumed by the main loop) */

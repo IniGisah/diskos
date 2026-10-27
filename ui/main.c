@@ -408,6 +408,7 @@ static void clock_tick(lv_timer_t *t){
     strftime(date, sizeof date, "%a %d %b", &lt);
     home_set_clock(hm, date);
     saver_set_clock(hm, date);
+    quicksettings_set_clock(hm, date);
 }
 void ui_clock_refresh(void){ clock_tick(NULL); }
 
@@ -422,6 +423,7 @@ static void status_poll_cb(lv_timer_t *t){
     int batt = -1, charging = 0, wifi = 0, bt;
 
     FILE *bf = fopen("/sys/class/power_supply/cw221X-bat/capacity", "r");
+    if(!bf) bf = fopen("/sys/class/power_supply/battery/capacity", "r");
     if(bf){ if(fscanf(bf, "%d", &batt) != 1) batt = -1; fclose(bf); }
     /* One answer for the bolt, the idle power-off hold and the art prewarm (power.h power_charging): the stock player's
      * own charging report (aa1f) once one has arrived, before that the gauge's current_now > 0 (this cw221X exposes no
@@ -487,6 +489,7 @@ static void status_poll_cb(lv_timer_t *t){
 
     home_set_status(batt, charging, wifi, bt);
     custom_ov_feed_battery(batt, charging);   /* the Custom overlay reuses this read (no-op without a group) */
+    quicksettings_set_status(batt, charging);
 }
 void ui_status_refresh(void){ status_poll_cb(NULL); }
 
@@ -3161,6 +3164,7 @@ static lv_obj_t *ui_active_scroller(void){
         case SCR_QSCONFIG:       return qsconfig_scroller();
         case SCR_SONGINFO:       return songinfo_scroller();
         case SCR_LYRICS:         return lyrics_scroller();
+        case SCR_WORKMODE:       return modes_scroller();
         default:                 return NULL;
     }
 }
