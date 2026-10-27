@@ -205,3 +205,17 @@ void dn_sender_copy(char out[33]){
     activation(active,&capability);
     strcpy(out,*active ? active : DN_DEFAULT_SENDER);
 }
+void dn_bt_name_copy(char *out, size_t out_sz){
+    if(!out || out_sz == 0) return;
+    char b[DN_BT_BYTES + 1] = {0};
+    size_t n = 0;
+    int r = dn_read_file(DN_BT, b, sizeof b - 1, &n);
+    if(!r && n > 0){
+        while(n > 0 && (b[n-1] == '\r' || b[n-1] == '\n' || b[n-1] == ' ')) b[--n] = 0;
+        if(dn_saved_bt_valid(b) && b[0]){
+            snprintf(out, out_sz, "%s", b);
+            return;
+        }
+    }
+    snprintf(out, out_sz, "%s", DN_DEFAULT_BT);
+}

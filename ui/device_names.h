@@ -19,6 +19,7 @@ int dn_save_network(const char *); /* empty restores stock */
 int dn_save_bt(const char *);      /* new ASCII entry */
 int dn_saved_bt_valid(const char *); /* bounded UTF-8 replay, not entry */
 void dn_sender_copy(char out[33]); /* active snapshot only, stock fallback */
+void dn_bt_name_copy(char *out, size_t out_sz);
 /* Shared checked persistence for the reset journal. Missing read returns 1. */
 int dn_read_file(const char *, char *, size_t, size_t *);
 int dn_replace(const char *, const char *, size_t);
