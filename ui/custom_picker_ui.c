@@ -134,7 +134,11 @@ static void root_ev(lv_event_t *e){
 static void fmt_size(char *o, size_t n, long long sz){
     if(sz < 1024) snprintf(o, n, "%lld B", sz);
     else if(sz < 1024 * 1024) snprintf(o, n, "%lld KB", (sz + 512) / 1024);
-    else snprintf(o, n, "%.1f MB", (double)sz / (1024.0 * 1024.0));
+    else {
+        long long mb = sz / (1024 * 1024);
+        long long frac = (sz % (1024 * 1024)) * 10 / (1024 * 1024);
+        snprintf(o, n, "%lld.%lld MB", mb, frac);
+    }
 }
 
 static const char *chip_text(const csp_entry *en){

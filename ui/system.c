@@ -63,9 +63,13 @@ void sys_fw_label(int ver, char *buf, size_t n){
     else snprintf(buf, n, "V%d.%02d", ver / 100, ver % 100);
 }
 void sys_fmt_bytes(unsigned long long b, char *buf, size_t n){
-    if(b >= (1ULL << 30)) snprintf(buf, n, "%.1f GB", (double)b / (double)(1ULL << 30));
-    else if(b >= (1ULL << 20)) snprintf(buf, n, "%.0f MB", (double)b / (double)(1ULL << 20));
-    else snprintf(buf, n, "%llu KB", b >> 10);
+    if(b >= (1ULL << 30)){
+        unsigned long long gb = b >> 30;
+        unsigned long long frac = ((b & ((1ULL << 30) - 1)) * 10) >> 30;
+        snprintf(buf, n, "%llu.%llu GB", gb, frac);
+    }
+    else if(b >= (1ULL << 20)) snprintf(buf, n, "%llu MB", (b + (1ULL << 19)) >> 20);
+    else snprintf(buf, n, "%llu KB", (b + 512) >> 10);
 }
 
 /* ---------------------------------------------------------------- About */

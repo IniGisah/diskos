@@ -17,6 +17,8 @@
 #include <time.h>
 #include "jsmn.h"
 
+extern void diskos_trace(const char *fmt, ...);
+
 static mqd_t g_rx=(mqd_t)-1, g_tx=(mqd_t)-1;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static track_state_t g_state;
@@ -832,6 +834,7 @@ static void conv_on_reply(const char*buf,int n);   /* still-image conversion (en
 static void conv_new_generation(unsigned generation);
 static void parse_frame(const char*buf,int n){
     if(n<4) return;
+    diskos_trace("ipc_rx: len=%d hdr=%.8s", n, buf);
     if(!memcmp(buf,"aa05",4)){
         /* STOCK-PARITY (owner decision 55): bind by receipt, not verified item.
          * V2.40 converter 0x45b69c -> aa05=1 at 0x45b6fc-0x45b710;
@@ -912,12 +915,14 @@ static void parse_frame(const char*buf,int n){
         /* mq_player BUG WORKAROUND: The player sometimes emits unescaped quotes inside the stringified
          * "song" value (e.g., if an album name contains quotes), which makes it invalid JSON and breaks
          * JSMN. We scan the string value boundary and replace any unescaped `"` with `'`. */
-        char *mut = (char*)(buf + 8);
-        char *p_start = strstr(mut, "{\"song\":\"{");
-        char *p_end = strstr(mut, "}\",\"love\":");
-        if (p_start && p_end && p_end > p_start) {
-            for (char *p = p_start + 9; p <= p_end; p++) {
-                if (*p == '"' && *(p-1) != '\\') *p = '\'';
+        if(n > 8){
+            char *mut = (char*)(buf + 8);
+            char *p_start = strstr(mut, "{\"song\":\"{");
+            char *p_end = strstr(mut, "}\",\"love\":");
+            if (p_start && p_end && p_end > p_start) {
+                for (char *p = p_start + 9; p <= p_end; p++) {
+                    if (*p == '"' && *(p-1) != '\\') *p = '\'';
+                }
             }
         }
         char lh[5]={buf[4],buf[5],buf[6],buf[7],0};
@@ -925,7 +930,9 @@ static void parse_frame(const char*buf,int n){
         pthread_mutex_lock(&g_recov_mu);
         unsigned generation=g_generation; int pending=g_rx_reopen;
         pthread_mutex_unlock(&g_recov_mu);
+        diskos_trace("ipc: parse_a2 start len=%d", n - 8);
         int accepted=parse_a2(buf+8, n-8);
+        diskos_trace("ipc: parse_a2 done acc=%d track=%d", accepted, g_state.have_track);
         pthread_mutex_lock(&g_recov_mu);
         if(complete && accepted && !pending && !g_rx_reopen && generation==g_generation){
             g_confirmed=1;
@@ -1099,7 +1106,10 @@ static void *ipc_thread(void*arg){
         rx_arm_barrier();
         struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 1;
         ssize_t n = mq_timedreceive(g_rx, g_rxbuf, g_rxbufsz, NULL, &ts);
-        if(n>=0){ pthread_mutex_lock(&g_recov_mu); g_rx_frames++; pthread_mutex_unlock(&g_recov_mu); parse_frame(g_rxbuf,(int)n); }
+        if(n>=0){
+            if((size_t)n < g_rxbufsz) g_rxbuf[n] = '\0';
+            pthread_mutex_lock(&g_recov_mu); g_rx_frames++; pthread_mutex_unlock(&g_recov_mu); parse_frame(g_rxbuf,(int)n);
+        }
         else if(errno==ETIMEDOUT) continue;   /* normal idle wake */
         else if(errno==EINTR) continue;
         else if(errno==EBADF){ if(rx_do_reopen()!=0) usleep(50000); }  /* lost fd -> reattach now (we're on the RX thread); if the queue is still absent, back off 50ms instead of busy-spinning on the dead fd */
