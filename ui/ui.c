@@ -2755,6 +2755,11 @@ static void rx_exit_open(void){
     ui_dialog_finalize(&d);
 }
 void ui_receiver_return(void){
+    if(ui_get_source_mode() == 2){
+        ui_set_source_mode(0);
+        if(screen_current() != SCR_NOWPLAYING) screen_show(SCR_NOWPLAYING);
+        return;
+    }
     if(rx_exit_needs_confirm()) rx_exit_open();
     else rx_return_now();
 }

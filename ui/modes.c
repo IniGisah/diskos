@@ -333,7 +333,7 @@ static void row_cb(lv_event_t *e){
         }
         return;
     }
-    if(m == 0 && (ui_receiver_active() || ui_receiver_exit_needs_confirm())){
+    if(m == 0 && ui_get_source_mode() != 2 && (ui_receiver_active() || ui_receiver_exit_needs_confirm())){
         ui_receiver_return();
         return;
     }

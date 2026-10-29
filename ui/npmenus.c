@@ -409,7 +409,8 @@ static void nphub_populate(void){
         if(rx) lv_obj_add_flag(g_hub_dots[i], LV_OBJ_FLAG_HIDDEN);
         else lv_obj_remove_flag(g_hub_dots[i], LV_OBJ_FLAG_HIDDEN);
     }
-    theme_title_text(g_hub_header, tr(rx ? "AIRPLAY" : "Options"));
+    const char *rx_title = (ui_get_source_mode() == 2) ? "BLUETOOTH" : "AIRPLAY";
+    theme_title_text(g_hub_header, tr(rx ? rx_title : "Options"));
     lv_obj_set_pos(g_hub_list, rx ? 60 : 46, rx ? 108 : 76);
     lv_obj_set_size(g_hub_list, rx ? 240 : 280, rx ? 144 : 250);
     lv_obj_set_style_text_color(g_hub_header, rx ? theme_preset_color(0, THEME_CLR_ACCENT_PRIMARY) : g_hub_color, 0);
