@@ -44,7 +44,7 @@ static struct {
     lv_obj_t *root, *face, *rim, *rim_hl, *lobe[2], *slice[2][SP_SLICE], *streak, *shade[2], *gap[2][(SP_GAPS + 1) / 2],
              *glow[SP_GLOW], *hub, *hub_edge, *word;
     int th, warm, opened, frames, rim_closed;
-    uint32_t t0, t_outro;
+    uint32_t t0, t_phase1, t_outro, last_tick, cur_t;
     int state;
     int exit_th;
     int mode;
@@ -268,7 +268,7 @@ static void splash_done(void){
         g_sp.timer = NULL;
     }
     lv_display_remove_event_cb_with_user_data(lv_display_get_default(), splash_drawn_cb, NULL);
-    fprintf(stderr, "splash: %d frames drawn in %u ms\n", g_sp.frames, (unsigned)lv_tick_elaps(g_sp.t0));
+    fprintf(stderr, "splash: %d frames drawn in %u ms\n", g_sp.frames, (unsigned)(g_sp.t0 ? lv_tick_elaps(g_sp.t0) : 0));
     if(g_sp.root) lv_obj_delete(g_sp.root);
     memset(&g_sp, 0, sizeof g_sp);
 }
@@ -281,12 +281,22 @@ static void splash_timer_cb(lv_timer_t *t){
     (void)t;
     if(!g_sp.root) return;
     uint32_t now = lv_tick_get();
-    uint32_t elapsed = lv_tick_elaps(g_sp.t0);
+
+    if(g_sp.t0 == 0){
+        g_sp.t0 = now;
+        g_sp.last_tick = now;
+        g_sp.cur_t = 0;
+    }
+
+    uint32_t dt = lv_tick_elaps(g_sp.last_tick);
+    g_sp.last_tick = now;
+    if(dt > 50) dt = 50;
 
     /* Phase 0: Intro (0..1500 ms) - sweep light in, warm hub, fade in wordmark */
     if(g_sp.state == 0){
-        if(elapsed < 1500){
-            int cur_t = (int)elapsed;
+        g_sp.cur_t += dt;
+        if(g_sp.cur_t < 1500){
+            int cur_t = (int)g_sp.cur_t;
             int th = 175 + scl(110, ease_io(win_k(cur_t, 150, 1500)));
             int sp = ease_out(win_k(cur_t, 150, 650));
             int warm = ease_out(win_k(cur_t, 650, 1300));
@@ -295,33 +305,35 @@ static void splash_timer_cb(lv_timer_t *t){
             return;
         }
         g_sp.state = 1;
+        g_sp.t_phase1 = now;
+        splash_draw(285, 1024, 1024, 1024, 0);
+        return;
     }
 
     /* Phase 1: Wait / Loop - loop light orbit until player is ready (with 12s backstop) */
     if(g_sp.state == 1){
-        int ready = (ipc_player_ready() && ipc_rx_frames() > 0) || elapsed >= 12000;
+        int ready = (ipc_player_ready() && ipc_rx_frames() > 0) || lv_tick_elaps(g_sp.t0) >= 12000;
+        uint32_t loop_ms = lv_tick_elaps(g_sp.t_phase1);
+        int th = 285 + (int)(loop_ms * 360 / 2400);
         if(!ready){
-            int loop_ms = (int)(elapsed - 1500);
-            int th = 285 + (loop_ms * 360 / 2400);
             splash_draw(th, 1024, 1024, 1024, 0);
             return;
         }
         g_sp.state = 2;
         g_sp.t_outro = now;
-        int loop_ms = (int)(elapsed - 1500);
-        g_sp.exit_th = 285 + (loop_ms * 360 / 2400);
+        g_sp.exit_th = th;
     }
 
     /* Phase 2: Outro (0..600 ms) - light dissolves, wordmark fades, hub expands to reveal Home */
     if(g_sp.state == 2){
-        uint32_t dt = lv_tick_elaps(g_sp.t_outro);
-        if(dt < 600){
-            int light_leave = ease_io(win_k((int)dt, 0, 250));
+        uint32_t outro_dt = lv_tick_elaps(g_sp.t_outro);
+        if(outro_dt < 600){
+            int light_leave = ease_io(win_k((int)outro_dt, 0, 250));
             int sp = scl(1024, 1024 - light_leave);
-            int th = g_sp.exit_th + (int)(dt * 360 / 2400);
-            int wm = scl(1024, 1024 - ease_out(win_k((int)dt, 0, 200)));
-            int warm = scl(1024, 1024 - win_k((int)dt, 100, 400));
-            int ok = ease_io(win_k((int)dt, 150, 550));
+            int th = g_sp.exit_th + (int)(outro_dt * 360 / 2400);
+            int wm = scl(1024, 1024 - ease_out(win_k((int)outro_dt, 0, 200)));
+            int warm = scl(1024, 1024 - win_k((int)outro_dt, 100, 400));
+            int ok = ease_io(win_k((int)outro_dt, 150, 550));
             splash_draw(th, sp, warm, wm, ok);
             return;
         }
@@ -400,7 +412,11 @@ void splash_start(void){
     splash_create_objects();
     g_sp.mode = SP_MODE_BOOT;
     g_sp.th = -1;
-    g_sp.t0 = lv_tick_get();
+    g_sp.t0 = 0;
+    g_sp.t_phase1 = 0;
+    g_sp.t_outro = 0;
+    g_sp.last_tick = 0;
+    g_sp.cur_t = 0;
     g_sp.state = 0;
     g_sp.rim_closed = 0;
     lv_display_add_event_cb(lv_display_get_default(), splash_drawn_cb, LV_EVENT_RENDER_READY, NULL);
