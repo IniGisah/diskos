@@ -723,16 +723,27 @@ static unsigned g_settle_gen;
 static int g_settle_started;
 void ui_arm_player_settle(uint32_t ms){
     g_settle_armed = 1;
+    g_settle_gen = ipc_generation();
+    g_settle_started = 1;
     g_settle_until = lv_tick_get() + ms;
 }
 int ui_player_settling(void){
+    if(!g_settle_armed) return 0;
     unsigned gen;
     int confirmed = ipc_confirmed_snapshot(&gen);
-    if(gen != g_settle_gen) return 1;
-    if(!g_settle_armed) return 0;
-    if(!confirmed) return 1;
-    if(!g_settle_started){ g_settle_started = 1; g_settle_until = lv_tick_get() + 9000; }
-    if((int32_t)(lv_tick_get() - g_settle_until) >= 0){ g_settle_armed = 0; return 0; }   /* window passed -> disarm */
+    if(gen != g_settle_gen){
+        g_settle_gen = gen;
+        g_settle_started = 0;
+        g_settle_until = lv_tick_get() + 15000;
+    }
+    if((int32_t)(lv_tick_get() - g_settle_until) >= 0){
+        g_settle_armed = 0;
+        return 0;   /* window passed -> disarm */
+    }
+    if(!g_settle_started && (confirmed || ipc_rx_frames() > 0)){
+        g_settle_started = 1;
+        g_settle_until = lv_tick_get() + 9000;
+    }
     return 1;
 }
 static void route_uppercase(const char *in, char *out, int cap){
@@ -1374,11 +1385,12 @@ int ui_set_source_mode(int mode){
     if(ui_source_switch_pending()){ ui_toast("Storage is switching"); return -1; }
     if(g_sd_phase == SD_UNKNOWN || g_sd_hold || !sd_io_healthy()){ ui_toast("SD access is held this boot"); return -1; }
     if(atomic_load(&g_launch_verdict) != 1){ ui_toast("SD access is not ready yet"); return -1; }
-    if(!ipc_player_ready() || ipc_rx_frames() == 0){ ui_toast("Player is starting up - try again"); return -1; }
-    if(ui_player_settling()){ ui_toast("Player is settling - try again"); return -1; }
+    if(!ipc_player_ready()){ ui_toast("Player is starting up - try again"); return -1; }
     if(mode == 4 && !ui_usb_dac_connected()){ ui_toast("USB DAC not connected"); return -1; }
     if(mode == 3){
         if(g_sd_phase == SD_HOST) return 0;
+        if(ipc_rx_frames() == 0){ ui_toast("Player is starting up - try again"); return -1; }
+        if(ui_player_settling()){ ui_toast("Player is settling - try again"); return -1; }
         if(scanner_active()){ ui_toast("Let the library scan finish first"); return -1; }
         if(!storage_player_guarded()){ ui_toast("Storage protection is unavailable"); return -1; }
         if(!storage_media_local()){ ui_toast("SD card is not ready"); return -1; }
@@ -4127,7 +4139,7 @@ static void player_reconnected(void){
     if(g_audio_armed && gen == g_audio_gen) return;
     /* Arm the post-restart settle window so BT routing (and the v2.40 local-init) wait out the
      * player's ~7s late-init before sending an output route that it could otherwise overwrite. */
-    g_settle_armed = 1; g_settle_gen = gen; g_settle_started = 0;
+    g_settle_armed = 1; g_settle_gen = gen; g_settle_started = 0; g_settle_until = lv_tick_get() + 15000;
     /* A player restart stopped the book (the fresh player is idle) while our session is still set -
      * and a stale book-path in the reconnected state could keep book_tick treating it as playing,
      * which suppresses the local re-init (localplayer_workmode_cb bails under an active book) and wedges.
