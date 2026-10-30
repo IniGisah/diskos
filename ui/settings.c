@@ -536,6 +536,7 @@ static void boot_confirm_cb(lv_event_t *e){
     ui_sd_quiesce_begin();          /* closes sd_io leases AND sd_write_begin writers; storage_tick won't reopen them */
     scanner_abort();
     art_kill_all();
+    usage_save();
     /* Save the (NTP-corrected) clock to the RTC alongside - the periodic save runs only every 5 min and the stock
      * player saves the RTC only on ITS power-off path. Best effort, its own process group, never waited on. */
     g_rst_clock = spawn_detached("hwclock -w 2>/dev/null");

@@ -212,6 +212,7 @@ int power_charging(long *current_now, int *report){
     int r = ipc_charge_snapshot(NULL);
     long cur = -1;
     FILE *f = fopen("/sys/class/power_supply/cw221X-bat/current_now", "r");
+    if(!f) f = fopen("/sys/class/power_supply/battery/current_now", "r");
     if(f){ if(fscanf(f, "%ld", &cur) != 1) cur = -1; fclose(f); }
     if(current_now) *current_now = cur;
     if(report) *report = r;
@@ -303,6 +304,7 @@ int power_shutdown_request_with(const power_ops_t *o, int screen_lit){
 
 static int read_temp_tenths(int *out){
     FILE *f = fopen("/sys/class/power_supply/cw221X-bat/temp", "r");
+    if(!f) f = fopen("/sys/class/power_supply/battery/temp", "r");
     if(!f) return -1;
     int t = 0, ok = fscanf(f, "%d", &t) == 1;
     fclose(f);

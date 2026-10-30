@@ -344,7 +344,6 @@ static int power_key_inject(void){
         fprintf(stderr, "power key: %s a press to wake the player's screen\n", ok ? "sent" : "could not send");
         return ok;
     }
-    usage_save();
     return 0;
 }
 /* the dimmed level: the vinyl art-showcase saver keeps the user's brightness, everything else crushes to 6 */
@@ -4079,6 +4078,7 @@ int ui_theme_reload(const char *screen){
     if(!sender_reload_ready()){ ui_toast("Beam is stopping - try again"); return -1; }
     cast_ui_stop();   /* 17a: no discovery child or worker across the exec */
     cast_end_for_reload();   /* 16b: the receiver is told to STOP (bounded) before the exec drops the session */
+    usage_save();
     art_kill_all();
     if(g_bounded_pgid > 0) kill(-(pid_t)g_bounded_pgid, SIGKILL);
     if(g_bounded_pid > 0) kill((pid_t)g_bounded_pid, SIGKILL);
@@ -5963,5 +5963,6 @@ int main(int argc, char **argv){
             usleep(wait * 1000);
         }
     }
+    usage_save();
     return 0;
 }

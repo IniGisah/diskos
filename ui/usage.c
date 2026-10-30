@@ -41,7 +41,34 @@ static void push(uint32_t t, int pct, uint8_t fl){
     else { g_s[g_head] = s; g_head = (g_head + 1) % US_CAP; }
 }
 
+static int g_loaded;
+static void load(void){
+    FILE *f = fopen(USAGE_FILE, "rb"); if(!f) return;
+    uint32_t hdr[2];
+    if(fread(hdr, sizeof hdr, 1, f) == 1 && hdr[0] == 0x31475355u){
+        uint32_t n = hdr[1] > US_CAP ? US_CAP : hdr[1];
+        if(hdr[1] > US_CAP) fseek(f, (long)(hdr[1] - US_CAP) * (long)sizeof(usmp_t), SEEK_CUR);
+        usmp_t s;
+        for(uint32_t i = 0; i < n && fread(&s, sizeof s, 1, f) == 1; i++){
+            if(s.pct <= 100) push(s.t, s.pct, s.fl);
+        }
+    }
+    fclose(f);
+}
+
+static void ensure_loaded(void){
+    if(!g_loaded){
+        g_loaded = 1;
+        load();
+        if(g_batt < 0 && g_n > 0){
+            g_batt = at(g_n - 1)->pct;
+            g_chg = (at(g_n - 1)->fl & FL_CHG) != 0;
+        }
+    }
+}
+
 void usage_save(void){
+    ensure_loaded();
     char tmp[128]; snprintf(tmp, sizeof tmp, "%s.tmp", USAGE_FILE);
     FILE *f = fopen(tmp, "wb"); if(!f) return;
     uint32_t hdr[2] = { 0x31475355u /* "USG1" */, (uint32_t)g_n };
@@ -64,20 +91,6 @@ void usage_save(void){
     g_unsaved = 0;
 }
 
-static void load(void){
-    FILE *f = fopen(USAGE_FILE, "rb"); if(!f) return;
-    uint32_t hdr[2];
-    if(fread(hdr, sizeof hdr, 1, f) == 1 && hdr[0] == 0x31475355u){
-        uint32_t n = hdr[1] > US_CAP ? US_CAP : hdr[1];
-        if(hdr[1] > US_CAP) fseek(f, (long)(hdr[1] - US_CAP) * (long)sizeof(usmp_t), SEEK_CUR);
-        usmp_t s;
-        for(uint32_t i = 0; i < n && fread(&s, sizeof s, 1, f) == 1; i++){
-            if(s.pct <= 100) push(s.t, s.pct, s.fl);
-        }
-    }
-    fclose(f);
-}
-
 void usage_note_battery(int pct, int charging){
     if(pct >= 0 && pct <= 100){
         g_batt = pct;
@@ -86,8 +99,7 @@ void usage_note_battery(int pct, int charging){
 }
 
 void usage_tick(int screen_on, int playing){
-    static int loaded;
-    if(!loaded){ loaded = 1; load(); }
+    ensure_loaded();
     time_t now = time(NULL);
     if(now < 1600000000) return;                           /* clock not set yet: record nothing */
     uint32_t m = (uint32_t)(now / 60);
@@ -96,7 +108,7 @@ void usage_tick(int screen_on, int playing){
         if(g_batt >= 0) push(g_cur_min * 60u, g_batt, g_acc);
         g_cur_min = m; g_acc = 0;
         g_unsaved++;
-        int threshold = (g_chg || screen_on) ? 15 : 60;
+        int threshold = (g_chg || screen_on) ? 10 : 15;
         if(g_unsaved >= threshold) usage_save();
     }
     g_acc |= (g_chg ? FL_CHG : 0) | (screen_on ? FL_SCR : 0) | (playing ? FL_PLAY : 0);
@@ -244,6 +256,10 @@ static void draw(void){
             if(s->t < from || s->t > to) continue;
             float a = ang_of(s->t), r = R0 + (R1 - R0) * s->pct / 100.0f;
             int contiguous = p && s->t - prev_t <= 180 && s->t > prev_t;
+            if(p && !contiguous){
+                if(run_s >= 0){ float a1 = pa + 0.25f; if(a1 < sa0) a1 += 360.0f; arc(&L, RS, 5, sa0, a1, c_amber, LV_OPA_COVER); run_s = -1; }
+                if(run_p >= 0){ float a1 = pa + 0.25f; if(a1 < pa0) a1 += 360.0f; arc(&L, RP, 5, pa0, a1, c_play, LV_OPA_COVER); run_p = -1; }
+            }
             if(s->fl & FL_SCR) scr++;
             if(s->fl & FL_PLAY) play++;
             if(contiguous){
@@ -403,6 +419,7 @@ static lv_obj_t *chev(lv_obj_t *root, const char *sym, lv_event_cb_t cb){
 }
 
 void usage_create(lv_obj_t *root){
+    ensure_loaded();
     g_root = root;
     theme_screen_bg(root);
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
@@ -450,6 +467,7 @@ void usage_create(lv_obj_t *root){
 }
 
 void usage_refresh(void){
+    ensure_loaded();
     g_day = 0;
     draw();
 }
