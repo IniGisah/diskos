@@ -73,8 +73,11 @@ int bc_parse(const char *text, size_t len, const char *mac, bc_snapshot *out){
     if(!endpoint(s.pcm, "/org/bluealsa/hci", "/a2dpsrc/sink", &s.adapter, s.mac) ||
        !endpoint(device, "/org/bluez/hci", "", &adapter, other) || adapter != s.adapter ||
        strcmp(s.mac, other) || strcmp(s.mac, expected)) return BC_MISMATCH;
-    s.codec = !strcmp(s.codec_name, "SBC") ? BC_CODEC_SBC : !strcmp(s.codec_name, "AAC") ? BC_CODEC_AAC :
-              !strcmp(s.codec_name, "LDAC") ? BC_CODEC_LDAC : BC_CODEC_OTHER;
+    s.codec = !strcmp(s.codec_name, "SBC") ? BC_CODEC_SBC :
+              !strcmp(s.codec_name, "AAC") ? BC_CODEC_AAC :
+              !strcmp(s.codec_name, "LDAC") ? BC_CODEC_LDAC :
+              !strcmp(s.codec_name, "aptX") ? BC_CODEC_APTX :
+              !strcmp(s.codec_name, "aptX-HD") ? BC_CODEC_APTX_HD : BC_CODEC_OTHER;
     *out = s; return BC_OK;
 }
 int bc_begin(bc_observer *o, uint64_t route, uint64_t player, const char *mac,

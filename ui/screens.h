@@ -183,10 +183,12 @@ void bt_info_create(lv_obj_t *root);
 void bt_info_open(void);
 void bt_info_close(void);
 void bt_info_refresh(void);
-#define BT_CODEC_N 5                   /* A2DP codec choices (bt.c): SBC, AAC, LDAC Mobile/Standard/High */
+#define BT_CODEC_N 7                   /* A2DP codec choices (bt.c): SBC, AAC, LDAC (3), aptX, aptX-HD */
 extern const char *const BT_CODEC_LABEL[BT_CODEC_N];
 int ui_bt_codec_frame(const char *mac, char *out, int cap); /* legacy route frame */
 int ui_bt_codec_set(int value);   /* explicit Settings action only; stock saves and applies it */
+void bt_rx_low_latency_apply(int enable);
+int  bt_rx_low_latency_enabled(void);
 const char *ui_route_mac(void);                  /* main.c: MAC the player is routed to, "" when local */
 void bt_boot_restore(void);   /* at startup: re-enable BT + arm auto-route if it was on */
 void bt_notify_player_restart(void);   /* player restarted: forget stale auto-route so the poll re-routes */

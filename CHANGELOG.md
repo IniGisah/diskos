@@ -31,6 +31,10 @@ Integrated custom release merging upstream diskOS v1.2.2 (`53a9cc5`) into `relea
   - **Hardware Sleep & Fast Backlight Resume**: ST77916/CST816T sleep sequencing with sub-100ms instant wake and deep idle (500ms) polling.
   - **Mode Lockdown Screens (`SCR_MODELOCK`)**: Dedicated kiosk-style dashboards for Bluetooth Receiver, USB DAC, and USB Storage modes with quick exit confirmation.
   - **External USB DAC Host Mode (Mode 4)**: USB-C OTG digital audio output with netlink hotplug auto-pause.
+  - **Full Bluetooth 5-Codec Suite (Source & Sink)**: Integrated `bluealsa-custom` (BlueALSA v4.0.0, MIT) supporting SBC, AAC, aptX, aptX-HD, and LDAC across both Bluetooth transmitting (headphones) and receiving (smartphones/PCs), dynamically linking against device stock libraries (`libaptx.so`, `libaptxHD.so`, `libldacBT_enc.so.2`).
+  - **Bluetooth Low Latency Receiving Mode**: Added setting under **Settings > Bluetooth > Low Latency Mode** (`bt_rx_ll`) enforcing SBC-only sink negotiation to eliminate latency (~80-120ms) for mobile gaming and video playback.
+  - **Active Bluetooth Codec Observer**: Real-time D-Bus codec query engine with live badge rendering on Song Info and Mode Lockdown screens.
+  - **Display Wake & Sleep Polish**: Synchronized internal player power state via power-key injection on auto-sleep timer expiration, and drained hardware input buffers on power-off transitions to eliminate power-button bounce-back and wake blinking (<50ms instant wake).
   - **24-Hour Battery Usage History**: Real-time ADC fuel gauge dial tracking screen-on time, idle standby, and audio consumption.
   - **Virtualization & Fluid Scrolling**: Retained dynamic virtual list windowing with upstream target-y list position restore.
 

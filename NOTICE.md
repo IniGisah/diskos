@@ -12,6 +12,7 @@ to the corresponding source that ships alongside the binaries. The full verbatim
 | **usbboot** | Ingenic X2000 mask-ROM USB loader (the flasher front-end) | **GPL-2.0-or-later** - (c) 2021 Aidan MacDonald, (c) 2015 Amaury Pouly | included: `src/usbboot/` (built from this) |
 | **mksquashfs / unsquashfs** | build/extract the rootfs image | **GPL-2.0-or-later** | Linux: 4.6.1 in `corresponding-source/squashfs-tools_4.6.1*`; macOS arm64: 4.7.5 in `corresponding-source/macos-arm64/` |
 | **dropbearmulti** (Dropbear SSH **2022.83**) | embedded in the diskOS image; started by the opt-in Debug Mode for SSH-over-WiFi | **MIT-style** ((c) 2002-2020 Matt Johnston; components under MIT/BSD/public-domain) - text in `licenses/LICENSE-dropbear.txt` | https://matt.ucc.asn.au/dropbear/dropbear.html (v2022.83; **predates the CVE-2023-48795 "Terrapin" Strict-KEX mitigation**. Use Debug Mode only for short sessions on a trusted network and turn it off when finished.) |
+| **bluealsa-custom** (BlueALSA **4.0.0**) | Bluetooth audio ALSA/D-Bus daemon supporting aptX, aptX-HD, LDAC, AAC, and SBC | **MIT** ((c) 2016-2022 Arkadiusz Bokowy) - text in `licenses/MIT-bluez-alsa.txt` | https://github.com/arkq/bluez-alsa (v4.0.0). Built to dynamically link against target system libraries |
 
 `usbboot` and squashfs-tools are **GPL-2.0-or-later**, so anyone redistributing them must make their
 corresponding source available and include the GPL-2.0 license text. (`dropbearmulti` is MIT-style -
@@ -236,6 +237,8 @@ in `site/fonts/`; see [the font index](licenses/README.md#website-fonts).
   The `disc*.png` illustration contains no font lettering.
 - **`payload/diskos-launch`** is MIT project tooling; source: `src/launcher/diskos_launch.c`,
   built by `build/build-launcher.sh`.
+- **`payload/bluealsa`** is MIT project tooling (`/opt/diskos/bin/bluealsa` interceptor wrapper script;
+  `Copyright (c) 2026 diskOS contributors`).
 - **`payload/diskos-bootprobe`** is GPL-3.0-or-later UI helper code; source:
   `ui/tools/diskos_bootprobe.c`, built with the UI tools.
 - **The diskOS UI source** (`ui/`, built to `payload/mq_ui`, static-musl MIPS) is licensed
@@ -351,6 +354,11 @@ is not distributed here.
   `diskos-artdec` helper (see above; `ui/art.c`). The `diskos-audiodec` helper (see above) links dynamically
   against the FFmpeg libraries that FiiO's stock firmware already has on the Disc, and is built using only
   FFmpeg's public headers; the installer does **not** ship those libraries.
+- **Proprietary Bluetooth codec libraries (`libaptx.so`, `libaptxHD.so`, `libldacBT_enc.so.2`)** - diskOS does
+  **not** redistribute Qualcomm's aptX / aptX-HD or Sony's LDAC shared libraries. The bundled `bluealsa-custom`
+  binary links dynamically at runtime against the codec shared libraries that FiiO's stock firmware already
+  licenses and installs on the Disc in `/usr/lib/`. The installer does **not** extract, copy, or redistribute
+  these proprietary libraries.
 
 ---
 

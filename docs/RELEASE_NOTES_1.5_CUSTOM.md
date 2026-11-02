@@ -64,6 +64,33 @@ Settings have been seamlessly unified into upstream's clean 8-group structure (`
 
 ---
 
+### 4. Full Bluetooth Codec Suite & Low Latency Mode
+
+* **Complete 5-Codec Suite on Source and Sink (`payload/bluealsa-custom`, `payload/bluealsa`):**
+  - Custom `bluealsa-custom` daemon (BlueALSA v4.0.0, MIT) provides full bidirectional A2DP support for all 5 major Bluetooth audio codecs: **SBC**, **AAC**, **aptX**, **aptX-HD**, and **LDAC**.
+  - Operates across both **A2DP-source** (transmitting to Bluetooth headphones/speakers) and **A2DP-sink** (Bluetooth Receiver mode from Android, iOS, iPadOS, macOS, and Windows).
+  - Dynamically links against the Disc's stock shared libraries (`/usr/lib/libaptx.so`, `/usr/lib/libaptxHD.so`, and `/usr/lib/libldacBT_enc.so.2`), utilizing on-device licensed Qualcomm and Sony decoder/encoder binaries without distributing proprietary vendor code.
+  - Transparent `/opt/diskos/bin/bluealsa` interceptor wrapper resolving ahead of `/usr/bin/bluealsa` via `PATH=/opt/diskos/bin:$PATH`, ensuring both source and sink profiles are registered and falling back cleanly to stock if needed.
+* **Bluetooth Low Latency Mode (`ui/settings.c`, `payload/bluealsa`):**
+  - User-facing toggle under **Settings > Bluetooth > Low Latency Mode** (persisted to `/usr/data/bt_rx_ll` and `/usr/data/diskos.conf`).
+  - When enabled, dynamically reconfigures BlueALSA sink to SBC-only (`--codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD --codec=-ldac`), eliminating high-latency buffering (~80-120ms total latency) for seamless video synchronization and mobile gaming while using the Disc as a Bluetooth receiver.
+  - Toggling in Settings immediately re-applies configuration live with seamless BlueALSA reload.
+* **Live Bluetooth Codec Observer (`ui/bt_codec_observe.c`, `ui/bt.c`, `ui/modelock.c`):**
+  - Asynchronous background query of BlueALSA D-Bus interface observing the negotiated active A2DP transport codec.
+  - Real-time badge display on Song Info and Mode Lockdown Bluetooth Receiver screens.
+
+---
+
+### 5. Display Sleep & Instant Wake Polish
+
+* **Zero-Blink Instant Wake & Rock-Solid Sleep (`ui/main.c`):**
+  - Resolved hardware race condition where the physical power-off press could linger in `/dev/input/event0` and be misread as an immediate wake-up event.
+  - Drains `/dev/input/event0` input buffer and enforces sleep transition guard in `pwrkey_poll` on sleep entry (`case SF_OFF`).
+  - Injected physical power key into `mq_player` upon auto-sleep timer expiration (`pwrkey_inject(265)`), synchronizing internal player power state with display backlight rails.
+  - Single-press power button turns display off reliably without bouncing back on, and wakes display instantly (<50ms) with clean backlight restoration.
+
+---
+
 ## Upgrade Instructions
 
 - **Fresh Install / Full Upgrade:** Use the diskOS installer with your stock FiiO firmware ZIP (V2.09, V2.28, V2.40, or V2.57) to flash over mask-ROM USB.

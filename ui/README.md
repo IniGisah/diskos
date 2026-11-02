@@ -31,7 +31,7 @@ Built with **LVGL 9.2.2** (software renderer) on a static-musl mipsel toolchain.
 | Now Playing + art | `ui.c` / `ui.h`, `art.c` / `art.h`, `artcache.c`, `saver.c`, `songinfo.c`, `npmenus.c` |
 | Library / browse | `home.c`, `library.c`, `musicdb.c`, `search.c`, `playlistview.c`, `scanner.c` |
 | Settings / features | `settings.c`, `power.c` / `power.h`, `eqcustom.c`, `quicksettings.c`, `modes.c`, `kbinput.c`, `colorpick.c`, `toast.c`, `apps.c`, `debug_ui.c`, `fwcaps.c` |
-| Connectivity | `wifi.c`, `bt.c`, `weather.c`, `lyrics.c`, `lastfm.c` / `lastfm_ui.c` |
+| Connectivity | `wifi.c`, `bt.c`, `bt_codec_observe.c` / `bt_codec_observe.h`, `bt_prepare.c`, `weather.c`, `lyrics.c`, `lastfm.c` / `lastfm_ui.c` |
 | Bundled third-party | `third_party/freetype-2.13.3/` (FTL), `sqlite3.c` (public domain), `jsmn.h` (MIT), `md5.c` (public domain), `font_*.c` (generated glyph data) |
 | Dev/diagnostic tools | `fbshot.c`, and other small on-device helpers (not part of the shipped UI) |
 

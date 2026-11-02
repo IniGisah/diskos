@@ -34,6 +34,7 @@
 #include "custom_saver_db.h"
 #include "custom_picker_ui.h"
 #include "custom_saver_overlay.h"
+#include "sqlite3.h"
 #include <pthread.h>
 #include <stdatomic.h>
 
@@ -198,6 +199,9 @@ static void apply_rescan(int v){ (void)v;
 /* ---- Date & Time (parity with stock: automatic time switch, set by hand, time zone) ---------------------------- */
 static int g_bt_codec_pending = -1;
 static int g_bt_codec_pending_ticks = 0;
+static void apply_bt_rx_ll(int v){
+    bt_rx_low_latency_apply(v);
+}
 static void apply_bt_codec(int v){
     if(ui_bt_codec_set(v) != 0){
         g_bt_codec_pending = -1;
@@ -209,7 +213,11 @@ static void apply_bt_codec(int v){
 }
 /* Drop the old diskOS-only preference without touching stock or playback.
  * Idempotent: after a durable removal there is nothing to migrate again. */
-static int legacy_bt_codec_key(const char *key){ return !strcmp(key, "bt_codec"); }
+static int legacy_bt_codec_key(const char *key){
+    if(strcmp(key, "bt_codec")) return 0;
+    int v = cfg_get_int("bt_codec", -1);
+    return (v >= 0 && v < 5);
+}
 static void settings_bt_codec_migrate(void){ cfg_remove_if(legacy_bt_codec_key); }
 static void apply_auto_time(int v){
     if(mdb_sysconfig_set_auto_time(v) != 0){           /* the player may hold its database: put the switch back */
@@ -648,9 +656,23 @@ void ui_backlight_release(int fallback){   /* after the repaint: the latest leve
     ui_backlight(g_bl_held > 0 ? g_bl_held : fallback);
 }
 static void apply_brightness(int v){ if(v < 1) v = 1; ui_backlight(v); }
+static void sync_sysconfig_light_level(int v){
+    if(v < 1) v = 1;
+    if(v > 40) v = 40;
+    sqlite3 *db = NULL;
+    if(sqlite3_open_v2("/usr/data/fiio/db/sysconfig.db", &db, SQLITE_OPEN_READWRITE, NULL) == SQLITE_OK){
+        char sql[64];
+        snprintf(sql, sizeof sql, "UPDATE SYSCONFIG SET LIGHT_LEVEL=%d WHERE ID=1;", v);
+        sqlite3_exec(db, sql, NULL, NULL, NULL);
+        sqlite3_close(db);
+    }
+}
 void settings_apply_startup(int restore_brightness){
     scanner_set_old_tags(cfg_get_int("old_tags", OLD_TAGS_AUTO));
-    if(restore_brightness) apply_brightness(ui_effective_brightness());
+    if(restore_brightness){
+        apply_brightness(ui_effective_brightness());
+        sync_sysconfig_light_level(ui_effective_brightness());
+    }
     settings_bt_codec_migrate();
     { int at = mdb_sysconfig_auto_time();              /* mirror the player's switch (it owns the value) */
       if(at >= 0 && at != cfg_get_int("auto_time", 1)) cfg_set_int("auto_time", at); }
@@ -661,6 +683,7 @@ void settings_apply_startup(int restore_brightness){
       if(fj >= 0 && fj != cfg_get_int("folder_jump", 0)) cfg_set_int("folder_jump", fj); }
     power_startup_mirror();        /* the player's own Idle poweroff / Charging optimization values */
     controls_startup_mirror();     /* the player's Screen rotation and volume-key actions */
+    bt_rx_low_latency_apply(cfg_get_int("bt_rx_ll", 0));
     cfg_set_int("sleep_idx", 0);   /* never auto-arm a sleep timer across reboots */
     apply_boot_default(cfg_get_int("boot_default", 0));  /* keep the boot-hook flag in sync */
     ui_set_accent_config(cfg_get_int("accent_mode", 0), cfg_get_int("accent_color", 0xF23260));
@@ -674,6 +697,7 @@ void ui_set_brightness(int v){
     if(v > 40) v = 40;
     apply_brightness(v);
     cfg_set_int("brightness", v);
+    sync_sysconfig_light_level(v);
 }
 int ui_get_brightness(void){
     int v = cfg_get_int("brightness", 16);
@@ -789,6 +813,8 @@ static const setting_t TABLE[] = {
     { "Network", NULL, "Wi-Fi",       ST_ACTION, NULL, 0,0,0, NULL,0, NULL, apply_wifi, 0 },   /* radio row: inline power switch */
     { "Network", NULL, "Bluetooth", ST_ACTION, NULL, 0,0,0, NULL,0, NULL, apply_bt, 0 },          /* radio row: inline power switch */
     { "Network", NULL, "Bluetooth Codec", ST_CHOICE, "bt_codec", 0,0,0, BT_CODEC_LABEL, BT_CODEC_N, NULL, apply_bt_codec, 0 },
+    { "Network", NULL, "Low Latency (BT Rx)", ST_TOGGLE, "bt_rx_ll", 0,1,1, NULL,0, NULL, apply_bt_rx_ll, 0,
+      "Force SBC for lowest video/gaming lag" },
     { "Network", NULL, "Device name", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, dnui_open, 0 },
     { "Network", NULL, "Bluetooth name", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_bluetooth_name, 0 },
     { "Network", NULL, "Audio Source", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_workmode, 0 },
@@ -851,6 +877,8 @@ static const setting_t TABLE[] = {
 
 static int get_val(const setting_t *s){
     if(s->cfg_key && !strcmp(s->cfg_key, "bt_codec")){
+        int cfg_v = cfg_get_int("bt_codec", -1);
+        if(cfg_v >= 5 && cfg_v < BT_CODEC_N) return cfg_v;
         int v = mdb_sysconfig_bt_codec();
         if(g_bt_codec_pending >= 0){
             if(v == g_bt_codec_pending) g_bt_codec_pending = -1;
@@ -1032,7 +1060,7 @@ static void detail_slider_release_cb(lv_event_t *e){
 static void bt_codec_saved_tick(lv_timer_t *t){
     (void)t;
     if(screen_current() != SCR_SETTING_DETAIL || !g_active || !g_active->cfg_key || strcmp(g_active->cfg_key, "bt_codec")) return;
-    int v = mdb_sysconfig_bt_codec();
+    int v = (cfg_get_int("bt_codec", -1) >= 5) ? cfg_get_int("bt_codec", -1) : mdb_sysconfig_bt_codec();
     if(g_bt_codec_pending >= 0){
         if(v == g_bt_codec_pending || ++g_bt_codec_pending_ticks > 3){
             g_bt_codec_pending = -1;

@@ -1,0 +1,100 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 diskOS contributors
+# /opt/diskos/bin/bluealsa: Interceptor wrapper for BlueALSA on diskOS.
+# Resolves ahead of /usr/bin/bluealsa via PATH=/opt/diskos/bin:$PATH.
+#
+# Capabilities:
+# 1. Low Latency Mode for Bluetooth Receiving (a2dp-sink):
+#    When enabled in Settings (bt_rx_ll=1), disables high-latency codecs
+#    (AAC, LDAC, aptX, aptX-HD) and enforces SBC only, minimizing latency.
+# 2. aptX / aptX-HD support:
+#    When bluealsa-custom is available, enables aptX and aptX-HD codecs.
+# 3. Full Duplex Profile Support:
+#    Ensures both a2dp-source and a2dp-sink profiles are available so the Disc
+#    can both transmit to BT headphones and receive from phones/computers.
+# 4. Fail-closed fallback:
+#    If bluealsa-custom is unavailable, transparently delegates to stock /usr/bin/bluealsa.
+
+set -e
+
+# Target selection: prioritize custom aptX-enabled binary
+if [ -x "/usr/data/bluealsa-custom" ]; then
+    TARGET="/usr/data/bluealsa-custom"
+elif [ -x "/opt/diskos/bin/bluealsa-custom" ]; then
+    TARGET="/opt/diskos/bin/bluealsa-custom"
+elif [ -x "/usr/bin/bluealsa" ]; then
+    TARGET="/usr/bin/bluealsa"
+else
+    echo "bluealsa: no executable found" >&2
+    exit 127
+fi
+
+# Check if Low Latency mode is enabled
+LL_ENABLED=0
+if [ -f /usr/data/bt_rx_ll ]; then
+    if [ "$(cat /usr/data/bt_rx_ll 2>/dev/null)" = "1" ]; then
+        LL_ENABLED=1
+    fi
+elif [ -f /usr/data/diskos.conf ]; then
+    if grep -q '^bt_rx_ll=1' /usr/data/diskos.conf 2>/dev/null; then
+        LL_ENABLED=1
+    fi
+fi
+
+# Ensure both a2dp-source and a2dp-sink are registered
+HAS_SOURCE=0
+HAS_SINK=0
+for arg in "$@"; do
+    case "$arg" in
+        *a2dp-source*) HAS_SOURCE=1 ;;
+        *a2dp-sink*)   HAS_SINK=1 ;;
+    esac
+done
+
+PROFILES=""
+if [ "$HAS_SOURCE" -eq 0 ]; then
+    PROFILES="$PROFILES --profile=a2dp-source"
+fi
+if [ "$HAS_SINK" -eq 0 ]; then
+    PROFILES="$PROFILES --profile=a2dp-sink"
+fi
+
+# Filter existing codec arguments to prevent duplicates or conflicts
+CLEAN_ARGS=""
+SKIP_NEXT=0
+for arg do
+    if [ "$SKIP_NEXT" -eq 1 ]; then
+        SKIP_NEXT=0
+        continue
+    fi
+    case "$arg" in
+        --codec=*)
+            # Strip codec args, we will inject the proper configuration below
+            ;;
+        -c|--codec)
+            SKIP_NEXT=1
+            ;;
+        *)
+            CLEAN_ARGS="$CLEAN_ARGS $arg"
+            ;;
+    esac
+done
+
+if [ "$LL_ENABLED" -eq 1 ]; then
+    # LOW LATENCY MODE:
+    # Disable high-latency / buffered codecs (AAC, aptX, aptX-HD, LDAC) so Android/iOS/PC
+    # negotiates SBC only, keeping audio latency low (~80-120ms).
+    exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD --codec=-ldac
+else
+    # STANDARD MODE:
+    # Enable all codecs: SBC, AAC, aptX, aptX-HD, LDAC
+    case "$TARGET" in
+        *bluealsa-custom*)
+            exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=aac --codec=aptX --codec=aptX-HD --codec=ldac
+            ;;
+        *)
+            exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=aac --codec=ldac
+            ;;
+    esac
+fi

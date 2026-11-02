@@ -316,8 +316,9 @@ Switch a radio on its row, tap the row to open it, rescan, and tap a listed devi
 |---|---|
 | Wi-Fi | Switch the radio on the row; tapping the row while it is off turns it on, and tapping it while it is on opens scanning, connection, and saved-network details. |
 | Web Server | Open the embedded Web Server management screen to toggle the background HTTP/WebSocket service, configure Wi-Fi PIN, and view live status. |
-| Bluetooth | Switch the radio on the row; tapping the row while it is off turns it on, and tapping it while it is on opens scanning, pairing, connection, and device details. |
-| Bluetooth Codec | SBC by default; V2.57 offers AAC, LDAC Mobile, LDAC Standard, and LDAC High. The stock player applies the chosen codec; changing this row sends the choice at once. An unsupported headphone can fall back to SBC. |
+| Bluetooth | Switch the radio on the row; tapping the row while it is off turns it on, and tapping it while it is on opens scanning, pairing, connection, Low Latency Mode, and device details. |
+| Low Latency Mode | Available in Bluetooth details (off by default); forces SBC-only sink negotiation, eliminating buffering latency (~80-120ms total delay) for mobile gaming and video sync when using the Disc as a Bluetooth receiver. |
+| Bluetooth Codec | SBC, AAC, aptX, aptX-HD, and LDAC supported bidirectionally on both source (headphones) and sink (receiver mode). Dynamic linking connects to on-device Qualcomm and Sony libraries, with live active codec badges rendered on Song Info and Mode Lockdown screens. |
 | Device name | The Disc's network name (letters, digits and hyphens, up to 32 characters, starting and ending with a letter or digit) and the name Beam shows to receivers. Applies after a restart; needs a 1.2.2 full flash. Reset this name returns to the stock default. |
 | Bluetooth name | The name other Bluetooth devices see (printable ASCII, up to 32 characters and nine words). Reset this name returns to SNOWSKY DISC. A pending change applies when Bluetooth is available. |
 | Audio Source | Open Local Playback, Bluetooth Receiving, AirPlay Receiving (V2.40 and V2.57), USB DAC, or USB Storage. Local Playback is the usual music mode. |
@@ -476,7 +477,7 @@ Chinese, Japanese, and Korean names and titles use the stock font fallback acros
 
 ### Wi-Fi and Bluetooth
 
-On Wi-Fi, use the switch to enable the radio, tap Rescan to refresh the list, tap a network to connect, and enter a password when asked. Tap a connected or saved network for its information and Forget action. Bluetooth offers its own switch and Rescan; tap a found device to pair or connect, and open a paired device's details for Connect when disconnected, Disconnect when connected, Use for audio, Rename or Forget This Device. Details load in the background with Checking or Unknown shown while information is unavailable. Connection failures identify the step that failed. The selected codec depends on what both the firmware and headphones support. Open a paired device's details and tap Rename to give it a nickname on the Disc (Use original name restores it). Nicknames use printable ASCII, up to 32 characters and nine words. Nicknames are stored on the Disc; the remote device's own name is unchanged.
+On Wi-Fi, use the switch to enable the radio, tap Rescan to refresh the list, tap a network to connect, and enter a password when asked. Tap a connected or saved network for its information and Forget action. Bluetooth offers its own switch and Rescan; tap a found device to pair or connect, and open a paired device's details for Connect when disconnected, Disconnect when connected, Use for audio, Rename or Forget This Device. Details load in the background with Checking or Unknown shown while information is unavailable. Connection failures identify the step that failed. The negotiated codec depends on what both the remote device and headphones support (SBC, AAC, aptX, aptX-HD, and LDAC are all supported). Under Bluetooth settings, **Low Latency Mode** can be enabled to force SBC-only receiving, eliminating buffer latency (~80-120ms total) for mobile gaming and videos. Open a paired device's details and tap Rename to give it a nickname on the Disc (Use original name restores it). Nicknames use printable ASCII, up to 32 characters and nine words. Nicknames are stored on the Disc; the remote device's own name is unchanged.
 
 Wi-Fi allows up to 75 seconds for a connection. Network details refresh as it completes; IP and router values appear only when the connection is ready.
 
@@ -524,7 +525,7 @@ and dissolves to black before cutting the display power rail.
 
 The stock player handles the physical power button: one press blanks the display and another restores it.
 Touch wakes diskOS idle dimming or Screen Off, but a panel put to sleep by the stock player needs the power button.
-On V2.57, one power-button press also wakes diskOS Screen Off. Button wake restores your diskOS brightness.
+On V2.57, one power-button press also wakes diskOS Screen Off instantly (<50ms) with zero blink or intermediate blackout. Button wake restores your diskOS brightness.
 Holding the physical power button for 3 to 5 seconds triggers the safe shutdown listener: diskOS quiesces active
 storage writers, flushes filesystem caches, runs the shutdown animation, and safely powers down the player.
 

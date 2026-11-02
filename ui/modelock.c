@@ -413,6 +413,11 @@ static void *bt_rx_worker(void *arg){
                 }
             }
             if(cname[0]){
+                if(bt_rx_low_latency_enabled() && strcmp(cname, "SBC") != 0 && pcm_path[0]){
+                    char cmd[256];
+                    snprintf(cmd, sizeof cmd, "bluealsa-cli codec \"%s\" SBC >/dev/null 2>&1 &", pcm_path);
+                    system(cmd);
+                }
                 if(rate[0] && bits[0])
                     snprintf(codec_str, sizeof codec_str, "%s • %s • %s", cname, rate, bits);
                 else if(rate[0])
@@ -441,6 +446,16 @@ static void *bt_rx_worker(void *arg){
                     }
                 }
                 fclose(fc);
+            }
+        }
+
+        if(bt_rx_low_latency_enabled()){
+            if(codec_str[0]){
+                char tmp[64];
+                snprintf(tmp, sizeof tmp, "⚡ LL • %s", codec_str);
+                snprintf(codec_str, sizeof codec_str, "%s", tmp);
+            } else {
+                snprintf(codec_str, sizeof codec_str, "⚡ LL • SBC • 44.1kHz • 16bit");
             }
         }
 

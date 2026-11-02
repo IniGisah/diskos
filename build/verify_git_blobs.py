@@ -16,6 +16,7 @@ PAYLOAD = (
     'diskos-bootprobe', 'diskos-artdec', 'diskos-launch', 'diskos-verify.sh',
     'diskos-root.pub.pem', 'diskos-flashstate',
     'S97diskos_names', 'diskos-names', 'diskos-udhcpc', 'diskos-network-names-v1',
+    'bluealsa', 'bluealsa-custom',
 )
 DEVICE = ('my_write6_dram.bin', 'disc_spl_lpddr3.bin')
 

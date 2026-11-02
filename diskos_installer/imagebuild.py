@@ -431,7 +431,13 @@ _BOOTPROBE = "/opt/diskos/bin/diskos-bootprobe"
 # Artwork helper: the UI runs it to make covers (stock V2.57's ffmpeg has no image decoders). Not part of the boot
 # decision, but shipped and validated the same way: exact bytes, a regular file, mode 0755.
 _ARTDEC = "/opt/diskos/bin/diskos-artdec"
-_SUPPORT_FILES = ((_ARTDEC.lstrip("/"), "diskos-artdec"),)
+_BLUEALSA = "/opt/diskos/bin/bluealsa"
+_BLUEALSA_CUSTOM = "/opt/diskos/bin/bluealsa-custom"
+_SUPPORT_FILES = (
+    (_ARTDEC.lstrip("/"), "diskos-artdec"),
+    (_BLUEALSA.lstrip("/"), "bluealsa"),
+    (_BLUEALSA_CUSTOM.lstrip("/"), "bluealsa-custom"),
+)
 _SELECT_LINE = _SELECTED_HELPER
 # (image path, payload name) of every file the boot's stock/diskOS decision runs through
 _BOOT_DECISION_FILES = (

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "bt_prepare.h"
+#include "screens.h"
 #ifdef DISKOS_TEST_BT_PREPARE
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,7 +19,7 @@ static int loaded(const bp_prepare *p, const bp_input *i){
 }
 int bp_begin(bp_prepare *p, uint32_t now, const char *mac, int choice, int playing, const bp_input *i){
     char frame[48];
-    if(bp_active(p) || !i || !i->permitted || !i->qualified || choice < 1 || choice > 4 ||
+    if(bp_active(p) || !i || !i->permitted || !i->qualified || choice < 1 || choice >= BT_CODEC_N ||
        p->attempt == UINT64_MAX || !i->current.player_generation ||
        (i->current.have_track && (!i->current.player_confirmed || i->current.provisional)) ||
        (playing && !i->current.have_track) || bt_prepare_codec_frame(mac, choice, frame, sizeof frame) != 0)
@@ -120,7 +121,10 @@ void bp_tick(bp_prepare *p, uint32_t now, const bp_input *i, const bp_sink *k){
         bc_snapshot s; int known; unsigned avail;
         int rc = probe(p, k, &s, &known, &avail);
         if(rc > 0 && s.sequence != p->endpoint_sequence){ finish(p, k, BP_CANCELLED); break; }
-        unsigned family = p->selected == 0 ? BC_CODEC_SBC : p->selected == 1 ? BC_CODEC_AAC : BC_CODEC_LDAC;
+        unsigned family = p->selected == 0 ? BC_CODEC_SBC :
+                          p->selected == 1 ? BC_CODEC_AAC :
+                          p->selected <= 4 ? BC_CODEC_LDAC :
+                          p->selected == 5 ? BC_CODEC_APTX : BC_CODEC_APTX_HD;
         if(rc > 0 && s.codec == family && s.adapter == 0 && !strcmp(s.mac, p->mac) &&
            p->queried && i->report_serial != p->report && loaded(p, i))
             p->phase = BP_VOLUME;

@@ -68,6 +68,7 @@ bundles. See `../NOTICE.md` for the component->license mapping and the static-li
 | Rubik Glitch (converted as `diskos_zine_glitch`, zine theme titles, in `mq_ui`) | OFL-1.1 | [`OFL-1.1-RubikGlitch.txt`](OFL-1.1-RubikGlitch.txt) |
 | MD5, Peslyak/"Solar Designer" (in `mq_ui`) | Public domain | in `../ui/md5.c`; no license text required |
 | dropbearmulti (Dropbear SSH 2022.83, Debug Mode) | MIT-style | [`LICENSE-dropbear.txt`](LICENSE-dropbear.txt) (verbatim upstream) |
+| BlueALSA 4.0.0 (`bluealsa-custom`) | MIT | [`MIT-bluez-alsa.txt`](MIT-bluez-alsa.txt) |
 | disc_spl_lpddr3.bin (X2000 stage-1 SPL) | GPL-2.0 | [`GPL-2.0.txt`](GPL-2.0.txt); corresponding source in `../spl-src/` (see `../SPL_SOURCE.md`) |
 
 All texts above are included **verbatim from the actual upstream sources** (not hand-written), with

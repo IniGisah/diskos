@@ -202,10 +202,10 @@ control path. Charging behavior depends on the board and driver configuration.
 | WiFi attach | SDIO (`[dhd]` driver v101.10.591.91.40, 512 KB dongle RAM) | dmesg |
 | Bluetooth | Broadcom BT over **UART `/dev/ttyS0`** @3Mbaud (`hci0`, BD address (device-specific, redacted)) | `hciconfig` |
 | BT firmware | `BCM4343A1_001.002.009.1026.1055.hcd` (the `BCM4345C5/C0` `.hcd` files are leftovers for other FiiO models) | `/lib/firmware/bt_bcm` |
-| BT bring-up | **hci0 is NOT attached at boot** - `bcmdhd.ko` only loads the driver/GPIOs. The HCI iface is created on-demand by `brcm_patchram_plus --enable_lpm --enable_hci --baudrate 3000000 --patchram <.hcd> /dev/ttyS0`, then `/usr/project/bluetoothd` (a2dp,avrcp,source) + `bluealsa --device=hci0` (SBC/LDAC). **Stock = bluez; `bsa_server`/`bt_enable_bsa*.sh` = dead code for the wrong chip.** Decoded from `mq_player` strings. | mq_player RE |
+| BT bring-up | **hci0 is NOT attached at boot** - `bcmdhd.ko` only loads the driver/GPIOs. The HCI iface is created on-demand by `brcm_patchram_plus --enable_lpm --enable_hci --baudrate 3000000 --patchram <.hcd> /dev/ttyS0`, then `/usr/project/bluetoothd` (a2dp,avrcp,source). diskOS intercepts `bluealsa` via `/opt/diskos/bin/bluealsa` delegating to `bluealsa-custom`, which registers full duplex profiles (`a2dp-source` and `a2dp-sink`) with all 5 codecs (`SBC`, `AAC`, `aptX`, `aptX-HD`, `LDAC`) dynamically linking to on-device `/usr/lib/libaptx*.so` and `/usr/lib/libldacBT*.so`. | mq_player RE |
 
-Wi-Fi is limited to 2.4 GHz. Bluetooth codec selection depends on the stock
-userspace stack and the connected device; see [COMMAND_MAP.md](COMMAND_MAP.md).
+Wi-Fi is limited to 2.4 GHz. Bluetooth codec support covers SBC, AAC, aptX, aptX-HD, and LDAC
+bidirectionally; see [COMMAND_MAP.md](COMMAND_MAP.md).
 
 ---
 

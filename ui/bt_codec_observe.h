@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 enum { BC_OK, BC_MISSING, BC_MISMATCH, BC_STALE, BC_TIMEOUT, BC_ARGUMENT = -1 };
-enum { BC_CODEC_OTHER, BC_CODEC_SBC, BC_CODEC_AAC, BC_CODEC_LDAC };
+enum { BC_CODEC_OTHER, BC_CODEC_SBC, BC_CODEC_AAC, BC_CODEC_LDAC, BC_CODEC_APTX, BC_CODEC_APTX_HD };
 typedef struct {
     char pcm[128], mac[18], format[20], codec_name[24];
     unsigned codec, adapter, sequence, rate, channels;

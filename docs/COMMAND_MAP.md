@@ -92,9 +92,11 @@ SD card, and trigger an MCU reboot. `06b3` also requires `06c1` initialization t
 finish. Play with `0100...` after routing. Return to local output with
 `0666000C0006` followed by `0657000C0008` (`ui_route_analog()`).
 
-diskOS starts BlueALSA with `--sbc-quality=medium` to reduce SBC encoding load.
-Routing starts with SBC. On V2.57, diskOS can then request AAC or LDAC after the
-speaker's A2DP PCM advertises that codec; other firmware stays on SBC.
+diskOS starts BlueALSA via the `/opt/diskos/bin/bluealsa` interceptor wrapper (which resolves ahead of `/usr/bin/bluealsa`), delegating to `bluealsa-custom` (or stock `/usr/bin/bluealsa` as fail-closed fallback):
+- **Supported Codecs**: `SBC`, `AAC`, `aptX`, `aptX-HD`, and `LDAC` on both **A2DP-source** (transmitting to headphones/speakers) and **A2DP-sink** (Bluetooth Receiver mode from smartphones/PCs).
+- **Dynamic Linking**: `bluealsa-custom` links dynamically against stock `/usr/lib/libaptx.so`, `/usr/lib/libaptxHD.so`, and `/usr/lib/libldacBT_enc.so.2` on the Disc's read-only rootfs, utilizing the device's pre-licensed Qualcomm and Sony decoders.
+- **Low Latency Mode**: When `/usr/data/bt_rx_ll` is set to `1` (via **Settings > Bluetooth > Low Latency Mode**), the wrapper passes `--codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD --codec=-ldac` to lock receiving to SBC-only, eliminating buffer lag (~80-120ms total latency) for video and mobile gaming.
+- **Live Codec Observation**: `ui/bt_codec_observe.c` queries BlueALSA over D-Bus to display the active transport codec on Song Info and Mode Lockdown screens.
 
 ## USB DAC OUTPUT (transmit digital audio to an external USB DAC) - [verified] WORKING (2026-09-29)
 Reverse-engineered from stock V2.40/V2.57 firmware (`mq_ui` and `mq_player` host mode handler). In stock firmware this is named "USB AUDIO" under Working Mode. In diskOS this is exposed as "USB Audio" (mode 4 under Working Mode).

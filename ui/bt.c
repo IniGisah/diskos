@@ -24,6 +24,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <fcntl.h>
+#include <stdatomic.h>
 
 /* Bluetooth settings (SCR_BT) + a details screen (SCR_BT_INFO).
  * The BT chip (BCM43438 / AP6212, 2.4GHz-only) sits on UART /dev/ttyS0. RE of the
@@ -252,22 +253,49 @@ static void bt_ensure_services(void){
            "--codec=sbc --initial-volume=48 >/tmp/bluealsa.log 2>&1 &");
 }
 /* Stock V2.57 codec menu: mq_ui 0x455bd0, payloadless VALUE1 0..4.
+ * diskOS extends this with aptX (5) and aptX-HD (6).
  * Only a listener's Settings choice sends this command. The stock connection
  * worker owns saved-codec application; diskOS never reconciles it on a timer. */
-const char *const BT_CODEC_LABEL[BT_CODEC_N] = { "SBC", "AAC", "LDAC Mobile", "LDAC Standard", "LDAC High" };
+const char *const BT_CODEC_LABEL[BT_CODEC_N] = {
+    "SBC",
+    "AAC",
+    "LDAC Mobile",
+    "LDAC Standard",
+    "LDAC High",
+    "aptX",
+    "aptX-HD"
+};
 static int bt_mac_valid(const char *mac);
 static int bt_codec_frame_value(const char *mac, int v, char *out, int cap){
     if(!bt_mac_valid(mac)) return -1;
+    if(v < 0 || v > 4) v = 0; /* stock 06b3 only supports 0..4 (SBC..LDAC High) */
     int r = snprintf(out, cap, "06b3%04X%04X%s", (unsigned)(12 + 17), (unsigned)v, mac);
     return (r > 0 && r < cap) ? 0 : -1;
 }
-#define BTC_AAC  2u
-#define BTC_LDAC 4u
+#define BTC_AAC     2u
+#define BTC_LDAC    4u
+#define BTC_APTX    8u
+#define BTC_APTX_HD 16u
 /* The stock VALUE1 to send: the best codec supported by the sink that does not exceed the user's preference.
- * Priority hierarchy matches stock firmware: LDAC (quality per choice) -> AAC -> SBC. */
+ * Priority hierarchy: aptX-HD -> aptX -> LDAC (quality per choice) -> AAC -> SBC. */
 int bt_codec_pick(int choice, unsigned avail, int avail_known){
     if(choice < 0 || choice >= BT_CODEC_N) return 0;
     if(!avail_known) return 0;   /* sink capabilities not yet known: keep SBC */
+
+    /* If user chose aptX-HD (6):
+     * Prefer aptX-HD if available; fall back to aptX if available; otherwise SBC. */
+    if(choice == 6){
+        if(avail & BTC_APTX_HD) return 6;
+        if(avail & BTC_APTX)    return 5;
+        return 0;
+    }
+
+    /* If user chose aptX (5):
+     * Prefer aptX if available; otherwise SBC. */
+    if(choice == 5){
+        if(avail & BTC_APTX)    return 5;
+        return 0;
+    }
 
     /* If user chose LDAC (2=Mobile, 3=Standard, 4=High):
      * Prefer LDAC if available; fall back to AAC if available; otherwise SBC. */
@@ -301,9 +329,11 @@ unsigned bt_codec_parse_avail(const char *info, int *known){
         first = 0;
         for(size_t i = 0; i < n;){
             size_t j = i;
-            while(j < n && ((p[j]>='A'&&p[j]<='Z')||(p[j]>='a'&&p[j]<='z')||(p[j]>='0'&&p[j]<='9'))) j++;
+            while(j < n && ((p[j]>='A'&&p[j]<='Z')||(p[j]>='a'&&p[j]<='z')||(p[j]>='0'&&p[j]<='9')||p[j]=='-')) j++;
             if(j - i == 3 && !strncasecmp(p + i, "AAC", 3)) m |= BTC_AAC;
             else if(j - i == 4 && !strncasecmp(p + i, "LDAC", 4)) m |= BTC_LDAC;
+            else if(j - i == 4 && !strncasecmp(p + i, "aptX", 4)) m |= BTC_APTX;
+            else if(j - i == 7 && (!strncasecmp(p + i, "aptX-HD", 7) || !strncasecmp(p + i, "aptX_HD", 7))) m |= BTC_APTX_HD;
             i = j > i ? j : i + 1;
         }
         if(!e) break;
@@ -345,9 +375,56 @@ int ui_bt_codec_frame(const char *mac, char *out, int cap){
     return bt_codec_frame_value(mac, best, out, cap);
 }
 int ui_bt_codec_set(int value){
-    if(fw_os_ver() != 257 || value < 0 || value >= BT_CODEC_N) return -1;
-    char frame[16]; snprintf(frame, sizeof frame, "06b3000C%04X", (unsigned)value);
-    return ipc_send_cmd(frame);
+    if(value < 0 || value >= BT_CODEC_N) return -1;
+    cfg_set_int("bt_codec", value);
+    if(value <= 4 && fw_os_ver() == 257){
+        char frame[16]; snprintf(frame, sizeof frame, "06b3000C%04X", (unsigned)value);
+        ipc_send_cmd(frame);
+    }
+    const char *codec_arg = NULL;
+    switch(value){
+        case 0: codec_arg = "SBC"; break;
+        case 1: codec_arg = "AAC"; break;
+        case 2:
+        case 3:
+        case 4: codec_arg = "LDAC"; break;
+        case 5: codec_arg = "aptX"; break;
+        case 6: codec_arg = "aptX-HD"; break;
+    }
+    if(codec_arg){
+        char cmd[256];
+        snprintf(cmd, sizeof cmd,
+                 "for p in $(bluealsa-cli list-pcms 2>/dev/null | grep -i 'dev_.*sink'); do "
+                 "bluealsa-cli codec \"$p\" %s >/dev/null 2>&1; done &", codec_arg);
+        bg_system(cmd);
+    }
+    return 0;
+}
+
+static atomic_int s_bt_rx_ll = ATOMIC_VAR_INIT(-1);
+
+int bt_rx_low_latency_enabled(void){
+    int v = atomic_load(&s_bt_rx_ll);
+    if(v < 0){
+        v = cfg_get_int("bt_rx_ll", 0);
+        atomic_store(&s_bt_rx_ll, v ? 1 : 0);
+    }
+    return v;
+}
+
+void bt_rx_low_latency_apply(int enable){
+    atomic_store(&s_bt_rx_ll, enable ? 1 : 0);
+    cfg_set_int("bt_rx_ll", enable ? 1 : 0);
+    FILE *f = fopen("/usr/data/bt_rx_ll", "w");
+    if(f){
+        fprintf(f, "%d\n", enable ? 1 : 0);
+        fclose(f);
+    }
+    bg_system("if pidof bluealsa bluealsa-custom >/dev/null 2>&1; then "
+              "  killall -9 bluealsa bluealsa-custom 2>/dev/null; "
+              "  sleep 0.2; "
+              "  /opt/diskos/bin/bluealsa -S --device=hci0 >/tmp/bluealsa.log 2>&1 & "
+              "fi &");
 }
 #ifdef DISKOS_TEST_BT_PREPARE
 static int64_t bt_probe_now(void){

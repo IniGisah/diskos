@@ -135,8 +135,6 @@ static void hardware_screen_wake(int brightness) {
         close(fd_lcd);
     }
     usleep(50000); /* 50ms stock panel wake stabilization */
-    int br = (brightness > 0) ? brightness : ui_effective_brightness();
-    ui_backlight(br);
     int fd_touch = open("/dev/cst816t", O_RDWR | O_NONBLOCK);
     if(fd_touch >= 0) {
         ioctl(fd_touch, 0x2000ef04);
@@ -146,6 +144,8 @@ static void hardware_screen_wake(int brightness) {
         lv_indev_wait_release(g_touch);
         lv_indev_enable(g_touch, true);
     }
+    int br = (brightness > 0) ? brightness : ui_effective_brightness();
+    ui_backlight(br);
 }
 static int         g_screen_off = 0;   /* mirrors (bl_state==2), including changes before navigation;
                                           slow polls also use it to skip work while the panel is off. */
@@ -153,6 +153,12 @@ static int         g_touch_raw = -1;   /* a 2nd, RAW read-only fd on the touch e
                                           wake a screen-off panel: LVGL coalesces a quick tap into a
                                           final RELEASED (no press edge -> no wake), so we watch the
                                           raw stream where ANY event means "a finger touched". */
+static uint32_t    g_last_wake_tick = 0;
+static uint32_t    g_last_sleep_tick = 0;
+static int         g_syncing_player_sleep = 0;
+static uint32_t    g_syncing_player_sleep_at = 0;
+static int         g_injected_presses = 0;
+static int         g_injected_releases = 0;
 
 /* Manual "Sleep" (Quick Settings tile): a deliberate screen-off request. It must dim+power
  * the panel even when the auto-screensaver is Off, so it can't ride the saver_timeout>0 path.
@@ -317,6 +323,12 @@ static int powerkey_defer_startup(int brightness){
 enum { SF_NONE, SF_OFF, SF_WAKE, SF_INJECT };
 static int screen_frame_step(int on, int bl_state, int *player_off, int poweroff_inhibit){
     if(on){ *player_off = 0; return SF_WAKE; }
+    if(g_syncing_player_sleep && lv_tick_elaps(g_syncing_player_sleep_at) < 1500){
+        g_syncing_player_sleep = 0;
+        *player_off = 1;
+        return SF_NONE;
+    }
+    g_syncing_player_sleep = 0;
     int own_off = bl_state == 2 && !*player_off;
     *player_off = 1;
     if(own_off) return poweroff_inhibit ? SF_NONE : SF_INJECT;
@@ -336,12 +348,17 @@ static int power_key_inject(void){
         snprintf(path, sizeof path, "/dev/input/event%d", i);
         int fd = open(path, O_WRONLY | O_NONBLOCK | O_CLOEXEC);
         if(fd < 0) return 0;
-        struct input_event ev[4]; memset(ev, 0, sizeof ev);
-        ev[0].type = EV_KEY; ev[0].code = 265; ev[0].value = 1;  ev[1].type = EV_SYN; ev[1].code = SYN_REPORT;
-        ev[2].type = EV_KEY; ev[2].code = 265; ev[2].value = 0;  ev[3].type = EV_SYN; ev[3].code = SYN_REPORT;
+        struct input_event ev[2]; memset(ev, 0, sizeof ev);
+        ev[0].type = EV_KEY; ev[0].code = 265; ev[0].value = 1;
+        ev[1].type = EV_SYN; ev[1].code = SYN_REPORT;
+        g_injected_presses++;
         int ok = write(fd, ev, sizeof ev) == (ssize_t)sizeof ev;
+        usleep(40000); /* 40ms hold time for player key filter */
+        ev[0].value = 0;
+        g_injected_releases++;
+        write(fd, ev, sizeof ev);
         close(fd);
-        fprintf(stderr, "power key: %s a press to wake the player's screen\n", ok ? "sent" : "could not send");
+        fprintf(stderr, "power key: %s a press to sync player screen\n", ok ? "sent" : "could not send");
         return ok;
     }
     return 0;
@@ -371,16 +388,50 @@ static int pwrkey_get_fd(void){
     return -1;
 }
 
-static void pwrkey_poll(void){
+static void pwrkey_poll(int *p_bl_state, int *p_manual_btn_off, uint32_t *p_last_activity){
     int fd = pwrkey_get_fd();
     if(fd >= 0){
         struct input_event ev;
         while(read(fd, &ev, sizeof ev) == (ssize_t)sizeof ev){
             if(ev.type == EV_KEY && (ev.code == 259 || ev.code == 265 || ev.code == 116)){
-                power_note_input();
                 if(ev.value == 1){
+                    if(g_injected_presses > 0){
+                        g_injected_presses--;
+                        continue;
+                    }
+                    if(lv_tick_elaps(g_last_sleep_tick) < 400){
+                        /* Ignore stale button press event from the sleep transition */
+                        continue;
+                    }
+                    power_note_input();
                     g_pwr_press_t0 = lv_tick_get();
+                    if(p_bl_state && p_manual_btn_off && p_last_activity){
+                        if(*p_bl_state == 2){
+                            /* Screen was fully asleep -> wake up immediately */
+                            g_syncing_player_sleep = 0;
+                            g_last_wake_tick = lv_tick_get();
+                            hardware_screen_wake(ui_effective_brightness());
+                            *p_bl_state = 0;
+                            g_screen_off = 0;
+                            *p_manual_btn_off = 0;
+                            *p_last_activity = lv_tick_get();
+                            draw_set_dark(0);
+                            if(screen_current() == SCR_SAVER) screen_back();
+                        } else if(*p_bl_state == 1){
+                            /* Screen was merely dimmed -> undim without resetting panel */
+                            *p_bl_state = 0;
+                            g_screen_off = 0;
+                            *p_manual_btn_off = 0;
+                            *p_last_activity = lv_tick_get();
+                            ui_backlight(ui_effective_brightness());
+                            if(screen_current() == SCR_SAVER) screen_back();
+                        }
+                    }
                 } else if(ev.value == 0){
+                    if(g_injected_releases > 0){
+                        g_injected_releases--;
+                        continue;
+                    }
                     g_pwr_press_t0 = 0;
                 }
             }
@@ -4923,6 +4974,10 @@ int main(int argc, char **argv){
       sigaction(SIGSEGV,&sa,NULL); sigaction(SIGBUS,&sa,NULL);
       sigaction(SIGABRT,&sa,NULL); sigaction(SIGFPE,&sa,NULL); }
     signal(SIGPIPE, SIG_IGN);
+    /* Ensure custom bluealsa wrapper is active if present in /usr/data */
+    if(access("/usr/data/bluealsa", X_OK) == 0 && access("/opt/diskos/bin/bluealsa", F_OK) == 0){
+        system("mount -o bind /usr/data/bluealsa /opt/diskos/bin/bluealsa 2>/dev/null");
+    }
     /* Boot-hang backstop: if we don't reach the main loop + first paint within
      * BOOT_DEADLINE_S, SIGALRM _exit()s us so fiio_init respawns a fresh mq_ui
      * (an alive-but-hung mq_ui is invisible to its `pgrep -x` watchdog). The
@@ -5746,7 +5801,7 @@ int main(int argc, char **argv){
                     bl_state = 0; g_screen_off = 0; manual_btn_off = 0; last_activity = lv_tick_get();
                     draw_set_dark(0);
                     if(screen_current() == SCR_SAVER) screen_back();
-                    inject_pending = 1; inject_for = sq; inject_gen = gen; inject_due = lv_tick_get() + 250;
+                    inject_pending = 1; inject_for = sq; inject_gen = gen; inject_due = lv_tick_get() + 40;
                     break;
                 case SF_OFF:      /* the player slept its panel: power the rail down to match */
                     draw_set_dark(1);
@@ -5754,13 +5809,28 @@ int main(int argc, char **argv){
                     hardware_screen_sleep(0);
                     mclock_sync(0);
                     kit_cursor_sync(0);
+                    g_last_sleep_tick = lv_tick_get();
+                    /* Drain any pending press events in event0 so this sleep press is not misread as a wake press */
+                    {
+                        int pfd = pwrkey_get_fd();
+                        if(pfd >= 0){
+                            struct input_event dummy;
+                            while(read(pfd, &dummy, sizeof dummy) == (ssize_t)sizeof dummy);
+                        }
+                    }
+                    g_pwr_press_t0 = 0;
                     if(screen_current() == SCR_SAVER) screen_back();
                     break;
                 case SF_WAKE:     /* the player woke its panel: light it at the user's level */
-                    hardware_screen_wake(ui_effective_brightness());
-                    bl_state = 0; g_screen_off = 0; manual_btn_off = 0; last_activity = lv_tick_get();
-                    draw_set_dark(0);
-                    if(screen_current() == SCR_SAVER) screen_back();
+                    if(bl_state != 0){
+                        g_last_wake_tick = lv_tick_get();
+                        hardware_screen_wake(ui_effective_brightness());
+                        bl_state = 0; g_screen_off = 0; manual_btn_off = 0; last_activity = lv_tick_get();
+                        draw_set_dark(0);
+                        if(screen_current() == SCR_SAVER) screen_back();
+                    } else {
+                        ui_backlight(ui_effective_brightness());
+                    }
                     break;
                 default: break;
                 }
@@ -5838,22 +5908,32 @@ int main(int argc, char **argv){
             char rb[512]; int any = 0;
             while(read(g_touch_raw, rb, sizeof rb) > 0) any = 1;
             int touch_wake_ok = cfg_get_int("touch_wake", 0);
-            if(any && bl_state && !pk.player_off && !shutdown_input_blocked()){   /* shutdown owns touch; the player owns its button */
+            if(any && bl_state && !shutdown_input_blocked()){   /* shutdown owns touch */
                 if(bl_state == 2 && (!touch_wake_ok || manual_btn_off)){
                     /* Touch to wake is disabled or screen was turned off manually with power button. Ignore touch while off. */
                 } else {
                     last_activity = lv_tick_get();
-                    hardware_screen_wake(ui_effective_brightness());
+                    if(bl_state == 2){
+                        /* Wake from deep sleep */
+                        g_last_wake_tick = lv_tick_get();
+                        hardware_screen_wake(ui_effective_brightness());
+                        draw_set_dark(0);
+                        if(pk.player_off){
+                            (void)power_key_inject();
+                        }
+                    } else if(bl_state == 1){
+                        /* Undim from screensaver: keep panel awake, no injection needed */
+                        ui_backlight(ui_effective_brightness());
+                    }
                     bl_state = 0; g_screen_off = 0;
                     manual_btn_off = 0;
                     woke = 1; prev_ts = LV_INDEV_STATE_RELEASED;
-                    draw_set_dark(0);
                     if(screen_current() == SCR_SAVER) screen_back();
                 }
             }
         }
         if(kbinput_active()) last_activity = lv_tick_get();
-        pwrkey_poll();
+        pwrkey_poll(&bl_state, &manual_btn_off, &last_activity);
         power_tick(last_activity, playing);
         usage_tick(bl_state != 2, playing);   /* AFTER all input is consumed (a pending touch must win the race): SD-safe shutdown, diskOS idle power-off, temperature notice */
         int in_saver = (screen_current()==SCR_SAVER);
@@ -5899,6 +5979,12 @@ int main(int argc, char **argv){
                 bl_state = 2; g_screen_off = 1; manual_btn_off = 0;
                 mclock_sync(0);
                 kit_cursor_sync(0);
+                g_last_sleep_tick = lv_tick_get();
+                if(!pk.player_off){
+                    g_syncing_player_sleep = 1;
+                    g_syncing_player_sleep_at = lv_tick_get();
+                    (void)power_key_inject();
+                }
                 /* screen fully off -> STOP the screensaver. Leaving SCR_SAVER: (a) satisfies "the
                  * saver stops when the screen turns off"; (b) pops back to the screen shown BEFORE
                  * the saver, so a later wake lands there, not on the saver; (c) makes saver_anim_cb
