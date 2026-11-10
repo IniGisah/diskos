@@ -74,6 +74,7 @@ static void reset_name(lv_event_t *e){
     reset_field=field; strcpy(reset_mac,selected); reset_epoch=view.reset_epoch;
     ui_dialog_cfg_t cfg={.width=280,.margin=4,.scrim=1,.actions=1,.fit_width=1};
     ui_dialog_t d=ui_dialog_create(lv_layer_top(),&cfg); dialog=d.scrim;
+    ui_on(dialog,close_dialog,LV_EVENT_CLICKED,NULL,"names.scrim_close",UI_CORE);
     lv_obj_add_event_cb(dialog,dialog_deleted,LV_EVENT_DELETE,NULL);
     lv_obj_t *t=ui_dialog_label(&d,tr(field==2 ? "Use original name?" : "Reset this name?"));
     lv_obj_set_style_text_font(t,TF(UI_20),0);

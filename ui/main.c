@@ -5176,6 +5176,7 @@ int main(int argc, char **argv){
     int cover_tap=0;   /* press landed on the NP cover -> LVGL's cover click opens full-screen art (not a seek) */
     int fsart_touch=0; /* press began while full-screen art was up -> LVGL's overlay click closes it; we only swallow */
     int sleep_touch=0; /* press began while the sleep popover was up -> swallow the whole gesture (no ring seek) */
+    int modal_touch=0; /* press began while a modal dialog on lv_layer_top was up -> LVGL handles it; swallow gestures */
     playstate_t g_ps = { -1, 0 }; int last_playing=-1;   /* play/pause inference (playstate.c, host-tested) */
     char np_last_path[256] = "";   /* last track whose art/backdrop was pushed - so a mere position tick doesn't re-invalidate the 360px backdrop */
     char np_last_title[sizeof st.title] = "", np_last_artist[sizeof st.artist] = "";
@@ -5440,7 +5441,7 @@ int main(int argc, char **argv){
                 edge_back = 0; nav_press_ok = 0;
                 rim_state = RIM_IDLE; rim_scroller = NULL; rim_cover = 0;
                 albumwall_drag_cancel();
-                cover_tap = fsart_touch = sleep_touch = woke = 0;
+                cover_tap = fsart_touch = sleep_touch = modal_touch = woke = 0;
                 prev_ts = LV_INDEV_STATE_RELEASED;
                 if(!shutdown_input && ts == LV_INDEV_STATE_RELEASED) shutdown_touch = 0;
             } else if(kbinput_active()){
@@ -5465,10 +5466,11 @@ int main(int argc, char **argv){
                                      (sy <= 55 || (s_press_scr == SCR_MODELOCK && sy <= 100)));
                     s_qs_close_cand = (s_press_scr == SCR_QUICK);
                     cover_tap = 0;
+                    modal_touch = screen_modal_open();    /* latch: modal dialog on top layer owns this whole gesture */
                     fsart_touch = ui_np_fsart_active();   /* latch: overlay owns this whole gesture */
                     sleep_touch = ui_np_overlay_active(); /* latch: the sleep popover owns this whole gesture */
-                    if(fsart_touch || sleep_touch){
-                        /* a modal overlay is up -> LVGL handles it; arm no ring seek / rim scroll here */
+                    if(modal_touch || fsart_touch || sleep_touch){
+                        /* a modal overlay / dialog is up -> LVGL handles it; arm no ring seek / rim scroll here */
                     } else if(screen_current()==SCR_NOWPLAYING){
                         /* A press within the album-cover square (centre 180,116; ~148px) is a
                          * candidate to open full-screen art - DON'T arm a seek there, so the tap
@@ -5490,7 +5492,7 @@ int main(int argc, char **argv){
                            sx >= BACK_START_MAX_X && !albumwall_is_grid_open())
                             albumwall_drag_begin(sx);   /* CENTRE press -> linear drag. Rim-band press is rim-only, and */
                     }                                   /* the left edge is reserved for the back-swipe (not armed as a drag) */
-                    nav_press_ok = nav_swipe_ok(s_press_scr, fsart_touch || sleep_touch, bl_state != 2);
+                    nav_press_ok = nav_swipe_ok(s_press_scr, modal_touch || fsart_touch || sleep_touch, bl_state != 2);
                     edge_back = nav_press_ok && sx < BACK_START_MAX_X && !screen_on_drag_control(sx, sy);   /* a slow slide from the left edge is still a Back; a slider keeps its drag */
                     fprintf(stderr,"TAP x=%d y=%d\n",sx,sy); fflush(stderr);
                     if(g_dbg && g_dbgdot){
@@ -5579,14 +5581,14 @@ int main(int argc, char **argv){
                 } else if(s_aw_bar_drag){
                     float norm = ((float)p.x - 110.0f) / 140.0f;
                     albumwall_scrub_to(norm);
-                } else if(cur_scr==SCR_NOWPLAYING && !ui_np_fsart_active() && !sleep_touch) ui_np_seek_move(p.x, p.y);
-                else if(rim_move(p.x, p.y)){ rim_own = 1; /* rim drag owns the gesture (list or cover flow) */ }
-                else if(cur_scr==SCR_ALBUMWALL && rim_state==RIM_IDLE) albumwall_drag(p.x);  /* linear drag only when no rim gesture is armed */
+                } else if(cur_scr==SCR_NOWPLAYING && !modal_touch && !ui_np_fsart_active() && !sleep_touch) ui_np_seek_move(p.x, p.y);
+                else if(!modal_touch && rim_move(p.x, p.y)){ rim_own = 1; /* rim drag owns the gesture (list or cover flow) */ }
+                else if(!modal_touch && cur_scr==SCR_ALBUMWALL && rim_state==RIM_IDLE) albumwall_drag(p.x);  /* linear drag only when no rim gesture is armed */
 
                 /* a gesture that turns into a rim scroll, a dialog or another screen is neither a Home swipe nor a slow Back;
                  * one that turns into a list scroll is no slow Back */
                 if(qs_drag || s_fast_scroll_active || s_aw_bar_drag || rim_own || screen_current() != s_press_scr ||
-                   !nav_swipe_ok(screen_current(), fsart_touch || sleep_touch, bl_state != 2))
+                   !nav_swipe_ok(screen_current(), modal_touch || fsart_touch || sleep_touch, bl_state != 2))
                     nav_press_ok = 0;
                 if(!nav_press_ok || (lv_indev_get_scroll_obj(g_touch) && lv_indev_get_scroll_dir(g_touch) == LV_DIR_VER))
                     edge_back = 0;
@@ -5644,7 +5646,7 @@ int main(int argc, char **argv){
                      * it must still fall through to nav (back/hub). Order-independent: only LVGL
                      * mutates fsart state, so there's no open/close race. */
                     int cover_tap_gesture = cover_tap && adx < 20 && ady < 20;
-                    int lvgl_owned = fsart_touch || cover_tap_gesture || sleep_touch;
+                    int lvgl_owned = modal_touch || fsart_touch || cover_tap_gesture || sleep_touch;
                     /* a committed seek on Now Playing consumes the gesture. Replay the (fused) final
                      * position through the move handler first so the ring commits the release point, not
                      * the last PRESSED sample. */

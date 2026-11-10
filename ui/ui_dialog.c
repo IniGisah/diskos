@@ -94,6 +94,7 @@ ui_dialog_t ui_dialog_create(lv_obj_t *parent, const ui_dialog_cfg_t *cfg)
         host = d.scrim;
     }
     d.panel = part(host, UI_DLG_PANEL);
+    lv_obj_add_flag(d.panel, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_size(d.panel, d.width, LV_SIZE_CONTENT);
     lv_obj_set_style_radius(d.panel, 18, 0);
     lv_obj_set_style_bg_color(d.panel, TC(SURFACE), 0);
@@ -155,7 +156,7 @@ lv_obj_t *ui_dialog_button(const ui_dialog_t *d, const char *text, theme_color_r
     lv_obj_set_style_radius(b, 12, 0);
     lv_obj_set_style_bg_color(b, TC(SURFACE_RAISED), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-    if(cb) ui_on(b, cb, LV_EVENT_CLICKED, NULL, action, UI_CORE);
+    if(cb) ui_on(b, cb, LV_EVENT_CLICKED, d->scrim ? d->scrim : d->panel, action, UI_CORE);
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, text);
     lv_obj_set_style_text_font(l, TF(UI_16), 0);

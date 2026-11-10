@@ -373,6 +373,7 @@ static ui_dialog_t dlg_open(const char *title){
                             .fit_width = 1 };
     ui_dialog_t d = ui_dialog_create(lv_layer_top(), &cfg);
     g_m = d.scrim;
+    ui_on(d.scrim, cb_close, LV_EVENT_CLICKED, NULL, "system.scrim_close", UI_CORE);
     lv_obj_t *t = ui_dialog_label(&d, title);
     lv_obj_set_style_text_font(t, TF(UI_16), 0);
     lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
