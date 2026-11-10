@@ -10,6 +10,7 @@
 #include "ipc.h"
 #include "playback.h"   /* playback_display_state: the Cast view */
 #include "cast_ui.h"
+#include "modelock.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -368,6 +369,21 @@ static void hub_upnext_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLIC
 
 static void hub_local_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) ui_receiver_return(); }   /* asks "Confirm exit?" while receiving, then goes to Now Playing */
 static void hub_source_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) modes_open(); }
+static void hub_bt_disconnect_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    bt_rx_disconnect();
+    screen_show(SCR_NOWPLAYING);
+}
+static void hub_bt_devices_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    screen_show(SCR_NOWPLAYING);
+    bt_show_paired_devices_dialog();
+}
+static void hub_bt_force_pairing_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    bt_rx_force_pairing();
+    screen_show(SCR_NOWPLAYING);
+}
 static lv_obj_t *g_hub_list, *g_hub_header, *g_hub_dots[2];
 static lv_color_t g_hub_color;
 /* 17b: the first row of Options is Beam (decision 65, frames 2 and 3 of the r3 mockups): the value is where the sound goes, "This Disc" or the receiver being beamed to
@@ -415,11 +431,26 @@ static void nphub_populate(void){
     lv_obj_set_size(g_hub_list, rx ? 240 : 280, rx ? 144 : 250);
     lv_obj_set_style_text_color(g_hub_header, rx ? theme_preset_color(0, THEME_CLR_ACCENT_PRIMARY) : g_hub_color, 0);
     if(rx){
-        lv_obj_t *row = menu_row(g_hub_list, "Return to Local", hub_local_cb, NULL);
-        lv_obj_set_width(row, 240);
-        row = menu_row(g_hub_list, "Source", hub_source_cb, NULL);
-        lv_obj_set_width(row, 240);
-        return;
+        if(ui_get_source_mode() == 2){
+            lv_obj_set_pos(g_hub_list, 46, 76);
+            lv_obj_set_size(g_hub_list, 280, 250);
+            bt_rx_state_t bts;
+            bt_rx_get_state(&bts);
+            if(bts.connected){
+                menu_row(g_hub_list, "Disconnect", hub_bt_disconnect_cb, NULL);
+            }
+            menu_row(g_hub_list, "Paired Devices", hub_bt_devices_cb, NULL);
+            menu_row(g_hub_list, "Pair New Device", hub_bt_force_pairing_cb, NULL);
+            menu_row(g_hub_list, "Return to Local", hub_local_cb, NULL);
+            menu_row(g_hub_list, "Source", hub_source_cb, NULL);
+            return;
+        } else {
+            lv_obj_t *row = menu_row(g_hub_list, "Return to Local", hub_local_cb, NULL);
+            lv_obj_set_width(row, 240);
+            row = menu_row(g_hub_list, "Source", hub_source_cb, NULL);
+            lv_obj_set_width(row, 240);
+            return;
+        }
     }
     track_state_t raw, st; ipc_get_state(&raw); playback_display_state(&st, &raw);   /* 15b: the Cast track never gets the book menu */
     int book = st.path[0] && ui_view_is_book(st.path);

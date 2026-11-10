@@ -66,8 +66,10 @@ static lv_obj_t *spindle;       /* vinyl-style centre label (hidden in Cover mod
 /* Bluetooth Receiving View on SCR_NOWPLAYING */
 static lv_obj_t *g_bt_view, *g_bt_arc, *g_bt_disc, *g_bt_tag, *g_bt_tag_lbl;
 static lv_obj_t *g_bt_title, *g_bt_sub, *g_bt_codec_badge, *g_bt_codec_lbl;
+static lv_obj_t *g_bt_ctrl_row, *g_bt_btn_devices, *g_bt_lbl_devices;
 static lv_obj_t *g_bt_btn_prev, *g_bt_btn_pp, *g_bt_btn_next, *g_bt_lbl_pp;
 static lv_obj_t *g_bt_elapsed, *g_bt_sep, *g_bt_remain;
+static lv_obj_t *s_bt_dev_dlg = NULL, *s_bt_tag_dlg = NULL;
 static int g_bt_disc_spinning = 0;
 static lv_color32_t s_bt_disc_pixels[140 * 140];
 static lv_image_dsc_t s_bt_disc_dsc;
@@ -2103,7 +2105,11 @@ static int book_chapter_window(const track_state_t *st, long *lo, long *hi)
 }
 
 static lv_obj_t *g_sleep_dlg, *g_sleep_eoc;
-void ui_np_close_overlays(void){ if(g_sleep_dlg){ lv_obj_del(g_sleep_dlg); g_sleep_dlg = NULL; g_sleep_eoc = NULL; } }
+void ui_np_close_overlays(void){
+    if(g_sleep_dlg){ lv_obj_del(g_sleep_dlg); g_sleep_dlg = NULL; g_sleep_eoc = NULL; }
+    if(s_bt_dev_dlg){ lv_obj_delete_async(s_bt_dev_dlg); s_bt_dev_dlg = NULL; }
+    if(s_bt_tag_dlg){ lv_obj_delete_async(s_bt_tag_dlg); s_bt_tag_dlg = NULL; }
+}
 int ui_np_cover_hit(int x, int y){   /* main.c: a press on the (visible) cover is a cover tap, not a seek */
     if(ui_receiver_active() || !cover || lv_obj_has_flag(cover, LV_OBJ_FLAG_HIDDEN)) return 0;
     lv_area_t a; lv_obj_get_coords(cover, &a);
@@ -2854,29 +2860,284 @@ static void bt_disc_spin_set(int want){
     }
 }
 
+static void bt_tag_dlg_cleanup(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_DELETE){
+        if(s_bt_tag_dlg == lv_event_get_target(e)){
+            s_bt_tag_dlg = NULL;
+        }
+    }
+}
+
 static void bt_exit_cancel_cb(lv_event_t *e){
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     lv_obj_t *dlg = (lv_obj_t *)lv_event_get_user_data(e);
-    if(dlg) lv_obj_delete_async(dlg);
+    if(!dlg) dlg = s_bt_tag_dlg;
+    if(dlg){
+        lv_obj_delete_async(dlg);
+        s_bt_tag_dlg = NULL;
+    }
 }
 
 static void bt_exit_confirm_cb(lv_event_t *e){
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     lv_obj_t *dlg = (lv_obj_t *)lv_event_get_user_data(e);
-    if(dlg) lv_obj_delete_async(dlg);
+    if(!dlg) dlg = s_bt_tag_dlg;
+    if(dlg){
+        lv_obj_delete_async(dlg);
+        s_bt_tag_dlg = NULL;
+    }
     ui_set_source_mode(0);
+}
+
+static lv_obj_t *bt_dlg_action_btn(lv_obj_t *parent, const char *txt, theme_color_role_t col, lv_event_cb_t cb, void *ud, const char *id){
+    lv_obj_t *b = lv_button_create(parent);
+    lv_obj_remove_style_all(b);
+    lv_obj_set_size(b, LV_PCT(100), 40);
+    lv_obj_set_style_radius(b, 10, 0);
+    lv_obj_set_style_bg_color(b, TC(SURFACE_RAISED), 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(b, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
+    lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+    ui_on(b, cb, LV_EVENT_CLICKED, ud, id, UI_CORE);
+    lv_obj_t *lbl = lv_label_create(b);
+    lv_label_set_text(lbl, txt);
+    lv_obj_center(lbl);
+    lv_obj_set_style_text_color(lbl, theme_color(col), 0);
+    lv_obj_set_style_text_font(lbl, TF(UI_14), 0);
+    return b;
+}
+
+typedef struct {
+    char mac[20];
+    char name[64];
+    lv_obj_t *scrim;
+} bt_dev_row_ud_t;
+static bt_dev_row_ud_t s_dev_rows[16];
+
+static void bt_dev_dlg_cleanup(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_DELETE){
+        if(s_bt_dev_dlg == lv_event_get_target(e)){
+            s_bt_dev_dlg = NULL;
+        }
+    }
+}
+
+static void bt_dev_connect_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    bt_dev_row_ud_t *ud = (bt_dev_row_ud_t *)lv_event_get_user_data(e);
+    lv_obj_t *scrim = (ud && ud->scrim) ? ud->scrim : s_bt_dev_dlg;
+    if(scrim){
+        lv_obj_delete_async(scrim);
+        s_bt_dev_dlg = NULL;
+    }
+    if(ud) bt_rx_connect_to(ud->mac, ud->name);
+}
+
+static void bt_dev_forget_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    bt_dev_row_ud_t *ud = (bt_dev_row_ud_t *)lv_event_get_user_data(e);
+    lv_obj_t *scrim = (ud && ud->scrim) ? ud->scrim : s_bt_dev_dlg;
+    if(scrim){
+        lv_obj_delete_async(scrim);
+        s_bt_dev_dlg = NULL;
+    }
+    if(ud) bt_rx_forget(ud->mac);
+}
+
+static void bt_dev_pair_new_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    lv_obj_t *scrim = (lv_obj_t *)lv_event_get_user_data(e);
+    if(!scrim) scrim = s_bt_dev_dlg;
+    if(scrim){
+        lv_obj_delete_async(scrim);
+        s_bt_dev_dlg = NULL;
+    }
+    bt_rx_force_pairing();
+}
+
+static void bt_dev_close_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    lv_obj_t *scrim = (lv_obj_t *)lv_event_get_user_data(e);
+    if(!scrim) scrim = s_bt_dev_dlg;
+    if(scrim){
+        lv_obj_delete_async(scrim);
+        s_bt_dev_dlg = NULL;
+    }
+}
+
+void bt_show_paired_devices_dialog(void){
+    if(s_bt_dev_dlg){
+        lv_obj_delete_async(s_bt_dev_dlg);
+        s_bt_dev_dlg = NULL;
+    }
+
+    bt_rx_device_t devs[16];
+    int n_devs = bt_rx_get_paired_devices(devs, 16);
+
+    ui_dialog_cfg_t cfg = { .width = 288, .margin = 4, .scrim = 1, .actions = 1, .fit_width = 1 };
+    ui_dialog_t d = ui_dialog_create(lv_layer_top(), &cfg);
+    s_bt_dev_dlg = d.scrim;
+    ui_on(d.scrim, bt_dev_close_cb, LV_EVENT_CLICKED, d.scrim, "bt.dev_scrim", UI_CORE);
+    lv_obj_add_event_cb(d.scrim, bt_dev_dlg_cleanup, LV_EVENT_DELETE, NULL);
+
+    lv_obj_t *t = ui_dialog_label(&d, tr("Paired Devices"));
+    lv_obj_set_style_text_font(t, TF(UI_18), 0);
+    lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
+
+    lv_obj_set_style_pad_row(d.content, 6, 0);
+
+    if(n_devs <= 0){
+        lv_obj_t *empty = ui_dialog_label(&d, tr("No paired devices found"));
+        lv_obj_set_style_text_font(empty, TF(UI_14), 0);
+        lv_obj_set_style_text_color(empty, TC(TEXT_MUTED), 0);
+    } else {
+        for(int i = 0; i < n_devs; i++){
+            snprintf(s_dev_rows[i].mac, sizeof s_dev_rows[i].mac, "%.19s", devs[i].mac);
+            snprintf(s_dev_rows[i].name, sizeof s_dev_rows[i].name, "%.63s", devs[i].name);
+            s_dev_rows[i].scrim = d.scrim;
+
+            lv_obj_t *row = lv_obj_create(d.content);
+            lv_obj_remove_style_all(row);
+            lv_obj_set_size(row, LV_PCT(100), 44);
+            lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_hor(row, 6, 0);
+            lv_obj_set_style_radius(row, 10, 0);
+            lv_obj_set_style_bg_color(row, TC(SURFACE_RAISED), 0);
+            lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+            lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+            /* Left connect button */
+            lv_obj_t *b_conn = lv_button_create(row);
+            lv_obj_remove_style_all(b_conn);
+            lv_obj_set_size(b_conn, 204, 40);
+            lv_obj_set_style_bg_opa(b_conn, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_bg_color(b_conn, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
+            lv_obj_set_style_radius(b_conn, 8, 0);
+            ui_on(b_conn, bt_dev_connect_cb, LV_EVENT_CLICKED, &s_dev_rows[i], "bt.dev_conn", UI_CORE);
+
+            lv_obj_t *lbl_name = lv_label_create(b_conn);
+            char disp_name[80];
+            if(devs[i].connected){
+                snprintf(disp_name, sizeof disp_name, "%s  %.60s", LV_SYMBOL_OK, devs[i].name[0] ? devs[i].name : devs[i].mac);
+                lv_obj_set_style_text_color(lbl_name, ui_current_accent(), 0);
+            } else {
+                snprintf(disp_name, sizeof disp_name, "%.70s", devs[i].name[0] ? devs[i].name : devs[i].mac);
+                lv_obj_set_style_text_color(lbl_name, TC(TEXT_PRIMARY), 0);
+            }
+            lv_label_set_text(lbl_name, disp_name);
+            lv_label_set_long_mode(lbl_name, LV_LABEL_LONG_DOT);
+            lv_obj_set_width(lbl_name, 196);
+            lv_obj_align(lbl_name, LV_ALIGN_LEFT_MID, 6, 0);
+            lv_obj_set_style_text_font(lbl_name, TF(UI_14), 0);
+
+            /* Right trash/forget button */
+            lv_obj_t *b_del = lv_button_create(row);
+            lv_obj_remove_style_all(b_del);
+            lv_obj_set_size(b_del, 36, 36);
+            lv_obj_set_style_radius(b_del, 18, 0);
+            lv_obj_set_style_bg_opa(b_del, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_bg_color(b_del, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
+            ui_on(b_del, bt_dev_forget_cb, LV_EVENT_CLICKED, &s_dev_rows[i], "bt.dev_del", UI_CORE);
+
+            lv_obj_t *lbl_del = lv_label_create(b_del);
+            lv_label_set_text(lbl_del, LV_SYMBOL_TRASH);
+            lv_obj_center(lbl_del);
+            lv_obj_set_style_text_color(lbl_del, TC(TEXT_MUTED), 0);
+            lv_obj_set_style_text_font(lbl_del, TF(UI_14), 0);
+        }
+    }
+
+    ui_dialog_button(&d, tr("Pair New"), THEME_CLR_ACCENT_PRIMARY, bt_dev_pair_new_cb, "bt.pair_new");
+    ui_dialog_button(&d, tr("Close"), THEME_CLR_TEXT_SECONDARY, bt_dev_close_cb, "bt.close");
+    ui_dialog_finalize(&d);
+}
+
+static void bt_devices_btn_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    bt_show_paired_devices_dialog();
+}
+
+static void bt_tag_disconnect_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    lv_obj_t *dlg = (lv_obj_t *)lv_event_get_user_data(e);
+    if(!dlg) dlg = s_bt_tag_dlg;
+    if(dlg){
+        lv_obj_delete_async(dlg);
+        s_bt_tag_dlg = NULL;
+    }
+    bt_rx_disconnect();
+}
+
+static void bt_tag_switch_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    lv_obj_t *dlg = (lv_obj_t *)lv_event_get_user_data(e);
+    if(!dlg) dlg = s_bt_tag_dlg;
+    if(dlg){
+        lv_obj_delete_async(dlg);
+        s_bt_tag_dlg = NULL;
+    }
+    bt_show_paired_devices_dialog();
+}
+
+static void bt_tag_pairing_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    lv_obj_t *dlg = (lv_obj_t *)lv_event_get_user_data(e);
+    if(!dlg) dlg = s_bt_tag_dlg;
+    if(dlg){
+        lv_obj_delete_async(dlg);
+        s_bt_tag_dlg = NULL;
+    }
+    bt_rx_force_pairing();
 }
 
 static void bt_tag_click_cb(lv_event_t *e){
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    ui_dialog_cfg_t cfg = { .width = 280, .margin = 8, .scrim = 1, .actions = 1, .fit_width = 1 };
+    if(s_bt_tag_dlg){
+        lv_obj_delete_async(s_bt_tag_dlg);
+        s_bt_tag_dlg = NULL;
+    }
+    bt_rx_state_t st;
+    bt_rx_get_state(&st);
+
+    ui_dialog_cfg_t cfg = { .width = 280, .margin = 6, .scrim = 1, .actions = 1, .fit_width = 1 };
     ui_dialog_t d = ui_dialog_create(lv_layer_top(), &cfg);
-    ui_on(d.scrim, bt_exit_cancel_cb, LV_EVENT_CLICKED, d.scrim, "bt.exit_cancel", UI_CORE);
-    lv_obj_t *t = ui_dialog_label(&d, tr("Stop receiving and return to the Disc's music?"));
-    lv_obj_set_style_text_font(t, TF(UI_18), 0);
-    lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
-    ui_dialog_button(&d, tr("Cancel"), THEME_CLR_TEXT_SECONDARY, bt_exit_cancel_cb, "bt.exit_cancel");
-    ui_dialog_button(&d, tr("Return"), THEME_CLR_ACCENT_EMPHASIS, bt_exit_confirm_cb, "bt.exit_ok");
+    s_bt_tag_dlg = d.scrim;
+    ui_on(d.scrim, bt_exit_cancel_cb, LV_EVENT_CLICKED, d.scrim, "bt.cancel", UI_CORE);
+    lv_obj_add_event_cb(d.scrim, bt_tag_dlg_cleanup, LV_EVENT_DELETE, NULL);
+
+    lv_obj_set_style_pad_row(d.content, 6, 0);
+
+    if(st.connected){
+        lv_obj_t *t = ui_dialog_label(&d, st.dev_name[0] ? st.dev_name : tr("Connected Device"));
+        lv_obj_set_style_text_font(t, TF(UI_18), 0);
+        lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
+
+        if(st.codec[0]){
+            lv_obj_t *sub = ui_dialog_label(&d, st.codec);
+            lv_obj_set_style_text_font(sub, TF(UI_12), 0);
+            lv_obj_set_style_text_color(sub, ui_current_accent(), 0);
+        }
+
+        bt_dlg_action_btn(d.content, tr("Disconnect"), THEME_CLR_STATUS_DANGER, bt_tag_disconnect_cb, d.scrim, "bt.act_disc");
+        bt_dlg_action_btn(d.content, tr("Switch Device"), THEME_CLR_ACCENT_PRIMARY, bt_tag_switch_cb, d.scrim, "bt.act_switch");
+        bt_dlg_action_btn(d.content, tr("Pair New Device"), THEME_CLR_ACCENT_PRIMARY, bt_tag_pairing_cb, d.scrim, "bt.act_pair");
+        bt_dlg_action_btn(d.content, tr("Return to Local"), THEME_CLR_TEXT_PRIMARY, bt_exit_confirm_cb, d.scrim, "bt.act_exit");
+    } else {
+        lv_obj_t *t = ui_dialog_label(&d, tr("Bluetooth Receiver"));
+        lv_obj_set_style_text_font(t, TF(UI_18), 0);
+        lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
+
+        lv_obj_t *sub = ui_dialog_label(&d, bt_rx_is_pairing() ? tr("Pairing mode active") : tr("Ready to Connect"));
+        lv_obj_set_style_text_font(sub, TF(UI_12), 0);
+        lv_obj_set_style_text_color(sub, ui_current_accent(), 0);
+
+        bt_dlg_action_btn(d.content, tr("Paired Devices"), THEME_CLR_ACCENT_PRIMARY, bt_tag_switch_cb, d.scrim, "bt.act_devs");
+        bt_dlg_action_btn(d.content, tr("Refresh Discovery"), THEME_CLR_ACCENT_PRIMARY, bt_tag_pairing_cb, d.scrim, "bt.act_pair");
+        bt_dlg_action_btn(d.content, tr("Return to Local"), THEME_CLR_TEXT_PRIMARY, bt_exit_confirm_cb, d.scrim, "bt.act_exit");
+    }
+
+    ui_dialog_button(&d, tr("Cancel"), THEME_CLR_TEXT_SECONDARY, bt_exit_cancel_cb, "bt.cancel");
     ui_dialog_finalize(&d);
 }
 
@@ -2974,6 +3235,8 @@ static void bt_view_create(lv_obj_t *root){
     lv_label_set_text(g_bt_sub, init_sub);
     lv_obj_align(g_bt_sub, LV_ALIGN_TOP_MID, 0, 224);
     lv_obj_set_style_text_align(g_bt_sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_add_flag(g_bt_sub, LV_OBJ_FLAG_CLICKABLE);
+    ui_on(g_bt_sub, bt_tag_click_cb, LV_EVENT_CLICKED, NULL, "bt.sub", UI_CORE);
 
     /* 6. Codec Badge */
     g_bt_codec_badge = lv_obj_create(g_bt_view);
@@ -2997,7 +3260,7 @@ static void bt_view_create(lv_obj_t *root){
     lv_obj_set_style_text_color(g_bt_codec_lbl, ui_current_accent(), 0);
 
     /* 7. Transport Controls */
-    lv_obj_t *ctrl_row = lv_obj_create(g_bt_view);
+    lv_obj_t *ctrl_row = g_bt_ctrl_row = lv_obj_create(g_bt_view);
     lv_obj_remove_style_all(ctrl_row);
     lv_obj_set_size(ctrl_row, 240, 56);
     lv_obj_align(ctrl_row, LV_ALIGN_TOP_MID, 0, 272);
@@ -3060,6 +3323,25 @@ static void bt_view_create(lv_obj_t *root){
     lv_obj_set_style_text_color(lbl_next, TC(TEXT_PRIMARY), 0);
     lv_obj_set_style_text_font(lbl_next, TF(UI_20), 0);
 
+    /* Paired Devices button for idle (disconnected) state */
+    g_bt_btn_devices = lv_button_create(g_bt_view);
+    lv_obj_remove_style_all(g_bt_btn_devices);
+    lv_obj_set_size(g_bt_btn_devices, 160, 44);
+    lv_obj_align(g_bt_btn_devices, LV_ALIGN_TOP_MID, 0, 276);
+    lv_obj_set_style_radius(g_bt_btn_devices, 22, 0);
+    lv_obj_set_style_bg_color(g_bt_btn_devices, TC(SURFACE_RAISED), 0);
+    lv_obj_set_style_bg_opa(g_bt_btn_devices, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_bt_btn_devices, 1, 0);
+    lv_obj_set_style_border_color(g_bt_btn_devices, ui_current_accent(), 0);
+    lv_obj_set_style_bg_color(g_bt_btn_devices, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
+    ui_on(g_bt_btn_devices, bt_devices_btn_cb, LV_EVENT_CLICKED, NULL, "bt.devices_btn", UI_CORE);
+
+    g_bt_lbl_devices = lv_label_create(g_bt_btn_devices);
+    lv_label_set_text_fmt(g_bt_lbl_devices, "%s  %s", LV_SYMBOL_BLUETOOTH, tr("Paired Devices"));
+    lv_obj_center(g_bt_lbl_devices);
+    lv_obj_set_style_text_color(g_bt_lbl_devices, ui_current_accent(), 0);
+    lv_obj_set_style_text_font(g_bt_lbl_devices, TF(UI_14), 0);
+
     /* 8. Times in bottom arc gap */
     g_bt_elapsed = lv_label_create(g_bt_view);
     lv_obj_set_width(g_bt_elapsed, 76);
@@ -3080,6 +3362,8 @@ static void bt_view_create(lv_obj_t *root){
     lv_obj_set_style_text_align(g_bt_remain, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_align(g_bt_remain, LV_ALIGN_TOP_MID, 44, 322);
 
+    receiver_show(g_bt_ctrl_row, 0);
+    receiver_show(g_bt_btn_devices, 1);
     receiver_show(g_bt_view, 0);
 }
 
@@ -3119,6 +3403,19 @@ static void bt_view_tick(void){
     if(g_bt_codec_lbl) lv_obj_set_style_text_color(g_bt_codec_lbl, acc, 0);
     if(g_bt_tag_lbl) lv_obj_set_style_text_color(g_bt_tag_lbl, acc, 0);
     if(g_bt_arc) lv_obj_set_style_arc_color(g_bt_arc, acc, LV_PART_INDICATOR);
+    if(g_bt_btn_devices) lv_obj_set_style_border_color(g_bt_btn_devices, acc, 0);
+    if(g_bt_lbl_devices) lv_obj_set_style_text_color(g_bt_lbl_devices, acc, 0);
+
+    /* Update controls & idle button visibility */
+    if(g_bt_ctrl_row && g_bt_btn_devices){
+        if(st.connected){
+            receiver_show(g_bt_ctrl_row, 1);
+            receiver_show(g_bt_btn_devices, 0);
+        } else {
+            receiver_show(g_bt_ctrl_row, 0);
+            receiver_show(g_bt_btn_devices, 1);
+        }
+    }
 
     /* Update Title */
     if(g_bt_title){
@@ -3128,6 +3425,8 @@ static void bt_view_tick(void){
             set_label_text_changed(g_bt_title, tr("Bluetooth Audio Playing"));
         } else if(st.connected){
             set_label_text_changed(g_bt_title, st.dev_name[0] ? st.dev_name : "Connected Device");
+        } else if(bt_rx_is_pairing()){
+            set_label_text_changed(g_bt_title, tr("Pairing Mode"));
         } else {
             set_label_text_changed(g_bt_title, tr("Ready to Connect"));
         }
@@ -3136,7 +3435,7 @@ static void bt_view_tick(void){
     /* Update Subtitle */
     if(g_bt_sub){
         if(st.connected && (st.artist[0] || st.album[0])){
-            char sub[256];
+            char sub[320];
             if(st.artist[0] && st.album[0]) snprintf(sub, sizeof sub, "%s • %s", st.artist, st.album);
             else snprintf(sub, sizeof sub, "%s", st.artist[0] ? st.artist : st.album);
             set_label_text_changed(g_bt_sub, sub);
@@ -3144,6 +3443,11 @@ static void bt_view_tick(void){
             set_label_text_changed(g_bt_sub, st.dev_name[0] ? st.dev_name : "Bluetooth Audio");
         } else if(st.connected){
             set_label_text_changed(g_bt_sub, tr("Play audio from your phone"));
+        } else if(bt_rx_is_pairing()){
+            char sub[128];
+            const char *bname = st.local_name[0] ? st.local_name : "SNOWSKY DISC";
+            snprintf(sub, sizeof sub, "%s: '%s'", tr("Pairing Mode"), bname);
+            set_label_text_changed(g_bt_sub, sub);
         } else {
             char sub[128];
             const char *bname = st.local_name[0] ? st.local_name : "SNOWSKY DISC";

@@ -312,6 +312,12 @@ Audio controls equalization, DAC options and output limits. External USB Audio r
 
 Switch a radio on its row, tap the row to open it, rescan, and tap a listed device or network. Bluetooth Codec is available on V2.57; older bases say "Not on this firmware". Further taps are disabled while a radio starts. Selecting Bluetooth Receiving, USB DAC, or USB Storage enters a dedicated Mode Lockdown screen with interactive controls and safe swipe-back exit.
 
+In **Bluetooth Receiving Mode**, the screen adapts dynamically:
+- **Idle View**: Displays discoverability details and a prominent `[ 📱 Paired Devices ]` button. Tapping opens a sheet of saved audio sources (phones/tablets/PCs), with one-tap connection switching and trash icons to forget old pairings (audio output devices like headphones/speakers are automatically filtered out).
+- **Connected View**: Shows the rotating vinyl hero disc, live track title, artist/album metadata, active transport codec badge (SBC/AAC/aptX/aptX-HD/LDAC), progress arc, and transport playback controls (previous, play/pause, next).
+- **Top Badge Action Sheet**: Tapping the top `BLUETOOTH` badge or subtitle opens a context-aware menu: while connected, access **Disconnect**, **Switch Device** (paired devices list), **Pair New Device** (force discoverable/pairable mode), and **Return to Local**; while idle, access **Paired Devices**, **Refresh Discovery**, and **Return to Local**.
+- **Options Hub Menu (`SCR_NPHUB`)**: Pressing the hardware options key or swiping right in Bluetooth receiver mode presents dedicated rows for **Disconnect**, **Paired Devices**, **Pair New Device**, **Return to Local**, and **Source**.
+
 | Row | Action and default |
 |---|---|
 | Wi-Fi | Switch the radio on the row; tapping the row while it is off turns it on, and tapping it while it is on opens scanning, connection, and saved-network details. |

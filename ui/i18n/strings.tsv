@@ -506,3 +506,19 @@ Rename	重命名	重新命名	名前を変更	이름 변경	Renombrar	Renomear	R
 # Receiver return confirmation. Empty cells use the English fallback.
 Stop receiving and return to the Disc's music?					Dejar de recibir y volver a la musica del Disc?	Parar a rececao e voltar a musica do Disc?	Interrompere la ricezione e tornare alla musica del Disc?	Empfang beenden und zur Musik auf dem Disc wechseln?	Arreter la reception et revenir a la musique du Disc ?	
 Return					Volver	Voltar	Torna	Zuruck	Retour	
+
+# Bluetooth receiver controls & device management
+Paired Devices	已配对设备	已配對裝置	ペアリング済みデバイス	페어링된 기기	Dispositivos emparejados	Dispositivos emparelhados	Dispositivi associati	Gekoppelte Geräte	Appareils associés	Сопряженные устройства
+Switch Device	切换设备	切換裝置	デバイスを切り替え	기기 전환	Cambiar dispositivo	Mudar dispositivo	Cambia dispositivo	Gerät wechseln	Changer d'appareil	Сменить устройство
+Disconnect	断开连接	中斷連線	切断	연결 끊기	Desconectar	Desconectar	Disconnetti	Trennen	Déconnecter	Отключить
+Disconnected	已断开连接	已中斷連線	切断しました	연결 끊김	Desconectado	Desconectado	Disconnesso	Getrennt	Déconnecté	Отключено
+Pair New Device	配对新设备	配對新裝置	新しいデバイスをペアリング	새 기기 페어링	Emparejar nuevo dispositivo	Emparelhar novo dispositivo	Associa nuovo dispositivo	Neues Gerät koppeln	Associer un nouvel appareil	Сопряжение нового устройства
+Pairing Mode	配对模式	配對模式	ペアリングモード	페어링 모드	Modo de emparejamiento	Modo de emparelhamento	Modalità di associazione	Kopplungsmodus	Mode association	Режим сопряжения
+Pairing mode active	配对模式已开启	配對模式已開啟	ペアリングモード有効	페어링 모드 활성화됨	Modo de emparejamiento activo	Modo de emparelhamento ativo	Modalità di associazione attiva	Kopplungsmodus aktiv	Mode association actif	Режим сопряжения активен
+Refresh Discovery	刷新发现	重新搜尋	再検索	검색 새로고침	Actualizar búsqueda	Atualizar descoberta	Aggiorna rilevamento	Erkennung aktualisieren	Actualiser la détection	Обновить обнаружение
+No paired devices found	未找到已配对设备	未找到已配對裝置	ペアリングされたデバイスがありません	페어링된 기기가 없습니다	No se encontraron dispositivos emparejados	Nenhum dispositivo emparelhado encontrado	Nessun dispositivo associato trovato	Keine gekoppelten Geräte gefunden	Aucun appareil associé trouvé	Сопряженные устройства не найдены
+Device forgotten	已清除设备	已清除裝置	デバイスを解除しました	기기 삭제됨	Dispositivo olvidado	Dispositivo esquecido	Dispositivo dimenticato	Gerät vergessen	Appareil oublié	Устройство удалено
+Connecting to	正在连接	正在連線	接続中	연결 중	Conectando a	Conectando a	Connessione a	Verbinden mit	Connexion à	Подключение к
+No device connected	未连接设备	未連線裝置	接続されているデバイスがありません	연결된 기기 없음	Ningún dispositivo conectado	Nenhum dispositivo conectado	Nessun dispositivo connesso	Kein Gerät verbunden	Aucun appareil connecté	Нет подключенных устройств
+Pair New	配对新设备	配對新裝置	新規ペアリング	새 기기 페어링	Emparejar nuevo	Novo emparelhamento	Nuovo dispositivo	Neu koppeln	Nouvel appareil	Новое устройство
+Close	关闭	關閉	閉じる	닫기	Cerrar	Fechar	Chiudi	Schließen	Fermer	Закрыть
