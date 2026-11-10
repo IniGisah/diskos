@@ -97,6 +97,12 @@ diskOS starts BlueALSA via the `/opt/diskos/bin/bluealsa` interceptor wrapper (w
 - **Dynamic Linking**: `bluealsa-custom` links dynamically against stock `/usr/lib/libaptx.so`, `/usr/lib/libaptxHD.so`, and `/usr/lib/libldacBT_enc.so.2` on the Disc's read-only rootfs, utilizing the device's pre-licensed Qualcomm and Sony decoders.
 - **Low Latency Mode**: When `/usr/data/bt_rx_ll` is set to `1` (via **Settings > Bluetooth > Low Latency Mode**), the wrapper passes `--codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD --codec=-ldac` to lock receiving to SBC-only, eliminating buffer lag (~80-120ms total latency) for video and mobile gaming.
 - **Live Codec Observation**: `ui/bt_codec_observe.c` queries BlueALSA over D-Bus to display the active transport codec on Song Info and Mode Lockdown screens.
+- **Receiver Device Management & Connection Commands**:
+  - *List paired audio sources*: `bluetoothctl paired-devices`, cross-referenced with `bluetoothctl info <mac>` to verify `Audio Source` UUID (`0000110a`) and `Icon: phone|computer|tablet`, excluding pure audio sinks (headphones/speakers).
+  - *Force-Connect to target phone*: `( bluetoothctl disconnect <old_mac> 2>/dev/null; sleep 0.2; bluetoothctl connect <target_mac> 2>/dev/null ) &` (asynchronous, bounded).
+  - *Disconnect*: BlueZ D-Bus `org.bluez.Device1.Disconnect` + `bluetoothctl disconnect <mac>`, followed by re-enabling discoverability (`bluetoothctl discoverable on; hciconfig hci0 piscan`).
+  - *Forget paired device*: `bluetoothctl remove <mac>`.
+  - *Force Pairing Mode*: `bluetoothctl discoverable on; bluetoothctl pairable on; hciconfig hci0 piscan`.
 
 ## USB DAC OUTPUT (transmit digital audio to an external USB DAC) - [verified] WORKING (2026-09-29)
 Reverse-engineered from stock V2.40/V2.57 firmware (`mq_ui` and `mq_player` host mode handler). In stock firmware this is named "USB AUDIO" under Working Mode. In diskOS this is exposed as "USB Audio" (mode 4 under Working Mode).

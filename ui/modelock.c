@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include "modelock.h"
 #include "device_names.h"
 #include "screens.h"
@@ -8,6 +11,9 @@
 #include "config.h"
 #include "theme.h"
 #include "theme_kit.h"
+#include "i18n.h"
+#include "btalias.h"
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -19,6 +25,8 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <errno.h>
+#include <dirent.h>
+#include <ctype.h>
 
 /* State of mode lockdown */
 static int g_lock_mode = 0;
@@ -67,6 +75,7 @@ static bt_rx_state_t g_bt_state;
 static pthread_mutex_t g_bt_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t g_worker_th;
 static _Atomic int g_worker_run = 0;
+static _Atomic uint32_t s_bt_pairing_until = 0;
 static lv_timer_t *g_poll_timer = NULL;
 static void bt_disc_spin(int want){
     (void)want;
@@ -263,6 +272,7 @@ static void *bt_rx_worker(void *arg){
                             mac[i] = (dbus_mac[i] == '_') ? ':' : dbus_mac[i];
                         mac[17] = 0;
                         found = 1;
+                        atomic_store(&s_bt_pairing_until, 0);
                     }
                 }
             }
@@ -285,6 +295,7 @@ static void *bt_rx_worker(void *arg){
                                         dbus_mac[i] = (mac[i] == ':') ? '_' : mac[i];
                                     dbus_mac[17] = 0;
                                     found = 1;
+                        atomic_store(&s_bt_pairing_until, 0);
                                 }
                             }
                         }
@@ -583,6 +594,351 @@ void bt_rx_prev(void){
         snprintf(cmd, sizeof cmd, "dbus-send --system --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.MediaControl1.Previous >/dev/null 2>&1 &", dbus_mac);
         system(cmd);
     }
+}
+
+static int rx_mac_valid(const char *mac){
+    if(!mac || strlen(mac) != 17) return 0;
+    for(int i = 0; i < 17; i++){
+        char c = mac[i];
+        if((i % 3) == 2){ if(c != ':') return 0; }
+        else if(!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f'))) return 0;
+    }
+    return mac[17] == 0;
+}
+
+static char s_bt_adapter_path[128] = {0};
+
+/*
+ * Returns 1 if mac is an Audio Source (can transmit audio to diskOS in BT Receiver mode:
+ * phones, tablets, PCs, smart TVs).
+ * Returns 0 if mac is a pure Audio Sink (TWS earbuds, headphones, Bluetooth speakers),
+ * or non-audio peripheral (keyboards, mice).
+ * If device info cannot be found or read (e.g. host testing), returns 1 (fail-open).
+ */
+static int rx_is_audio_source(const char *mac){
+    if(!rx_mac_valid(mac)) return 0;
+
+    char up_mac[20];
+    for(int i = 0; mac[i] && i < 19; i++){
+        char c = mac[i];
+        if(c >= 'a' && c <= 'z') c -= ('a' - 'A');
+        up_mac[i] = c;
+        up_mac[i + 1] = 0;
+    }
+
+    char info_path[256] = {0};
+
+    /* Fast path: check cached adapter path */
+    if(s_bt_adapter_path[0]){
+        snprintf(info_path, sizeof info_path, "%s/%s/info", s_bt_adapter_path, up_mac);
+        if(access(info_path, R_OK) != 0){
+            info_path[0] = 0;
+        }
+    }
+
+    /* Discovery path: search adapter directories */
+    if(!info_path[0]){
+        static const char *bases[] = {
+            "/usr/data/storebluetooth/lib/bluetooth",
+            "/var/lib/bluetooth",
+            NULL
+        };
+        for(int b = 0; bases[b]; b++){
+            DIR *dir = opendir(bases[b]);
+            if(!dir) continue;
+            struct dirent *de;
+            while((de = readdir(dir)) != NULL){
+                if(de->d_name[0] == '.' || !strcmp(de->d_name, "cache")) continue;
+                char test_path[256];
+                snprintf(test_path, sizeof test_path, "%s/%s/%s/info", bases[b], de->d_name, up_mac);
+                if(access(test_path, R_OK) == 0){
+                    snprintf(s_bt_adapter_path, sizeof s_bt_adapter_path, "%s/%s", bases[b], de->d_name);
+                    snprintf(info_path, sizeof info_path, "%s", test_path);
+                    break;
+                }
+            }
+            closedir(dir);
+            if(info_path[0]) break;
+        }
+    }
+
+    /* If info file not found on disk, fail open (keep device) */
+    if(!info_path[0]) return 1;
+
+    FILE *f = fopen(info_path, "r");
+    if(!f) return 1;
+
+    char buf[2048];
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    if(n == 0) return 1;
+    buf[n] = 0;
+
+    /*
+     * Check Bluetooth Services UUIDs:
+     * 0000110a: Audio Source (A2DP Source - phones, tablets, PCs, smart TVs).
+     * 0000110b: Audio Sink (A2DP Sink - TWS earbuds, headphones, speakers).
+     */
+    char *svc = strstr(buf, "Services=");
+    if(svc){
+        char *end = strpbrk(svc, "\r\n");
+        if(end) *end = 0;
+
+        int has_src = (strcasestr(svc, "0000110a") != NULL);
+        int has_snk = (strcasestr(svc, "0000110b") != NULL);
+
+        if(has_src) return 1; /* Transmits audio */
+        if(has_snk) return 0; /* Pure sink (earbuds/headphones/speakers) */
+
+        /* If services are listed but neither audio source nor audio sink, exclude */
+        return 0;
+    }
+
+    /*
+     * If Services= was not populated yet, check Bluetooth Class of Device (CoD):
+     */
+    char *cls = strstr(buf, "Class=");
+    if(cls){
+        long cod = strtol(cls + 6, NULL, 0);
+        int major = (cod >> 8) & 0x1f;
+        int minor = (cod >> 2) & 0x3f;
+
+        /* Major: Computer (0x01) or Phone (0x02) -> Audio Source */
+        if(major == 0x01 || major == 0x02) return 1;
+
+        /* Major: Audio/Video (0x04) */
+        if(major == 0x04){
+            /* Minor: Headset (0x01), Handsfree (0x02), Loudspeaker (0x05),
+             * Headphones (0x06), Portable Audio (0x07), Car audio (0x08), HiFi (0x0a) */
+            if(minor == 0x01 || minor == 0x02 || minor == 0x05 ||
+               minor == 0x06 || minor == 0x07 || minor == 0x08 || minor == 0x0a){
+                return 0;
+            }
+        }
+    }
+
+    return 1;
+}
+
+int bt_rx_get_paired_devices(bt_rx_device_t *out, int max_devs){
+    if(!out || max_devs <= 0) return 0;
+    char buf[4096];
+    int n = exec_cmd_capture("bluetoothctl paired-devices 2>/dev/null", buf, sizeof buf, 400);
+    if(n <= 0) return 0;
+
+    char cur_mac[20] = {0};
+    int is_conn = 0;
+    pthread_mutex_lock(&g_bt_mu);
+    is_conn = g_bt_state.connected;
+    if(is_conn && g_bt_state.mac[0])
+        snprintf(cur_mac, sizeof cur_mac, "%s", g_bt_state.mac);
+    pthread_mutex_unlock(&g_bt_mu);
+
+    int count = 0;
+    char *line = buf;
+    while(line && *line && count < max_devs){
+        char *nl = strchr(line, '\n');
+        if(nl) *nl = 0;
+        char *cr = strchr(line, '\r');
+        if(cr) *cr = 0;
+
+        /* format: "Device AA:BB:CC:DD:EE:FF Friendly Name" */
+        if(!strncmp(line, "Device ", 7) && strlen(line) > 7 + 17){
+            char mac[20];
+            memcpy(mac, line + 7, 17);
+            mac[17] = 0;
+            const char *raw_name = line + 7 + 17;
+            while(*raw_name == ' ' || *raw_name == '\t') raw_name++;
+
+            if(rx_mac_valid(mac)){
+                int is_cur = (is_conn && cur_mac[0] && !strcasecmp(cur_mac, mac));
+                /* In BT Receiver mode, filter out non-audio sources (e.g. TWS earbuds, headphones, speakers) */
+                if(!is_cur && !rx_is_audio_source(mac)){
+                    diskos_trace("bt_rx_get_paired_devices: filtering out non-source %s (%s)", mac, raw_name);
+                    line = nl ? (nl + 1) : NULL;
+                    continue;
+                }
+
+                snprintf(out[count].mac, sizeof out[count].mac, "%s", mac);
+                /* Try user-defined alias first */
+                char alias[64] = {0};
+                if(btalias_get(mac, alias, sizeof alias, 80) == BTALIAS_OK && alias[0]){
+                    snprintf(out[count].name, sizeof out[count].name, "%s", alias);
+                } else if(raw_name[0]){
+                    snprintf(out[count].name, sizeof out[count].name, "%s", raw_name);
+                } else {
+                    snprintf(out[count].name, sizeof out[count].name, "%s", mac);
+                }
+                out[count].connected = is_cur ? 1 : 0;
+                count++;
+            }
+        }
+        line = nl ? (nl + 1) : NULL;
+    }
+
+    /* Move connected device to index 0 if present */
+    for(int i = 1; i < count; i++){
+        if(out[i].connected){
+            bt_rx_device_t tmp = out[i];
+            for(int j = i; j > 0; j--) out[j] = out[j - 1];
+            out[0] = tmp;
+            break;
+        }
+    }
+    return count;
+}
+
+void bt_rx_connect_to(const char *mac, const char *name){
+    if(!rx_mac_valid(mac)) return;
+    char old_mac[20] = {0};
+    pthread_mutex_lock(&g_bt_mu);
+    if(g_bt_state.connected && g_bt_state.mac[0]){
+        if(!strcasecmp(g_bt_state.mac, mac)){
+            pthread_mutex_unlock(&g_bt_mu);
+            ui_toast(tr("Already connected"));
+            return;
+        }
+        snprintf(old_mac, sizeof old_mac, "%s", g_bt_state.mac);
+    }
+    pthread_mutex_unlock(&g_bt_mu);
+
+    char toast_buf[96];
+    snprintf(toast_buf, sizeof toast_buf, "%s %s...", tr("Connecting to"), (name && name[0]) ? name : mac);
+    ui_toast(toast_buf);
+
+    char cmd[512];
+    if(old_mac[0]){
+        snprintf(cmd, sizeof cmd,
+            "( bluetoothctl disconnect %s 2>/dev/null; sleep 0.2; "
+            "  bluetoothctl connect %s 2>/dev/null ) >/dev/null 2>&1 &",
+            old_mac, mac);
+    } else {
+        snprintf(cmd, sizeof cmd,
+            "( bluetoothctl connect %s 2>/dev/null ) >/dev/null 2>&1 &",
+            mac);
+    }
+    diskos_trace("bt_rx_connect_to: target=%s (old=%s)", mac, old_mac);
+    system(cmd);
+}
+
+void bt_rx_disconnect(void){
+    char mac[20] = {0};
+    char dbus_mac[32] = {0};
+    pthread_mutex_lock(&g_bt_mu);
+    if(g_bt_state.connected && g_bt_state.mac[0]){
+        snprintf(mac, sizeof mac, "%s", g_bt_state.mac);
+        snprintf(dbus_mac, sizeof dbus_mac, "%s", g_bt_state.dbus_mac);
+        g_bt_state.connected = 0;
+        g_bt_state.is_playing = 0;
+        g_bt_state.mac[0] = 0;
+        g_bt_state.dbus_mac[0] = 0;
+        g_bt_state.dev_name[0] = 0;
+        g_bt_state.title[0] = 0;
+        g_bt_state.artist[0] = 0;
+        g_bt_state.album[0] = 0;
+        g_bt_state.codec[0] = 0;
+        g_bt_state.duration_ms = 0;
+        g_bt_state.position_ms = 0;
+        g_bt_state.pos_anchor_ms = 0;
+    }
+    pthread_mutex_unlock(&g_bt_mu);
+
+    if(mac[0]){
+        char cmd[512];
+        snprintf(cmd, sizeof cmd,
+            "( dbus-send --system --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.Device1.Disconnect 2>/dev/null; "
+            "  bluetoothctl disconnect %s 2>/dev/null; "
+            "  bluetoothctl discoverable on 2>/dev/null; "
+            "  hciconfig hci0 piscan 2>/dev/null ) >/dev/null 2>&1 &",
+            dbus_mac, mac);
+        diskos_trace("bt_rx_disconnect: mac=%s", mac);
+        system(cmd);
+        ui_toast(tr("Disconnected"));
+    } else {
+        ui_toast(tr("No device connected"));
+    }
+}
+
+void bt_rx_forget(const char *mac){
+    if(!rx_mac_valid(mac)) return;
+    int is_cur = 0;
+    pthread_mutex_lock(&g_bt_mu);
+    if(g_bt_state.connected && !strcasecmp(g_bt_state.mac, mac)){
+        is_cur = 1;
+        g_bt_state.connected = 0;
+        g_bt_state.is_playing = 0;
+        g_bt_state.mac[0] = 0;
+        g_bt_state.dbus_mac[0] = 0;
+        g_bt_state.dev_name[0] = 0;
+        g_bt_state.title[0] = 0;
+        g_bt_state.artist[0] = 0;
+        g_bt_state.album[0] = 0;
+        g_bt_state.codec[0] = 0;
+    }
+    pthread_mutex_unlock(&g_bt_mu);
+
+    char cmd[256];
+    if(is_cur){
+        snprintf(cmd, sizeof cmd,
+            "( bluetoothctl disconnect %s 2>/dev/null; "
+            "  bluetoothctl remove %s 2>/dev/null; "
+            "  bluetoothctl discoverable on 2>/dev/null ) >/dev/null 2>&1 &",
+            mac, mac);
+    } else {
+        snprintf(cmd, sizeof cmd,
+            "( bluetoothctl remove %s 2>/dev/null ) >/dev/null 2>&1 &",
+            mac);
+    }
+    diskos_trace("bt_rx_forget: mac=%s", mac);
+    system(cmd);
+    ui_toast(tr("Device forgotten"));
+}
+
+void bt_rx_force_pairing(void){
+    atomic_store(&s_bt_pairing_until, lv_tick_get() + 60000);
+    char mac[20] = {0};
+    pthread_mutex_lock(&g_bt_mu);
+    if(g_bt_state.connected && g_bt_state.mac[0]){
+        snprintf(mac, sizeof mac, "%s", g_bt_state.mac);
+        g_bt_state.connected = 0;
+        g_bt_state.is_playing = 0;
+        g_bt_state.mac[0] = 0;
+        g_bt_state.dbus_mac[0] = 0;
+        g_bt_state.dev_name[0] = 0;
+        g_bt_state.title[0] = 0;
+        g_bt_state.artist[0] = 0;
+        g_bt_state.album[0] = 0;
+        g_bt_state.codec[0] = 0;
+    }
+    pthread_mutex_unlock(&g_bt_mu);
+
+    char cmd[512];
+    if(mac[0]){
+        snprintf(cmd, sizeof cmd,
+            "( bluetoothctl disconnect %s 2>/dev/null; "
+            "  bluetoothctl discoverable on 2>/dev/null; "
+            "  bluetoothctl pairable on 2>/dev/null; "
+            "  hciconfig hci0 piscan 2>/dev/null ) >/dev/null 2>&1 &",
+            mac);
+    } else {
+        snprintf(cmd, sizeof cmd,
+            "( bluetoothctl discoverable on 2>/dev/null; "
+            "  bluetoothctl pairable on 2>/dev/null; "
+            "  hciconfig hci0 piscan 2>/dev/null ) >/dev/null 2>&1 &");
+    }
+    diskos_trace("bt_rx_force_pairing: active");
+    system(cmd);
+    ui_toast(tr("Pairing mode active"));
+}
+
+int bt_rx_is_pairing(void){
+    uint32_t until = atomic_load(&s_bt_pairing_until);
+    if(!until) return 0;
+    if((int32_t)(lv_tick_get() - until) >= 0){
+        atomic_store(&s_bt_pairing_until, 0);
+        return 0;
+    }
+    return 1;
 }
 
 static void uac_query_status(int *out_connected, char *out_fmt, size_t fmt_sz){

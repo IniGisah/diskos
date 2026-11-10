@@ -49,3 +49,20 @@ void bt_rx_get_progress(uint32_t *out_elapsed_ms, uint32_t *out_dur_ms, int *out
 void diskos_trace(const char *fmt, ...);
 void bt_rx_log(const char *fmt, ...);
 
+/* Paired device representation for Bluetooth Receiver mode */
+typedef struct {
+    char mac[20];
+    char name[64];
+    int connected;
+} bt_rx_device_t;
+
+/* Device management & connection controls in BT receiving mode */
+int  bt_rx_get_paired_devices(bt_rx_device_t *out, int max_devs);
+void bt_rx_connect_to(const char *mac, const char *name);
+void bt_rx_disconnect(void);
+void bt_rx_forget(const char *mac);
+void bt_rx_force_pairing(void);
+int  bt_rx_is_pairing(void);
+void bt_show_paired_devices_dialog(void);
+
+

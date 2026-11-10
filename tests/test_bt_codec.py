@@ -248,6 +248,193 @@ int main(void){
             self.assertIn("PASS", run_res.stdout)
 
 
+class TestBtReceiverDeviceManagement(unittest.TestCase):
+    """Tests device filtering, pairing parser, and command synthesis for BT receiver mode."""
+
+    def test_paired_devices_parsing_and_filtering(self):
+        c_code = """
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <assert.h>
+
+typedef struct {
+    char mac[20];
+    char name[64];
+    int connected;
+} bt_rx_device_t;
+
+static int rx_mac_valid(const char *mac){
+    if(!mac || strlen(mac) != 17) return 0;
+    for(int i = 0; i < 17; i++){
+        char c = mac[i];
+        if((i % 3) == 2){ if(c != ':') return 0; }
+        else if(!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f'))) return 0;
+    }
+    return mac[17] == 0;
+}
+
+int mock_parse_paired(const char *buf, const char *cur_mac, bt_rx_device_t *out, int max_devs){
+    int count = 0;
+    char linebuf[4096];
+    strncpy(linebuf, buf, sizeof linebuf - 1);
+    linebuf[sizeof linebuf - 1] = 0;
+    char *line = linebuf;
+    while(line && *line && count < max_devs){
+        char *nl = strchr(line, '\\n');
+        if(nl) *nl = 0;
+        char *cr = strchr(line, '\\r');
+        if(cr) *cr = 0;
+
+        if(!strncmp(line, "Device ", 7) && strlen(line) > 7 + 17){
+            char mac[20];
+            memcpy(mac, line + 7, 17);
+            mac[17] = 0;
+            const char *raw_name = line + 7 + 17;
+            while(*raw_name == ' ' || *raw_name == '\\t') raw_name++;
+
+            if(rx_mac_valid(mac)){
+                // Mock device info filtering: skip headphones (e.g. WH-1000XM4)
+                if(strstr(raw_name, "Headphones") || strstr(raw_name, "WH-1000XM")) {
+                    line = nl ? (nl + 1) : NULL;
+                    continue;
+                }
+                snprintf(out[count].mac, sizeof out[count].mac, "%s", mac);
+                snprintf(out[count].name, sizeof out[count].name, "%s", raw_name);
+                out[count].connected = (cur_mac && !strcasecmp(mac, cur_mac)) ? 1 : 0;
+                count++;
+            }
+        }
+        line = nl ? (nl + 1) : NULL;
+    }
+    return count;
+}
+
+int main(void){
+    const char *sample = 
+        "Device 11:22:33:44:55:66 Pixel 8 Pro\\n"
+        "Device AA:BB:CC:DD:EE:FF Sony WH-1000XM4\\n"
+        "Device 99:88:77:66:55:44 MacBook Air\\n";
+    bt_rx_device_t devs[8];
+    int n = mock_parse_paired(sample, "11:22:33:44:55:66", devs, 8);
+    assert(n == 2);
+    assert(strcmp(devs[0].name, "Pixel 8 Pro") == 0);
+    assert(devs[0].connected == 1);
+    assert(strcmp(devs[1].name, "MacBook Air") == 0);
+    assert(devs[1].connected == 0);
+    printf("DEV_MGMT_PASS\\n");
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "test_dev.c"
+            bin_out = Path(td) / "test_dev_bin"
+            src.write_text(c_code)
+            compile_res = subprocess.run(["cc", "-Wall", "-Werror", str(src), "-o", str(bin_out)])
+            self.assertEqual(compile_res.returncode, 0, "C test compilation failed")
+            run_res = subprocess.run([str(bin_out)], capture_output=True, text=True)
+            self.assertEqual(run_res.returncode, 0)
+            self.assertIn("DEV_MGMT_PASS", run_res.stdout)
+
+    def test_rx_is_audio_source_capability_filtering(self):
+        c_code = """
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <assert.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+static int parse_is_audio_source_from_content(const char *buf){
+    const char *svc = strstr(buf, "Services=");
+    if(svc){
+        const char *end = strpbrk(svc, "\\r\\n");
+        char svc_copy[1024];
+        if(end && (size_t)(end - svc) < sizeof(svc_copy)){
+            size_t len = (size_t)(end - svc);
+            memcpy(svc_copy, svc, len);
+            svc_copy[len] = 0;
+        } else {
+            strncpy(svc_copy, svc, sizeof(svc_copy) - 1);
+            svc_copy[sizeof(svc_copy) - 1] = 0;
+        }
+
+        int has_src = (strcasestr(svc_copy, "0000110a") != NULL);
+        int has_snk = (strcasestr(svc_copy, "0000110b") != NULL);
+
+        if(has_src) return 1;
+        if(has_snk) return 0;
+        return 0;
+    }
+
+    const char *cls = strstr(buf, "Class=");
+    if(cls){
+        long cod = strtol(cls + 6, NULL, 0);
+        int major = (cod >> 8) & 0x1f;
+        int minor = (cod >> 2) & 0x3f;
+
+        if(major == 0x01 || major == 0x02) return 1;
+        if(major == 0x04){
+            if(minor == 0x01 || minor == 0x02 || minor == 0x05 ||
+               minor == 0x06 || minor == 0x07 || minor == 0x08 || minor == 0x0a){
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+int main(void){
+    const char *earbuds_info =
+        "[General]\\n"
+        "Name=Wireless Earbuds\\n"
+        "Class=0x240404\\n"
+        "SupportedTechnologies=BR/EDR;\\n"
+        "Trusted=true\\n"
+        "Blocked=false\\n"
+        "Services=00001101-0000-1000-8000-00805f9b34fb;0000110b-0000-1000-8000-00805f9b34fb;0000110c-0000-1000-8000-00805f9b34fb;0000110d-0000-1000-8000-00805f9b34fb;\\n";
+
+    const char *phone_info =
+        "[General]\\n"
+        "Name=Smartphone\\n"
+        "Class=0x5a420c\\n"
+        "SupportedTechnologies=BR/EDR;\\n"
+        "Services=00001105-0000-1000-8000-00805f9b34fb;0000110a-0000-1000-8000-00805f9b34fb;0000110c-0000-1000-8000-00805f9b34fb;\\n";
+
+    const char *tablet_info =
+        "[General]\\n"
+        "Name=Tablet\\n"
+        "Class=0x5a4110\\n"
+        "SupportedTechnologies=BR/EDR;\\n"
+        "Services=00001105-0000-1000-8000-00805f9b34fb;0000110a-0000-1000-8000-00805f9b34fb;\\n";
+
+    const char *tv_info =
+        "[General]\\n"
+        "Name=Smart TV\\n"
+        "Class=0x2c043c\\n"
+        "Services=0000110a-0000-1000-8000-00805f9b34fb;0000110b-0000-1000-8000-00805f9b34fb;\\n";
+
+    assert(parse_is_audio_source_from_content(earbuds_info) == 0); /* Pure sink earbuds must be filtered out */
+    assert(parse_is_audio_source_from_content(phone_info) == 1);   /* Phone kept */
+    assert(parse_is_audio_source_from_content(tablet_info) == 1);  /* Tablet kept */
+    assert(parse_is_audio_source_from_content(tv_info) == 1);      /* TV (audio source) kept */
+
+    printf("RX_CAP_FILTER_PASS\\n");
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "test_filter.c"
+            bin_out = Path(td) / "test_filter_bin"
+            src.write_text(c_code)
+            compile_res = subprocess.run(["cc", "-Wall", "-Werror", str(src), "-o", str(bin_out)])
+            self.assertEqual(compile_res.returncode, 0, "C filter test compilation failed")
+            run_res = subprocess.run([str(bin_out)], capture_output=True, text=True)
+            self.assertEqual(run_res.returncode, 0)
+            self.assertIn("RX_CAP_FILTER_PASS", run_res.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
 
