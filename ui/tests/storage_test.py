@@ -114,7 +114,7 @@ int modes_output_busy(void){ return 0; }
 typedef enum { ROUTE_UNKNOWN = -1, ROUTE_ANALOG = 0, ROUTE_BT = 1 } route_state_t;
 static __attribute__((unused)) char g_route_mac[18];
 static __attribute__((unused)) route_state_t g_route_state;
-static int ui_usb_dac_connected(void){ return 1; }
+static __attribute__((unused)) int ui_usb_dac_connected(void){ return 1; }
 static int scanner_active(void){ return test_scan; }
 static int scanner_start(void){ return 0; }
 int mdb_total_song_count(void){ return 1; }

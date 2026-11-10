@@ -801,8 +801,9 @@ static void route_uppercase(const char *in, char *out, int cap){
     int j=0; for(int i=0; in[i] && j<cap-1; i++){ char c=in[i]; if(c>='a'&&c<='z') c-=32; out[j++]=c; } out[j]=0;
 }
 const char *ui_route_mac(void){ return g_route_mac; }   /* device the player is routed to ('' = local) */
+static _Atomic int g_source_mode = 0;
+int ui_get_source_mode(void){ return g_source_mode; }
 int ui_local_playback_allowed(void);
-int ui_get_source_mode(void);
 static int route_send(const char *f, int automatic, unsigned gen){
     return automatic ? ipc_send_automatic(f, gen) : ipc_send_cmd(f);
 }
@@ -1009,6 +1010,7 @@ static int route_bt(const char *mac, int automatic){
     if(loss_accepted) g_route_loss.local_dirty = 1;
     if(route_send("0666000C0002", automatic, gen) != 0) return -1;     /* out_dev = BT source */
     modes_output_reset();                               /* no longer on SPDIF / USB audio */
+    if(atomic_load(&g_source_mode) == 4) g_source_mode = 0;
     if(route_send("0657000C0008", automatic, gen) != 0 && (automatic || loss_accepted)) return -1;
     /* V2.57 owns connect-time codec application. Retain the older sequence. */
     if(fw_os_ver() != 257){
@@ -1087,6 +1089,7 @@ static int route_analog(int force){
     }
     route_loss_reset();
     g_route_mac[0] = 0;
+    if(atomic_load(&g_source_mode) == 4) g_source_mode = 0;
     route_state_remove();
 #ifdef DISKOS_TEST_BT_PREPARE
     ui_bt_route_prepare_cancel();
@@ -1115,8 +1118,6 @@ int ui_route_analog(void){
 /* _Atomic: WRITTEN on the UI thread (ui_set_source_mode) and READ on the coldplug worker thread
  * (coldplug_should_run / coldplug_thread). A plain int here is a C11 data race; the atomic makes the
  * load/store well-defined (seq_cst) without a mutex for this single word. */
-static _Atomic int g_source_mode = 0;
-int ui_get_source_mode(void){ return g_source_mode; }
 
 /* SD operations share an admission gate. It closes before an export is queued and
  * reopens only after that export was observed and its return mount is confirmed. */
@@ -1149,8 +1150,10 @@ int ui_sd_is_held(void){
 }
 
 int ui_local_playback_allowed(void){
+    int m = atomic_load(&g_source_mode);
+    if(m != 0 && m != 4) return 0;
     ipc_source_evidence e; ipc_source_snapshot(&e);
-    return source_sd_allowed() && g_source_mode == 0 &&
+    return source_sd_allowed() &&
         !(receiver_available() && e.valid && e.mode == 10);
 }
 
@@ -1436,8 +1439,8 @@ int ui_set_source_mode(int mode){
     if(ui_source_switch_pending()){ ui_toast("Storage is switching"); return -1; }
     if(g_sd_phase == SD_UNKNOWN || g_sd_hold || !sd_io_healthy()){ ui_toast("SD access is held this boot"); return -1; }
     if(atomic_load(&g_launch_verdict) != 1){ ui_toast("SD access is not ready yet"); return -1; }
+    if(mode == 4 && !fw_has_usb_audio_out()){ ui_toast("USB Audio not supported on this firmware"); return -1; }
     if(!ipc_player_ready()){ ui_toast("Player is starting up - try again"); return -1; }
-    if(mode == 4 && !ui_usb_dac_connected()){ ui_toast("USB DAC not connected"); return -1; }
     if(mode == 3){
         if(g_sd_phase == SD_HOST) return 0;
         if(ipc_rx_frames() == 0){ ui_toast("Player is starting up - try again"); return -1; }
@@ -2346,7 +2349,7 @@ int ui_play_playlist(long pid, int pos){
     if(n <= 0){ ui_toast("Couldn't prepare playlist - try again"); return 0; }
     g_book_single_mode = 0;                                 /* not a book */
     send_play_mode(cfg_get_int("work_mode", 0));  /* set the music play-mode explicitly - a song-row tap in a playlist does not, and a prior book left Single */
-    if(ui_get_source_mode() == 0 && !g_route_mac[0]) ipc_send_cmd("0657000C0008");  /* local work-mode: a type-5 play from an idle player needs it (same as a book) */
+    if((ui_get_source_mode() == 0 || ui_get_source_mode() == 4) && !g_route_mac[0]) ipc_send_cmd("0657000C0008");  /* local work-mode: a type-5 play from an idle player needs it (same as a book) */
     if(pos < 1) pos = 1;
     int ppos = mdb_reserved_slot_player_pos(pid, pos);      /* the tapped row in the player's read of the slot */
     if(ppos < 1){ ui_toast("Couldn't find that song"); return 0; }   /* never start a guessed, possibly different song */
@@ -2390,7 +2393,7 @@ int ui_play_plan(mdb_plan_t *plan, int song_id){
         if(pos < 1){ ui_toast("Couldn't find that song"); return 0; }
         g_book_single_mode = 0;
         send_play_mode(cfg_get_int("work_mode", 0));
-        if(ui_get_source_mode() == 0 && !g_route_mac[0]) ipc_send_cmd("0657000C0008");
+        if((ui_get_source_mode() == 0 || ui_get_source_mode() == 4) && !g_route_mac[0]) ipc_send_cmd("0657000C0008");
         return ui_play_list_ex(5, "", pos, -1);
     }
     if(plan->list_type != 2 && plan->list_type != 3 && plan->list_type != 7){ ui_toast("Couldn't play that list"); return 0; }
@@ -2555,9 +2558,9 @@ int ui_play_book(const char *path, long resume_ms){
      * starts). Re-assert the local-play route + work-mode first - device-verified this is what a book
      * play needs; ui_play_list's own preamble is gated to V2.40, but a book must start on V2.09/V2.28 too.
      * Local analog route only (never a BT A2DP path). */
-    if(ui_get_source_mode() == 0 && !g_route_mac[0]){
+    if((ui_get_source_mode() == 0 || ui_get_source_mode() == 4) && !g_route_mac[0]){
         ipc_send_cmd("0657000C0008");                      /* LOCALPLAYER work-mode (fixes NO_WORK_MODE). NOT 0666:
-                                                            * we're already on the local route (gated above), and a
+                                                            * we're already on the local/DAC route (gated above), and a
                                                             * redundant out_dev re-init pauses the stream ~1.5s in. */
     }
     if(send_play_mode(4) != 0){ ui_toast("Couldn't start book"); return 0; }   /* Single play-mode is REQUIRED for clean EOF isolation; if it can't be set, don't start the book unguarded */
@@ -3608,7 +3611,7 @@ static int uac_bound(void){
 int ui_detect_source_mode(void){
     if(sd_exported_to_host()) return 3;
     if(uac_bound())           return 1;
-    return 0;
+    return (atomic_load(&g_source_mode) == 4) ? 4 : 0;
 }
 /* May the V2.40 worker direct-mount the card RIGHT NOW? Checked (under g_sd_mode_mu) immediately before
  * EACH mount attempt: absolute cold-boot window (fail-closed on unreadable uptime) AND the card is not
@@ -3661,7 +3664,7 @@ static void *coldplug_thread(void *arg){
     for(int i = 0; i < 120; i++){                  /* ~6 min cap (120 x 3s) covers the ~100s listener */
         if(coldplug_mounted()){ coldplug_log("SD mounted - done"); return NULL; }
         pthread_mutex_lock(&g_sd_mode_mu);
-        if(ui_get_source_mode() == 0 && !sd_exported_to_host() && !coldplug_mounted() && atomic_load(&g_sd_writable)){
+        if((ui_get_source_mode() == 0 || ui_get_source_mode() == 4) && !sd_exported_to_host() && !coldplug_mounted() && atomic_load(&g_sd_writable)){
             if(!direct_sd_mount || nudged || i >= 10){
                 /* V2.09/V2.28: the player's uevent listener mounts the card (bound ~100s in) - bounded retries,
                  * each only while genuinely unmounted (checked above). V2.40/V2.57: fallback only, after ~30s
@@ -3728,7 +3731,7 @@ static int coldplug_should_run(void){
     /* fail-closed: an unreadable/malformed uptime is NOT treated as a cold boot (0 would be fail-open,
      * enabling the SD mount on a late restart where the card may be exported to a host). */
     if(up < 0.0 || up > 150.0){ coldplug_log("skip: uptime unreadable or late (not a verified cold boot)"); return 0; }
-    if(ui_get_source_mode() != 0){ coldplug_log("skip: not in Local mode (card may be exported to a host)"); return 0; }
+    if(ui_get_source_mode() != 0 && ui_get_source_mode() != 4){ coldplug_log("skip: not in Local/Host mode (card may be exported to a host)"); return 0; }
     return 1;
 }
 static void coldplug_start(void){
@@ -5280,7 +5283,7 @@ int main(int argc, char **argv){
         if(playing) ui_note_transport_sent();   /* playback observed this generation (any start, incl. hardware keys): its one-shot is moot */
         g_playing = playing;   /* publish for ui_route_bt/ui_route_analog (raw st.state is unreliable) */
         st.state = playing ? 2 : 1;
-        static int usb_dac_disconnected_latched = 0;
+        static int usb_dac_disconnected_latched = 1;
         static unsigned last_tip_seq = 0;
         static uint32_t last_usb_dac_poll = 0;
 
@@ -5314,7 +5317,8 @@ int main(int argc, char **argv){
                 }
             }
         } else {
-            usb_dac_disconnected_latched = 0;
+            usb_dac_disconnected_latched = 1;
+            ipc_tip_event(&last_tip_seq);
         }
 
         playback_update(&st, ipc_display_title(&st), playing);   /* effective view (slice 15 moves the consumers onto it) */
