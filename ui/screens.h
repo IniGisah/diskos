@@ -204,6 +204,9 @@ void albumwall_drag(int px);               /* finger move: flow follows the fing
 void albumwall_drag_end(void);             /* finger up: inertial fling + snap to nearest album */
 void albumwall_drag_cancel(void);          /* abandon a drag without a fling (tap path) */
 void albumwall_scroll_rel(float d_alb);    /* rim scroll: nudge the flow by d_alb albums (continuous) */
+void albumwall_scrub_to(float norm);        /* scrub album bar to norm [0.0, 1.0] */
+void albumwall_scroll_letter_tick(void);   /* show A-Z letter popup for active album */
+int  albumwall_is_grid_open(void);
 void albumwall_settle(void);               /* rim release: snap to the nearest album */
 void albumwall_play(void);                 /* play the centred album (cover tap) */
 void albumwall_open(void);                 /* open the centred album's track list (cover long-press) */
@@ -433,6 +436,7 @@ void library_artist_mode_changed(void);   /* Settings changed the Artists groupi
 void library_ensure_capacity(void);  /* grow row buffers to fit the library (after a rescan adds tracks) */
 /* primary scrollable list per long-list screen (for rim-scroll); NULL if none */
 lv_obj_t *library_scroller(void);
+int library_fast_scroll_ok(void);
 void library_scroll_letter_tick(void);   /* flash the current A-Z position while rim-scrolling */
 lv_obj_t *playlistview_scroller(void);
 lv_obj_t *search_scroller(void);

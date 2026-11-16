@@ -71,6 +71,8 @@ static lv_obj_t *menu_row(lv_obj_t *list, const char *text, lv_event_cb_t cb, vo
     lv_obj_t *l = lv_label_create(r);
     lv_label_set_text(l, tr(text));
     lv_obj_set_pos(l, 16, 16);
+    lv_obj_set_size(l, 236, 20);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(l, TF(USER_16), 0);   /* rows carry playlist names: chain (issue #3) */
     lv_obj_set_style_text_color(l, TC(TEXT_PRIMARY), 0);
     return r;

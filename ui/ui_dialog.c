@@ -9,8 +9,8 @@
 #include <string.h>
 
 #define SCREEN_R   180
-#define PAD_V      14      /* panel padding above/below the parts */
-#define PAD_H      20
+#define PAD_V      16      /* panel padding above/below the parts */
+#define PAD_H      18
 #define GAP        12      /* viewport to actions */
 #define ID_MAGIC   0x44470000u   /* tags our own objects through user_data */
 #define COL_GAP    8       /* between action buttons */
@@ -241,7 +241,10 @@ static int32_t search_width(ui_dialog_t *d, const tier_t *t, int32_t *best_w)
     tier_set(d, t);
     *best_w = lv_obj_get_width(d->panel);
 
-    for(int32_t w = d->fit_width & ~1; w >= 2; w -= 2){
+    int32_t min_w = 260;
+    if(d->fit_width && d->fit_width < min_w) min_w = d->fit_width;
+
+    for(int32_t w = d->fit_width & ~1; w >= min_w; w -= 2){
         lv_obj_set_width(d->panel, w);
         lv_obj_set_height(d->panel, LV_SIZE_CONTENT);
         lv_obj_set_height(d->viewport, LV_SIZE_CONTENT);
@@ -262,6 +265,12 @@ static int32_t search_width(ui_dialog_t *d, const tier_t *t, int32_t *best_w)
             *best_w = w;
         }
         if(!overflow) break;     /* descending widths: widest complete fit */
+    }
+    /* If even at the narrowest readable width it still overflows the circle cap,
+     * retain a comfortable readable width so the viewport scroller handles the height
+     * rather than squishing the dialog into an unreadable column. */
+    if(least_overflow > 0 && d->fit_width >= 272){
+        *best_w = (d->fit_width >= 280) ? 280 : d->fit_width;
     }
     return least_overflow;
 }
@@ -285,8 +294,8 @@ static void choose_width(ui_dialog_t *d)
     }
 
     static const tier_t standard = { PAD_H, PAD_V, GAP, 0 };
-    static const tier_t compact = { 14, 10, 8, 0 };
-    static const tier_t scrolling = { 14, 10, 8, 6 };
+    static const tier_t compact = { 16, 14, 8, 0 };
+    static const tier_t scrolling = { 16, 14, 8, 6 };
     const tier_t *use = &standard;
     int32_t w = 0;
 

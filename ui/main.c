@@ -3386,6 +3386,7 @@ static int rim_move(int x, int y){
         float ang=rim_ang(x,y); float dAng=rim_wrap(ang-rim_last_ang); rim_last_ang=ang; rim_last_ms=lv_tick_get();
         if(dAng > 1.2f || dAng < -1.2f) return 1;       /* clamp coalesced jumps */
         albumwall_scroll_rel(dAng * RIM_ALB_PER_RAD);   /* clockwise (dAng>0) = next album */
+        albumwall_scroll_letter_tick();
         return 1;
     }
     if(rim_scroller != ui_active_scroller()) return 1;  /* screen changed under us: hold gesture, don't scroll a stale list */
@@ -5488,14 +5489,26 @@ int main(int argc, char **argv){
                         s_fast_scroll_cand = 0;
                         s_fast_scroller = ui_active_scroller();
                         if (s_fast_scroller && sx >= 280 && sy >= 60 && sy <= 320) {
-                            s_fast_scroll_cand = 1;
+                            if(screen_current() == SCR_LIBRARY && !library_fast_scroll_ok()){
+                                s_fast_scroller = NULL;
+                            } else {
+                                s_fast_scroll_cand = 1;
+                            }
                         }
                         s_aw_bar_drag = 0;
                         rim_press(sx, sy);    /* arm rim-scroll candidate (long lists AND the cover flow) */
                         if(rim_state==RIM_IDLE && screen_current()==SCR_ALBUMWALL &&
-                           sx >= BACK_START_MAX_X && !albumwall_is_grid_open())
-                            albumwall_drag_begin(sx);   /* CENTRE press -> linear drag. Rim-band press is rim-only, and */
-                    }                                   /* the left edge is reserved for the back-swipe (not armed as a drag) */
+                           sx >= BACK_START_MAX_X && !albumwall_is_grid_open()){
+                            if(sx >= 90 && sx <= 270 && sy >= 295 && sy <= 345){
+                                s_aw_bar_drag = 1;
+                                float norm = ((float)sx - 110.0f) / 140.0f;
+                                albumwall_scrub_to(norm);
+                                lv_indev_wait_release(g_touch);
+                            } else {
+                                albumwall_drag_begin(sx);   /* CENTRE press -> linear drag. Rim-band press is rim-only, and */
+                            }
+                        }                                   /* the left edge is reserved for the back-swipe (not armed as a drag) */
+                    }
                     nav_press_ok = nav_swipe_ok(s_press_scr, modal_touch || fsart_touch || sleep_touch, bl_state != 2);
                     edge_back = nav_press_ok && sx < BACK_START_MAX_X && !screen_on_drag_control(sx, sy);   /* a slow slide from the left edge is still a Back; a slider keeps its drag */
                     fprintf(stderr,"TAP x=%d y=%d\n",sx,sy); fflush(stderr);
@@ -5541,7 +5554,7 @@ int main(int argc, char **argv){
                         if(s_fast_scroller && lv_obj_is_valid(s_fast_scroller)){
                             int top = lv_obj_get_scroll_top(s_fast_scroller);
                             int bot = lv_obj_get_scroll_bottom(s_fast_scroller);
-                            if((top + bot) > 0){
+                            if((top + bot) >= 180){
                                 s_fast_scroll_active = 1;
                                 rim_state = RIM_IDLE;
                                 lv_indev_wait_release(g_touch);

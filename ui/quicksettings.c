@@ -513,14 +513,14 @@ static void build_status(lv_obj_t *root, int y){
     if(s_qs_batt < 0) qs_read_battery_fallback();
     g_qs_hdr = lv_obj_create(root);
     lv_obj_remove_style_all(g_qs_hdr);
-    lv_obj_set_size(g_qs_hdr, 184, 30);
+    lv_obj_set_size(g_qs_hdr, 156, 30);
     lv_obj_align(g_qs_hdr, LV_ALIGN_TOP_MID, 0, y);
     lv_obj_clear_flag(g_qs_hdr, LV_OBJ_FLAG_SCROLLABLE);
 
     /* Clock & Date on the left (clickable -> Set Date & Time) */
     lv_obj_t *dt_box = lv_obj_create(g_qs_hdr);
     lv_obj_remove_style_all(dt_box);
-    lv_obj_set_size(dt_box, 110, 30);
+    lv_obj_set_size(dt_box, 96, 30);
     lv_obj_align(dt_box, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_add_flag(dt_box, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(dt_box, 4);
@@ -584,7 +584,7 @@ void quicksettings_build(void){
     lv_obj_set_style_bg_opa(grab, LV_OPA_COVER, 0);
 
     /* status row: clock & date (left) + battery status (right) */
-    build_status(g_qs_root, 16);
+    build_status(g_qs_root, 18);
 
     int have_tr = cfg_get_int("qs_transport", 0) ? 1 : 0;
     int ids[QT_COUNT]; int nt = qs_enabled(ids, qs_cap());

@@ -988,18 +988,30 @@ void ui_headers_fit(lv_obj_t *root){
     int edge = !back || lv_obj_get_width(back) <= 30;
     int room = ui_round_width(top + 2, 12);
     if(!edge && back){
-        int right = lv_obj_get_x(back) + lv_obj_get_width(back) + 12;
+        int right = lv_obj_get_x(back) + lv_obj_get_width(back) + 8;
         if(room > 2 * (180 - right)) room = 2 * (180 - right);
     }
     lv_point_t single;
     lv_text_get_size(&single, text, font, ls, line_gap, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    /* Allow font step-down to HEADER_SM if title exceeds single-line room */
+    const lv_font_t *font_sm = TF(HEADER_SM);
+    if((single.y > lh || single.x > room - 2 * pad) && font_sm && font_sm != font){
+        lv_point_t sm_size;
+        int sm_lh = lv_font_get_line_height(font_sm);
+        lv_text_get_size(&sm_size, text, font_sm, ls, line_gap, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        if(sm_size.y <= sm_lh && sm_size.x <= room - 2 * pad){
+            font = font_sm;
+            lh = sm_lh;
+            single = sm_size;
+        }
+    }
     if(single.y > lh || single.x > room - 2 * pad){
-        /* Search the wider chord before omitting any library-name suffix. */
-        top = edge ? 48 : 76;
-        for(; top <= 84; top += 2){
+        /* Search wider chords for multi-line titles without dropping excessively */
+        top = edge ? 40 : 44;
+        for(; top <= 56; top += 2){
             room = ui_round_width(top + 2, 12);
             if(room > 300) room = 300;
-            if(header_split(text, fitted, sizeof fitted, font, ls, room - 2 * pad, top == 84)){
+            if(header_split(text, fitted, sizeof fitted, font, ls, room - 2 * pad, top == 56)){
                 fitted_text = fitted;
                 break;
             }
@@ -1071,9 +1083,9 @@ lv_obj_t *kit_default_header(lv_obj_t *root, const char *title, lv_event_cb_t ba
 {
     lv_obj_t *back = lv_button_create(root);
     lv_obj_remove_style_all(back);
-    lv_obj_set_pos(back, 72, 24); lv_obj_set_size(back, 44, 40);   /* inset from the clipped corner */
-    lv_obj_set_ext_click_area(back, 10);                            /* easier near the round bezel */
-    lv_obj_set_style_radius(back, 20, 0);
+    lv_obj_set_pos(back, 64, 22); lv_obj_set_size(back, 36, 36);   /* inset from the clipped corner */
+    lv_obj_set_ext_click_area(back, 8);                            /* easier near the round bezel */
+    lv_obj_set_style_radius(back, 18, 0);
     lv_obj_set_style_bg_color(back, TC(LIST_PRESSED), LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(back, LV_OPA_70, LV_STATE_PRESSED);
     ui_on(back, back_cb ? back_cb : ui_header_back_cb, LV_EVENT_CLICKED, NULL, "nav.back", UI_CORE);
@@ -1082,7 +1094,7 @@ lv_obj_t *kit_default_header(lv_obj_t *root, const char *title, lv_event_cb_t ba
     lv_label_set_text(ic, LV_SYMBOL_LEFT);
     lv_obj_set_style_text_font(ic, TF(UI_20), 0);
     lv_obj_set_style_text_color(ic, TC(TEXT_SECONDARY), 0);
-    lv_obj_align(ic, LV_ALIGN_CENTER, 0, -2);
+    lv_obj_align(ic, LV_ALIGN_CENTER, 0, -1);
 
     lv_obj_t *t = ui_title_label(root, title, TF(HEADER));
     if(theme_trait(THEME_TRAIT_DOT_TITLES)){

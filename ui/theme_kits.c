@@ -1745,18 +1745,12 @@ const theme_kit_t theme_kit_blue = { .id = "blueprint", .header = kit_edge_heade
  * stays centred. It is drawn as the pill's own shape, filled and dropped 3 px, just before the pill (one more rounded
  * fill: LVGL's shadow path would rebuild a corner buffer on every draw here, with no shadow cache in this build).
  * Chunky rounded controls; the Home time as two overlapping pills, hours and minutes. */
-/* Three overlapping rounded fills give each end a different shoulder. All drawing stays inside the
+/* Clean rounded tactile pill. All drawing stays inside the
  * original rectangular object, so its input box and the position of its children are unchanged. */
 static void stone_blob(lv_layer_t *layer, const lv_area_t *box, lv_color_t color, lv_opa_t opa){
     lv_draw_rect_dsc_t d; lv_draw_rect_dsc_init(&d);
     d.bg_color = color; d.bg_opa = opa; d.radius = LV_RADIUS_CIRCLE;
-    lv_area_t a = *box;
-    a.x1 += 5; a.x2 -= 5;
-    lv_draw_rect(layer, &d, &a);
-    a = *box; a.x2 -= 11; a.y1 += 3; a.y2 -= 8;
-    lv_draw_rect(layer, &d, &a);
-    a = *box; a.x1 += 11; a.y1 += 8; a.y2 -= 2;
-    lv_draw_rect(layer, &d, &a);
+    lv_draw_rect(layer, &d, box);
 }
 static void stone_edge_cb(lv_event_t *e){
     lv_obj_t *o = lv_event_get_target(e);

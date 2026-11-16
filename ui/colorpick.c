@@ -4,6 +4,7 @@
 #include "theme.h"
 #include "theme_kit.h"
 #include "config.h"
+#include "i18n.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <math.h>
@@ -119,9 +120,9 @@ void colorpick_create(lv_obj_t *root){
     lv_obj_set_style_border_width(g_preview, 2, 0);
 
     /* label, then its track 26 px lower: the knob's overhang clears the label's line */
-    mk_label(root, 134, "Hue");        g_hsl = mk_slider(root, 160, 359);
-    mk_label(root, 180, "Saturation"); g_ssl = mk_slider(root, 206, 100);
-    mk_label(root, 226, "Brightness"); g_vsl = mk_slider(root, 252, 100);
+    mk_label(root, 134, tr("Hue"));        g_hsl = mk_slider(root, 160, 359);
+    mk_label(root, 180, tr("Saturation")); g_ssl = mk_slider(root, 206, 100);
+    mk_label(root, 226, tr("Brightness")); g_vsl = mk_slider(root, 252, 100);
 
     /* "Album Art" (dynamic) button */
     g_dyn_btn = lv_button_create(root);
@@ -132,6 +133,7 @@ void colorpick_create(lv_obj_t *root){
     lv_obj_set_style_bg_opa(g_dyn_btn, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(g_dyn_btn, TC(OUTLINE_BRIGHT), 0);
     ui_on(g_dyn_btn, dynamic_cb, LV_EVENT_CLICKED, NULL, "colorpick.dynamic", UI_CORE);
-    lv_obj_t *dl=lv_label_create(g_dyn_btn); lv_label_set_text(dl, "Album Art");
+    lv_obj_t *dl=lv_label_create(g_dyn_btn); lv_label_set_text(dl, tr("Album Art"));
+    lv_obj_set_style_text_font(dl, TF(UI_16), 0);
     lv_obj_set_style_text_color(dl, TC(TEXT_PRIMARY), 0); lv_obj_center(dl);
 }
