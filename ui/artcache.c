@@ -133,6 +133,16 @@ static int artcache_cover_path_leased(const char *track, char *out, int cap, int
     return 0;
 }
 
+/* Return the native path of the cached 42px thumb for a track (no copy).
+ * Returns 0 + fills out on a cache hit, -1 if not cached. */
+static int artcache_thumb_path_leased(const char *track, char *out, int cap, int validate){
+    char fp[24]; if(fingerprint(track,fp,sizeof fp)!=0) return -1;
+    char cv[600],th[600],bg[600]; cache_paths(fp,cv,th,bg,600);
+    if(validate && !TH_OK(th)) return -1;
+    snprintf(out, cap, "%s", th);
+    return 0;
+}
+
 /* Copy JUST the cached 148px cover (no thumb/backdrop) - used by the Album Wall, which only needs the
  * cover, so it avoids copying the ~360px backdrop every step. Returns 0 on hit, -1 if not cached. */
 static int artcache_get_cover_leased(const char *track, const char *cover_out){
@@ -205,6 +215,13 @@ int artcache_get_cover(const char *track, const char *cover_out){
 int artcache_cover_path(const char *track, char *out, int cap){
     if(!sd_io_begin()) return -1;
     int result = artcache_cover_path_leased(track, out, cap, 1);
+    sd_io_end();
+    return result;
+}
+
+int artcache_thumb_path(const char *track, char *out, int cap){
+    if(!sd_io_begin()) return -1;
+    int result = artcache_thumb_path_leased(track, out, cap, 1);
     sd_io_end();
     return result;
 }

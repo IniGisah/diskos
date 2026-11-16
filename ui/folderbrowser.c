@@ -8,6 +8,7 @@
 #include "musicdb.h"
 #include "scanner.h"
 #include "config.h"
+#include "artcache.h"
 #include "i18n.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -344,26 +345,72 @@ static void fb_add_row(int i){
         ui_on(r, fb_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i, "folderbrowser.fb_row", UI_CORE);
         kit_row_layout(r, KIT_ROW_ICON);
 
-        lv_obj_t *ic = lv_label_create(r);
-        lv_label_set_text(ic, en->is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_AUDIO);
-        lv_obj_set_pos(ic, 10, 14);
-        lv_obj_set_style_text_font(ic, TF(UI_16), 0);
-        lv_obj_set_style_text_color(ic, en->is_dir ? TC(FOLDER_ICON) : TC(TEXT_MUTED), 0);
+        int is_song = (!en->is_dir && en->kind == FB_K_AUDIO);
+        int show_art = (is_song && cfg_get_int("song_art", 1));
+        char bmp[600];
+        int have_thumb = 0;
+        if(show_art && i < 200){
+            char full[FB_MAXPATH];
+            snprintf(full, sizeof full, "%s/%s", g_dir, en->name);
+            have_thumb = (artcache_thumb_path(full, bmp, sizeof bmp) == 0);
+        }
 
-        lv_obj_t *nm = lv_label_create(r);
-        lv_label_set_text(nm, en->name);
-        lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
-        lv_obj_set_pos(nm, 40, 14);
-        lv_obj_set_size(nm, en->is_dir ? 194 : 216, 20);
-        lv_obj_set_style_text_font(nm, TF(USER_16), 0);   /* CJK filenames, like Library/Search */
-        lv_obj_set_style_text_color(nm, TC(TEXT_PRIMARY), 0);
+        if(show_art){
+            lv_obj_t *tile = lv_obj_create(r);
+            lv_obj_remove_style_all(tile);
+            lv_obj_set_pos(tile, 8, 5);
+            lv_obj_set_size(tile, 36, 36);
+            lv_obj_set_style_radius(tile, 6, 0);
+            lv_obj_set_style_clip_corner(tile, true, 0);
+            lv_obj_set_style_bg_color(tile, TC(SURFACE_STRONG), 0);
+            lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
+            lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
-        if(en->is_dir){
-            lv_obj_t *ch = lv_label_create(r);
-            lv_label_set_text(ch, LV_SYMBOL_RIGHT);
-            lv_obj_set_pos(ch, 244, 15);
-            lv_obj_set_style_text_font(ch, TF(UI_16), 0);
-            lv_obj_set_style_text_color(ch, TC(TEXT_DISABLED), 0);
+            if(have_thumb){
+                char src[620];
+                snprintf(src, sizeof src, "A:%s", bmp);
+                lv_obj_t *img = lv_image_create(tile);
+                lv_image_set_src(img, src);
+                lv_obj_center(img);
+                lv_obj_clear_flag(img, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+            } else {
+                lv_obj_t *ic = lv_label_create(tile);
+                lv_label_set_text(ic, LV_SYMBOL_AUDIO);
+                lv_obj_set_style_text_font(ic, TF(UI_16), 0);
+                lv_obj_set_style_text_color(ic, TC(TEXT_MUTED), 0);
+                lv_obj_center(ic);
+                lv_obj_clear_flag(ic, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+            }
+
+            lv_obj_t *nm = lv_label_create(r);
+            lv_label_set_text(nm, en->name);
+            lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
+            lv_obj_set_pos(nm, 52, 13);
+            lv_obj_set_size(nm, 204, 20);
+            lv_obj_set_style_text_font(nm, TF(USER_16), 0);
+            lv_obj_set_style_text_color(nm, TC(TEXT_PRIMARY), 0);
+        } else {
+            lv_obj_t *ic = lv_label_create(r);
+            lv_label_set_text(ic, en->is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_AUDIO);
+            lv_obj_set_pos(ic, 10, 14);
+            lv_obj_set_style_text_font(ic, TF(UI_16), 0);
+            lv_obj_set_style_text_color(ic, en->is_dir ? TC(FOLDER_ICON) : TC(TEXT_MUTED), 0);
+
+            lv_obj_t *nm = lv_label_create(r);
+            lv_label_set_text(nm, en->name);
+            lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
+            lv_obj_set_pos(nm, 40, 14);
+            lv_obj_set_size(nm, en->is_dir ? 194 : 216, 20);
+            lv_obj_set_style_text_font(nm, TF(USER_16), 0);   /* CJK filenames, like Library/Search */
+            lv_obj_set_style_text_color(nm, TC(TEXT_PRIMARY), 0);
+
+            if(en->is_dir){
+                lv_obj_t *ch = lv_label_create(r);
+                lv_label_set_text(ch, LV_SYMBOL_RIGHT);
+                lv_obj_set_pos(ch, 244, 15);
+                lv_obj_set_style_text_font(ch, TF(UI_16), 0);
+                lv_obj_set_style_text_color(ch, TC(TEXT_DISABLED), 0);
+            }
         }
         theme_list_row(r);
 }
@@ -453,8 +500,15 @@ static void fb_lhint_timer_cb(lv_timer_t *t){
 
 void folderbrowser_scroll_letter_tick(void){
     if(!g_list || !g_lhint || g_nent <= 0 || !g_first) return;
-    int y = lv_obj_get_scroll_y(g_list);
-    int idx = (y / 52) - g_has_play_header;
+    int top = lv_obj_get_scroll_top(g_list);
+    int bot = lv_obj_get_scroll_bottom(g_list);
+    int total = top + bot;
+    int idx = 0;
+    if(total > 0){
+        float t = (float)top / (float)total;
+        if(t < 0.0f) t = 0.0f; else if(t > 1.0f) t = 1.0f;
+        idx = (int)(t * (float)(g_nent - 1) + 0.5f);
+    }
     if(idx < 0) idx = 0; else if(idx >= g_nent) idx = g_nent - 1;
     char ch = g_first[idx];
     if(ch && ch != g_lhint_ch){

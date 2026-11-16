@@ -329,7 +329,7 @@ static const char *const RESET_KEYS[] = {
     "brightness", "swipe_thresh", "saver_idx", "saver_style", "screenoff_idx",
     "anim", "time_24h", "accent_mode", "accent_color", "np_style", "theme_preset", "theme_variant",
     "outdoor", "boot_default", "weather_on", "weather_loc", "artcache", "sleep_idx", "sleep_action", "idle_off_idx",
-    "qs_transport", "track_numbers", "album_view", "online_art", "online_lyrics", "ota_auto",
+    "qs_transport", "track_numbers", "song_art", "album_view", "online_art", "online_lyrics", "ota_auto",
     "custom_ov_mask", "custom_ov_font", "custom_ov_pos", NULL
 };
 int sys_reset_match(const char *key){

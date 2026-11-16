@@ -28,10 +28,14 @@ enum { VIEW_MENU, VIEW_SONGS, VIEW_ALBUMS, VIEW_ARTISTS, VIEW_PLAYLISTS, VIEW_FA
 
 typedef struct {
     lv_obj_t *row;
+    lv_obj_t *tile;
+    lv_obj_t *tile_img;
+    lv_obj_t *tile_glyph;
     lv_obj_t *title;
     lv_obj_t *sub;
     lv_obj_t *right;
     int curr_item;
+    char img_src[128];
 } virt_slot_t;
 
 static virt_slot_t g_slots[NUM_SLOTS];
@@ -340,19 +344,90 @@ static int scope_play_album(const char *album, int song_id){
     return ok;
 }
 /* ---- virtual row pool & scrolling --------------------------------------- */
-static void virt_set_row_text(int s, const char *top, const char *sub, const char *right){
+/* ---- thumbnail cache (direct-mapped, avoids SQLite / stat stalls during scroll) ---- */
+#define THUMB_CACHE_SIZE 128
+typedef struct {
+    int  song_id;
+    char path[128];
+} thumb_cache_entry_t;
+static thumb_cache_entry_t g_thumb_cache[THUMB_CACHE_SIZE];
+static unsigned            g_thumb_cache_gen = 0;
+
+static int thumb_lookup(int song_id, char *out, int cap){
+    if(song_id <= 0 || !out || cap <= 0) return 0;
+    unsigned gen = artcache_gen();
+    if(gen != g_thumb_cache_gen){
+        g_thumb_cache_gen = gen;
+        memset(g_thumb_cache, 0, sizeof g_thumb_cache);
+    }
+    int h = (unsigned)((unsigned)song_id * 2654435761u) % THUMB_CACHE_SIZE;
+    if(g_thumb_cache[h].song_id == song_id){
+        if(g_thumb_cache[h].path[0]){
+            snprintf(out, cap, "%s", g_thumb_cache[h].path);
+            return 1;
+        }
+        return 0;
+    }
+    g_thumb_cache[h].song_id = song_id;
+    g_thumb_cache[h].path[0] = 0;
+    char track[512];
+    if(mdb_song_path(song_id, track, sizeof track) > 0 && track[0]){
+        char bmp[600];
+        if(artcache_thumb_path(track, bmp, sizeof bmp) == 0){
+            snprintf(g_thumb_cache[h].path, sizeof g_thumb_cache[h].path, "A:%s", bmp);
+            snprintf(out, cap, "%s", g_thumb_cache[h].path);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void virt_set_row_thumb(int s, int song_id){
+    virt_slot_t *slot = &g_slots[s];
+    if(!slot->tile) return;
+    if(song_id <= 0){
+        lv_obj_add_flag(slot->tile, LV_OBJ_FLAG_HIDDEN);
+        if(slot->img_src[0]){
+            lv_image_set_src(slot->tile_img, NULL);
+            slot->img_src[0] = 0;
+        }
+        return;
+    }
+    lv_obj_clear_flag(slot->tile, LV_OBJ_FLAG_HIDDEN);
+
+    char src[160];
+    if(thumb_lookup(song_id, src, sizeof src)){
+        if(strcmp(slot->img_src, src) != 0){
+            lv_image_set_src(slot->tile_img, src);
+            snprintf(slot->img_src, sizeof slot->img_src, "%s", src);
+        }
+        lv_obj_clear_flag(slot->tile_img, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(slot->tile_glyph, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        if(slot->img_src[0]){
+            lv_image_set_src(slot->tile_img, NULL);
+            slot->img_src[0] = 0;
+        }
+        lv_obj_add_flag(slot->tile_img, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(slot->tile_glyph, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void virt_set_row_text(int s, const char *top, const char *sub, const char *right, int has_thumb){
     virt_slot_t *slot = &g_slots[s];
     int has_sub = (sub && sub[0]);
     int has_right = (right && right[0]);
+    int text_x = has_thumb ? 58 : 12;
+    int max_w = has_right ? (has_thumb ? 142 : 186) : (has_thumb ? 202 : 242);
 
     lv_label_set_text(slot->title, top ? top : "");
-    lv_obj_set_pos(slot->title, 12, has_sub ? 6 : 16);
-    lv_obj_set_size(slot->title, has_right ? 186 : 242, 21);
+    lv_obj_set_pos(slot->title, text_x, has_sub ? 6 : 16);
+    lv_obj_set_size(slot->title, max_w, 21);
 
     if(has_sub){
         lv_label_set_text(slot->sub, sub);
-        lv_obj_set_pos(slot->sub, 12, 28);
-        lv_obj_set_size(slot->sub, has_right ? 186 : 242, 17);
+        lv_obj_set_pos(slot->sub, text_x, 28);
+        lv_obj_set_size(slot->sub, max_w, 17);
         lv_obj_clear_flag(slot->sub, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_label_set_text(slot->sub, "");
@@ -372,15 +447,18 @@ static void virt_set_row_text(int s, const char *top, const char *sub, const cha
 
 static void virt_populate_row(int s, int i){
     char dur[12];
+    int is_album = (g_view==VIEW_GROUP && (g_drill_kind==1 || g_scope_lvl==2));
+    int show_art = cfg_get_int("song_art", 1) && !is_album;
     if(g_view==VIEW_GROUP && g_drill_kind!=1 && g_scope_lvl==1){       /* artist/genre -> albums: "All Songs" first */
         char cnt[12];
         if(i==0){
             snprintf(cnt, sizeof cnt, "%d", g_scope_total);
-            virt_set_row_text(s, tr("All Songs"), NULL, cnt);
+            virt_set_row_text(s, tr("All Songs"), NULL, cnt, 0);
         } else {
             snprintf(cnt, sizeof cnt, "%d", g_gcounts[i-1]);
-            virt_set_row_text(s, g_gnames[i-1], g_drill_kind==3 ? g_gartists[i-1] : NULL, cnt);
+            virt_set_row_text(s, g_gnames[i-1], g_drill_kind==3 ? g_gartists[i-1] : NULL, cnt, 0);
         }
+        virt_set_row_thumb(s, -1);
         return;
     }
     switch(g_view){
@@ -389,31 +467,38 @@ static void virt_populate_row(int s, int i){
             if(g_view==VIEW_GROUP && (g_drill_kind==1 || g_scope_lvl==2) && g_buf[i]->track > 0 && cfg_get_int("track_numbers", 0)){
                 char num[MDB_STR + 16];
                 snprintf(num, sizeof num, "%d %s", g_buf[i]->track, g_buf[i]->title[0]?g_buf[i]->title:"Untitled");
-                virt_set_row_text(s, num, g_buf[i]->artist, dur);
+                virt_set_row_text(s, num, g_buf[i]->artist, dur, show_art);
             } else {
-                virt_set_row_text(s, g_buf[i]->title[0]?g_buf[i]->title:"Untitled", g_buf[i]->artist, dur);
+                virt_set_row_text(s, g_buf[i]->title[0]?g_buf[i]->title:"Untitled", g_buf[i]->artist, dur, show_art);
             }
+            virt_set_row_thumb(s, show_art ? g_buf[i]->id : -1);
             break;
         case VIEW_ALBUMS: {
             char cnt[12]; snprintf(cnt, sizeof cnt, "%d", g_gcounts[i]);
-            virt_set_row_text(s, g_gnames[i], mdb_artist_missing(g_gartists[i]) ? "Unknown artist" : g_gartists[i], cnt);
+            virt_set_row_text(s, g_gnames[i], mdb_artist_missing(g_gartists[i]) ? "Unknown artist" : g_gartists[i], cnt, 0);
+            virt_set_row_thumb(s, -1);
             break; }
         case VIEW_ARTISTS:
-            virt_set_row_text(s, g_gnames[i][0] ? g_gnames[i] : "Unknown artist", NULL, NULL);
+            virt_set_row_text(s, g_gnames[i][0] ? g_gnames[i] : "Unknown artist", NULL, NULL, 0);
+            virt_set_row_thumb(s, -1);
             break;
         case VIEW_GENRES: {
             char cnt[12]; snprintf(cnt, sizeof cnt, "%d", g_gcounts[i]);
-            virt_set_row_text(s, g_gnames[i], NULL, cnt);
+            virt_set_row_text(s, g_gnames[i], NULL, cnt, 0);
+            virt_set_row_thumb(s, -1);
             break; }
         case VIEW_FAVS:
             fmt_dur(dur, sizeof dur, g_favs[i].dur_ms);
-            virt_set_row_text(s, g_favs[i].title, g_favs[i].artist, dur);
+            virt_set_row_text(s, g_favs[i].title, g_favs[i].artist, dur, show_art);
+            virt_set_row_thumb(s, show_art ? g_favs[i].id : -1);
             break;
         case VIEW_MOSTPLAYED: case VIEW_RECENT:
             fmt_dur(dur, sizeof dur, g_favs[i].dur_ms);
-            virt_set_row_text(s, g_favs[i].title[0]?g_favs[i].title:"Untitled", g_favs[i].artist, dur);
+            virt_set_row_text(s, g_favs[i].title[0]?g_favs[i].title:"Untitled", g_favs[i].artist, dur, show_art);
+            virt_set_row_thumb(s, show_art ? g_favs[i].id : -1);
             break;
         default:
+            virt_set_row_thumb(s, -1);
             break;
     }
 }
@@ -495,6 +580,31 @@ static void virt_init_pool(void){
         lv_obj_t *r = base_row();
         g_slots[s].row = r;
         g_slots[s].curr_item = -1;
+
+        lv_obj_t *tile = lv_obj_create(r);
+        lv_obj_remove_style_all(tile);
+        lv_obj_set_pos(tile, 8, 5);
+        lv_obj_set_size(tile, 42, 42);
+        lv_obj_set_style_radius(tile, 6, 0);
+        lv_obj_set_style_clip_corner(tile, true, 0);
+        lv_obj_set_style_bg_color(tile, TC(SURFACE_STRONG), 0);
+        lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        g_slots[s].tile = tile;
+
+        lv_obj_t *img = lv_image_create(tile);
+        lv_obj_center(img);
+        lv_obj_clear_flag(img, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        g_slots[s].tile_img = img;
+
+        lv_obj_t *gly = lv_label_create(tile);
+        lv_label_set_text(gly, LV_SYMBOL_AUDIO);
+        lv_obj_set_style_text_font(gly, TF(UI_16), 0);
+        lv_obj_set_style_text_color(gly, TC(TEXT_MUTED), 0);
+        lv_obj_center(gly);
+        lv_obj_clear_flag(gly, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        g_slots[s].tile_glyph = gly;
+        g_slots[s].img_src[0] = 0;
 
         lv_obj_t *t = lv_label_create(r);
         lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
@@ -873,7 +983,11 @@ static void library_reload_read(void){
     g_spacer = NULL;
     for(int s = 0; s < NUM_SLOTS; s++){
         g_slots[s].row = NULL;
+        g_slots[s].tile = NULL;
+        g_slots[s].tile_img = NULL;
+        g_slots[s].tile_glyph = NULL;
         g_slots[s].curr_item = -1;
+        g_slots[s].img_src[0] = 0;
     }
     lv_obj_clean(g_list);
     g_count = 0;
@@ -968,7 +1082,11 @@ static void library_reload_read(void){
         if(is_album) add_album_cover_header(g_scope_lvl==2 && g_drill_kind!=1 ? g_scope_album : g_drill, n>0 ? g_buf[0]->artist : NULL);  /* album drill: cover on top */
         add_play_header(is_album);                                       /* centre the pair under the album cover */
         if(g_view==VIEW_GROUP) add_plist_row(is_album);                  /* album / artist / genre: add these songs to a playlist */
-        for(int i=0;i<n;i++) g_first[i]=first_letter(g_buf[i]->title);
+        if(!is_album && g_view==VIEW_SONGS){
+            for(int i=0;i<n;i++) g_first[i]=first_letter(g_buf[i]->title);
+        } else {
+            for(int i=0;i<n;i++) g_first[i]=0;
+        }
         virt_start(n);
         if(g_view==VIEW_SONGS) az_show(1);
     } else if(g_view==VIEW_ALBUMS){
@@ -1256,6 +1374,19 @@ lv_obj_t *library_scroller(void){
     return g_list;
 }
 
+int library_fast_scroll_ok(void){
+    if(!g_list || g_count <= 0) return 0;
+    /* Never fast-scroll album track drill-ins (tracks in track-number order) */
+    if(g_view == VIEW_GROUP && (g_drill_kind == 1 || g_scope_lvl == 2)) return 0;
+    /* In artist/genre flat song view, tracks are not A-Z indexed */
+    if(g_view == VIEW_GROUP && g_scope_lvl == 0) return 0;
+    /* Menu view has few categories */
+    if(g_view == VIEW_MENU) return 0;
+    /* Only long lists (>= 20 items) get fast-scroll */
+    if(g_count < 20) return 0;
+    return 1;
+}
+
 /* If the user is inside an album/artist/genre drill-in, report the player
  * list_type (3=album,2=artist,10=genre) + name so a song tap plays the exact
  * track within that list. Returns 0 when in a flat view (Songs/Search/Favs),
@@ -1287,14 +1418,23 @@ static void lhint_timer_cb(lv_timer_t *t){
 }
 /* called from the rim-scroll handler while the Library list is the one scrolling */
 void library_scroll_letter_tick(void){
-    if(!g_list || !g_lhint || g_count <= 0) return;
+    if(!g_list || !g_lhint || g_count <= 0 || !g_first) return;
     /* Only the views that actually fill g_first[] (alphabetical lists) get the A-Z scrubber hint.
      * MostPlayed/Recent/History (and Menu/Playlists) never populate g_first, so reading it there
      * showed stale letters from a prior view. Allowlist, so any new view defaults to no hint. */
+    if(g_view == VIEW_GROUP && (g_drill_kind == 1 || g_scope_lvl == 2)) return;
+    if(g_view == VIEW_GROUP && g_scope_lvl == 0) return;
     if(!(g_view==VIEW_SONGS || g_view==VIEW_GROUP || g_view==VIEW_ALBUMS ||
          g_view==VIEW_ARTISTS || g_view==VIEW_GENRES || g_view==VIEW_FAVS)) return;
-    int pitch = ROW_H + 4;
-    int idx = (lv_obj_get_scroll_y(g_list) - g_hdr_extra_px)/pitch - g_has_header;
+    int top = lv_obj_get_scroll_top(g_list);
+    int bot = lv_obj_get_scroll_bottom(g_list);
+    int total = top + bot;
+    int idx = 0;
+    if(total > 0){
+        float t = (float)top / (float)total;
+        if(t < 0.0f) t = 0.0f; else if(t > 1.0f) t = 1.0f;
+        idx = (int)(t * (float)(g_count - 1) + 0.5f);
+    }
     if(idx < 0) idx = 0; else if(idx >= g_count) idx = g_count - 1;
     char ch = g_first[idx];
     if(ch && ch != g_lhint_ch){ g_lhint_ch = ch; char b[2]={ch,0}; lv_label_set_text(g_lhint_lbl, b); }

@@ -4,6 +4,7 @@
 #include "theme.h"
 #include "theme_kit.h"
 #include "config.h"
+#include "artcache.h"
 #include "musicdb.h"
 #include "ipc.h"
 #include "playback.h"
@@ -167,13 +168,55 @@ static void un_add_row(int i){
     ui_on(r, un_edit_open, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i, "upnext.edit", UI_CORE);
     ui_on(r, un_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i, "upnext.un_row", UI_CORE);
 
+    int show_art = cfg_get_int("song_art", 1);
+    char bmp[600];
+    int have_thumb = (show_art && q->path[0] && artcache_thumb_path(q->path, bmp, sizeof bmp) == 0);
+
+    if(show_art){
+        lv_obj_t *tile = lv_obj_create(r);
+        lv_obj_remove_style_all(tile);
+        lv_obj_set_pos(tile, 8, 5);
+        lv_obj_set_size(tile, 42, 42);
+        lv_obj_set_style_radius(tile, 6, 0);
+        lv_obj_set_style_clip_corner(tile, true, 0);
+        lv_obj_set_style_bg_color(tile, TC(SURFACE_STRONG), 0);
+        lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+        if(have_thumb){
+            char src[620];
+            snprintf(src, sizeof src, "A:%s", bmp);
+            lv_obj_t *img = lv_image_create(tile);
+            lv_image_set_src(img, src);
+            lv_obj_center(img);
+            lv_obj_clear_flag(img, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        } else {
+            lv_obj_t *ic = lv_label_create(tile);
+            lv_label_set_text(ic, LV_SYMBOL_AUDIO);
+            lv_obj_set_style_text_font(ic, TF(UI_16), 0);
+            lv_obj_set_style_text_color(ic, TC(TEXT_MUTED), 0);
+            lv_obj_center(ic);
+            lv_obj_clear_flag(ic, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        }
+    }
+
+    int dur_ms = q->dur_ms;
+    if(cur && (dur_ms <= 0 || dur_ms >= 86400000)){
+        track_state_t st; ipc_get_state(&st);
+        if(st.duration_ms > 0 && st.duration_ms < 86400000) dur_ms = (int)st.duration_ms;
+    }
+    char dur[12]; un_fmt_dur(dur_ms, dur, sizeof dur);
+
+    int text_x = show_art ? 58 : 14;
+    int text_w = show_art ? (dur[0] ? 140 : 196) : (dur[0] ? 186 : 242);
+
     lv_obj_t *t = lv_label_create(r);                           /* title (may be non-Latin) */
     if(cur && !g_un_cast){
         g_un_title = t;
         track_state_t st; ipc_get_state(&st); un_update_title(&st);
     } else lv_label_set_text(t, q->title[0] ? q->title : "Untitled");
     lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(t, 14, 6); lv_obj_set_size(t, 186, 21);
+    lv_obj_set_pos(t, text_x, 6); lv_obj_set_size(t, text_w, 21);
     lv_obj_set_style_text_font(t, TF(USER_16), 0);
     lv_obj_set_style_text_color(t, cur ? TC(TEXT_PRIMARY) : (played ? TC(TEXT_MUTED) : TC(TEXT_PRIMARY)), 0);
 
@@ -186,16 +229,10 @@ static void un_add_row(int i){
     }
     lv_label_set_text(s, subtitle);
     lv_label_set_long_mode(s, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(s, 14, 28); lv_obj_set_size(s, 186, 17);
+    lv_obj_set_pos(s, text_x, 28); lv_obj_set_size(s, text_w, 17);
     lv_obj_set_style_text_font(s, cur ? TF(UI_14) : TF(USER_14), 0);
     lv_obj_set_style_text_color(s, cur ? TC(ACCENT_PRIMARY) : TC(TEXT_MUTED), 0);
 
-    int dur_ms = q->dur_ms;
-    if(cur && (dur_ms <= 0 || dur_ms >= 86400000)){
-        track_state_t st; ipc_get_state(&st);
-        if(st.duration_ms > 0 && st.duration_ms < 86400000) dur_ms = (int)st.duration_ms;
-    }
-    char dur[12]; un_fmt_dur(dur_ms, dur, sizeof dur);
     if(dur[0]){
         lv_obj_t *d = lv_label_create(r);                       /* length, right-aligned */
         lv_label_set_text(d, dur);

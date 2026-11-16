@@ -284,6 +284,7 @@ static void apply_charge_protect(int v){
 }
 /* Track Numbers: album song lists show each song's track number (stock "TRACK_DISPLAY", drawn by diskOS) */
 static void apply_track_numbers(int v){ ui_set_track_display(v); library_refresh(); }
+static void apply_song_art(int v){ (void)v; library_refresh(); }
 /* Online Album Art (stock "Online cover", done by diskOS - netart.c): on tries the current song now; off drops any
  * queued lookup and redraws the current cover without an online picture */
 static void apply_online_art(int v){ if(!v) netart_cancel(); ui_art_redo(); }
@@ -837,6 +838,7 @@ static const setting_t TABLE[] = {
     /* ---- Library ---- */
     { "Library", "Browsing", "Artists",     ST_CHOICE, "artist_class", 0,0,0, OPT_ARTISTCLASS, 2, NULL, apply_artist_class, 0 },
     { "Library", "Browsing", "Track Numbers", ST_TOGGLE, "track_numbers", 0,1,1, NULL, 0, NULL, apply_track_numbers, 0 },
+    { "Library", "Browsing", "Track Artwork", ST_TOGGLE, "song_art", 0,1,1, NULL, 0, NULL, apply_song_art, 1 },
     { "Library", "Browsing", "Album View",  ST_CHOICE, "album_view", 0,0,0, OPT_ALBUMVIEW, 2, NULL, NULL, 0 },
     { "Library", "Artwork and lyrics", "Online Album Art", ST_TOGGLE, "online_art", 0,1,1, NULL, 0, NULL, apply_online_art, 0 },
     { "Library", "Artwork and lyrics", "Album Art Cache", ST_CHOICE, "artcache", 0,0,0, OPT_ARTCACHE, 3, NULL, apply_artcache, 0,
@@ -1803,12 +1805,23 @@ static void setlist_heading(lv_obj_t *list, const char *text, int first){
 static void setlist_battery_summary(lv_obj_t *list){
     char b[96], t[128];
     sys_battery_text(NULL, 1, b, sizeof b);
-    /* Each comma-separated gauge item gets its own line. LVGL must never
-     * split a number to squeeze the last item onto a preceding line. */
-    for(char *item = b; (item = strstr(item, ", ")); item++){
-        *item = '\n'; memmove(item + 1, item + 2, strlen(item + 2) + 1);
+    /* Group gauge items into two compact lines: percent + health, then cycles + temp */
+    char *parts[4] = {0};
+    int nparts = 0;
+    char *p = b;
+    parts[nparts++] = p;
+    while((p = strstr(p, ", ")) && nparts < 4){
+        *p = 0;
+        p += 2;
+        parts[nparts++] = p;
     }
-    snprintf(t, sizeof t, "%s %s", tr("Battery"), b);
+    if(nparts == 4){
+        snprintf(t, sizeof t, "%s %s (%s)\n%s, %s", tr("Battery"), parts[0], parts[1], parts[2], parts[3]);
+    } else if(nparts == 3){
+        snprintf(t, sizeof t, "%s %s (%s)\n%s", tr("Battery"), parts[0], parts[1], parts[2]);
+    } else {
+        snprintf(t, sizeof t, "%s %s", tr("Battery"), b);
+    }
     lv_obj_t *l = lv_label_create(list);
     lv_obj_clear_flag(l, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     lv_label_set_text(l, t);

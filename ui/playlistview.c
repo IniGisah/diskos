@@ -5,6 +5,8 @@
 #include "theme.h"
 #include "theme_kit.h"
 #include "musicdb.h"
+#include "artcache.h"
+#include "config.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -127,28 +129,71 @@ static void plv_add_row(int i){
     lv_obj_set_user_data(r, (void*)(intptr_t)(i+1));   /* playlistview_row_pos */
         ui_on(r, plv_song_cb, LV_EVENT_SHORT_CLICKED, (void*)(intptr_t)(i+1), "playlistview.plv_song", UI_CORE);
         ui_on(r, plv_remove_cb, LV_EVENT_LONG_PRESSED, (void*)(intptr_t)(i+1), "playlistview.plv_remove.long", UI_CORE);  /* L32: hold to remove */
+
+        int show_art = cfg_get_int("song_art", 1);
+        char bmp[600];
+        int have_thumb = 0;
+        if(show_art){
+            char track[512];
+            if(mdb_song_path(g_songs[i].id, track, sizeof track) > 0 && track[0]){
+                have_thumb = (artcache_thumb_path(track, bmp, sizeof bmp) == 0);
+            }
+        }
+
+        int has_dur = (!strcmp(theme_kit()->id, "terminal") && g_songs[i].dur_ms > 0);
+        int text_x = show_art ? 52 : 12;
+        int text_w = show_art ? (has_dur ? 142 : 204) : (has_dur ? 182 : 244);
+
+        if(show_art){
+            lv_obj_t *tile = lv_obj_create(r);
+            lv_obj_remove_style_all(tile);
+            lv_obj_set_pos(tile, 8, 5);
+            lv_obj_set_size(tile, 36, 36);
+            lv_obj_set_style_radius(tile, 6, 0);
+            lv_obj_set_style_clip_corner(tile, true, 0);
+            lv_obj_set_style_bg_color(tile, TC(SURFACE_STRONG), 0);
+            lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
+            lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+            if(have_thumb){
+                char src[620];
+                snprintf(src, sizeof src, "A:%s", bmp);
+                lv_obj_t *img = lv_image_create(tile);
+                lv_image_set_src(img, src);
+                lv_obj_center(img);
+                lv_obj_clear_flag(img, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+            } else {
+                lv_obj_t *ic = lv_label_create(tile);
+                lv_label_set_text(ic, LV_SYMBOL_AUDIO);
+                lv_obj_set_style_text_font(ic, TF(UI_16), 0);
+                lv_obj_set_style_text_color(ic, TC(TEXT_MUTED), 0);
+                lv_obj_center(ic);
+                lv_obj_clear_flag(ic, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+            }
+        }
+
         lv_obj_t *t = lv_label_create(r);
-    lv_label_set_text(t, g_songs[i].title);
+        lv_label_set_text(t, g_songs[i].title);
         lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
-        lv_obj_set_pos(t, 12, 5); lv_obj_set_size(t, 244, 19);
+        lv_obj_set_pos(t, text_x, 5); lv_obj_set_size(t, text_w, 19);
         lv_obj_set_style_text_font(t, TF(USER_16), 0);   /* CJK titles like Library/Search */
         lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
         lv_obj_t *a = lv_label_create(r);
-    lv_label_set_text(a, g_songs[i].artist);
+        lv_label_set_text(a, g_songs[i].artist);
         lv_label_set_long_mode(a, LV_LABEL_LONG_DOT);
-        lv_obj_set_pos(a, 12, 25); lv_obj_set_size(a, 244, 16);
+        lv_obj_set_pos(a, text_x, 25); lv_obj_set_size(a, text_w, 16);
         lv_obj_set_style_text_font(a, TF(USER_14), 0);
         lv_obj_set_style_text_color(a, TC(TEXT_SECONDARY), 0);
-    if(!strcmp(theme_kit()->id, "terminal") && g_songs[i].dur_ms > 0){
-        long long sec = ((long long)g_songs[i].dur_ms + 500) / 1000;
-        char dur[16]; snprintf(dur, sizeof dur, "%lld:%02lld", sec / 60, sec % 60);
-        lv_obj_t *d = lv_label_create(r);
-        lv_label_set_text(d, dur);
-        lv_obj_set_pos(d, 198, 17); lv_obj_set_size(d, 58, 18);
-        lv_obj_set_style_text_font(d, TF(UI_14), 0);
-        lv_obj_set_style_text_color(d, TC(TEXT_SECONDARY), 0);
-        kit_row_value(r, t, a, d, KIT_VALUE_DURATION);
-    }
+        if(has_dur){
+            long long sec = ((long long)g_songs[i].dur_ms + 500) / 1000;
+            char dur[16]; snprintf(dur, sizeof dur, "%lld:%02lld", sec / 60, sec % 60);
+            lv_obj_t *d = lv_label_create(r);
+            lv_label_set_text(d, dur);
+            lv_obj_set_pos(d, 198, 17); lv_obj_set_size(d, 58, 18);
+            lv_obj_set_style_text_font(d, TF(UI_14), 0);
+            lv_obj_set_style_text_color(d, TC(TEXT_SECONDARY), 0);
+            kit_row_value(r, t, a, d, KIT_VALUE_DURATION);
+        }
     theme_list_row(r);
 
     g_built[i] = 1;

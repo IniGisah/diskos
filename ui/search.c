@@ -4,6 +4,8 @@
 #include "theme.h"
 #include "theme_kit.h"
 #include "musicdb.h"
+#include "artcache.h"
+#include "config.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -31,9 +33,9 @@ static void search_layout(int active){
         lv_obj_set_pos(g_results, 40, 124); lv_obj_set_size(g_results, 280, 198);
         lv_obj_remove_flag(g_results, LV_OBJ_FLAG_HIDDEN);
     } else {
-        if(g_back){ if(ui_edge_nav()) lv_obj_set_pos(g_back, 0, 140); else lv_obj_set_pos(g_back, 72, 24); }   /* shared header position in both empty and result states */
-        if(g_back && !ui_edge_nav()) lv_obj_set_ext_click_area(g_back, 10);
-        lv_obj_set_size(g_bar, ui_edge_nav() ? 150 : 128, 40);  /* the header Back (x72..116) stays clear of it */
+        if(g_back){ if(ui_edge_nav()) lv_obj_set_pos(g_back, 0, 140); else lv_obj_set_pos(g_back, 64, 22); }   /* shared header position in both empty and result states */
+        if(g_back && !ui_edge_nav()) lv_obj_set_ext_click_area(g_back, 8);
+        lv_obj_set_size(g_bar, ui_edge_nav() ? 150 : 128, 40);  /* the header Back (x64..100) stays clear of it */
         lv_obj_align(g_bar, LV_ALIGN_CENTER, 0, -8);            /* centred; narrow enough that the arrow clears its left edge */
         lv_obj_set_width(g_bar_lbl, LV_SIZE_CONTENT);
         lv_obj_set_style_text_align(g_bar_lbl, LV_TEXT_ALIGN_CENTER, 0);
@@ -70,6 +72,7 @@ static void rebuild(const char *q){
         if(q && q[0]) theme_kit()->empty_state(KIT_EMPTY_SEARCH, l);
         return;
     }
+    int show_art = cfg_get_int("song_art", 1);
     for(int i=0;i<shown;i++){
         const mdb_song_t *s = buf[i];
         lv_obj_t *row = lv_obj_create(g_results);
@@ -81,16 +84,57 @@ static void rebuild(const char *q){
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         ui_on(row, result_cb, LV_EVENT_CLICKED, (void*)(uintptr_t)s->id, "search.result", UI_CORE);
+
+        char bmp[600];
+        int have_thumb = 0;
+        if(show_art){
+            char track[512];
+            if(mdb_song_path(s->id, track, sizeof track) > 0 && track[0]){
+                have_thumb = (artcache_thumb_path(track, bmp, sizeof bmp) == 0);
+            }
+        }
+
+        int text_x = show_art ? 52 : 12;
+        int text_w = show_art ? 204 : 244;
+
+        if(show_art){
+            lv_obj_t *tile = lv_obj_create(row);
+            lv_obj_remove_style_all(tile);
+            lv_obj_set_pos(tile, 8, 5);
+            lv_obj_set_size(tile, 36, 36);
+            lv_obj_set_style_radius(tile, 6, 0);
+            lv_obj_set_style_clip_corner(tile, true, 0);
+            lv_obj_set_style_bg_color(tile, TC(SURFACE_STRONG), 0);
+            lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
+            lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+            if(have_thumb){
+                char src[620];
+                snprintf(src, sizeof src, "A:%s", bmp);
+                lv_obj_t *img = lv_image_create(tile);
+                lv_image_set_src(img, src);
+                lv_obj_center(img);
+                lv_obj_clear_flag(img, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+            } else {
+                lv_obj_t *ic = lv_label_create(tile);
+                lv_label_set_text(ic, LV_SYMBOL_AUDIO);
+                lv_obj_set_style_text_font(ic, TF(UI_16), 0);
+                lv_obj_set_style_text_color(ic, TC(TEXT_MUTED), 0);
+                lv_obj_center(ic);
+                lv_obj_clear_flag(ic, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+            }
+        }
+
         lv_obj_t *t = lv_label_create(row);
         lv_label_set_text(t, s->title[0]?s->title:"Untitled");
         lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
-        lv_obj_set_pos(t, 12, 5); lv_obj_set_size(t, 244, 19);
+        lv_obj_set_pos(t, text_x, 5); lv_obj_set_size(t, text_w, 19);
         lv_obj_set_style_text_font(t, TF(USER_16), 0);   /* CJK titles via Source Han Sans fallback */
         lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
         lv_obj_t *a = lv_label_create(row);
         lv_label_set_text(a, s->artist);
         lv_label_set_long_mode(a, LV_LABEL_LONG_DOT);
-        lv_obj_set_pos(a, 12, 25); lv_obj_set_size(a, 244, 16);
+        lv_obj_set_pos(a, text_x, 25); lv_obj_set_size(a, text_w, 16);
         lv_obj_set_style_text_font(a, TF(USER_14), 0);
         lv_obj_set_style_text_color(a, TC(TEXT_SECONDARY), 0);
     }
