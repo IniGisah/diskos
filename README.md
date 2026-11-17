@@ -25,7 +25,7 @@
 
 ## Overview
 
-**diskOS** is a custom user interface and firmware patch engineered specifically for the **FiiO Snowsky Disc** (Ingenic X2000 MIPS SoC). It replaces the stock interface with a bespoke, themeable UI designed for the player's 480×480 circular display, while retaining FiiO's low-level audio engine, hardware decoders, and quad-DAC routing for bit-perfect local playback.
+**diskOS** is a custom user interface and firmware patch engineered specifically for the **FiiO Snowsky Disc** (Ingenic X2000 MIPS SoC). This repository is a customized fork maintained at [IniGisah/diskos](https://github.com/IniGisah/diskos) (rebased on upstream [b0hemia/diskos](https://github.com/b0hemia/diskos) v1.2.2). It replaces the stock interface with a bespoke, themeable UI tailored to the player's 360×360 circular display, while retaining FiiO's low-level audio engine, hardware decoders, and quad-DAC routing for bit-perfect local playback.
 
 The installer builds the system image locally on your host computer using an official FiiO firmware archive. It preserves existing music files and user data on the MicroSD card, retains dual-boot access to the stock interface, and incorporates hardware-level recovery protections.
 
@@ -34,14 +34,19 @@ The installer builds the system image locally on your host computer using an off
 
 ## Features
 
-- **Bespoke Circular UI** — Native 480×480 round-screen interface built on LVGL 9, featuring 8 distinct themes (Bauhaus, Blueprint, Hi-Fi, Terminal, Stone, Zine, and more) with smooth 60 FPS transitions and edge-swipe gestures.
+- **Bespoke Circular UI** — Native 360×360 round-screen interface built on LVGL 9, featuring 8 distinct themes (Bauhaus, Blueprint, Hi-Fi, Terminal, Stone, Zine, and more) with smooth 60 FPS transitions and edge-swipe gestures.
+- **Track Artwork Thumbnails Across Song Lists** — Renders 36×36 album art thumbnails across Library Songs, Folder Browser, Playlist View, Search results, and Up Next lists, backed by an in-memory 128-entry cache and fast 42px BMP disk lookup (toggleable in Settings > Library > Browsing > Track Artwork).
 - **Bit-Perfect Local Audio** — Retains FiiO's native audio daemon (`mq_player`) and kernel ioctl routing across all 4× Cirrus Logic CS43131 balanced DACs, supporting FLAC, DSD, WAV, MP3, AAC, and Ogg Opus.
+- **Bluetooth Receiver Device Management & Live Codec Switching** — Smart paired devices modal sheet filtering transmitting audio hosts (phones, tablets, PCs) from audio sinks (headphones), live receiver codec picker dialog (LDAC, aptX-HD, aptX, AAC, SBC), Options Hub shortcuts, and auto-healing watchdog.
+- **External USB DAC Host Audio Restored (Mode 4)** — Unblocked USB Audio Out routing to external USB DACs over USB-C OTG (V2.40/V2.57) with DWC2 host power sequencing.
+- **Full Bluetooth Codec Suite** — High-resolution bidirectional Bluetooth supporting LDAC, aptX-HD, aptX, AAC, and SBC via a custom BlueALSA stack, plus a dedicated low-latency mode (~80–120ms) for video sync and mobile gaming.
 - **Wireless Streaming with Beam** — Stream audio wirelessly from the Disc's MicroSD card to Google Cast devices and Apple AirPlay speakers or TVs over local Wi-Fi, using the player as a remote control.
 - **AirPlay Receiving** — Turn the Disc into a wireless Hi-Fi AirPlay receiver from iOS, iPadOS, and macOS with synchronized volume and live metadata display (requires stock firmware V2.40 or V2.57).
-- **Full Bluetooth Codec Suite** — High-resolution bidirectional Bluetooth supporting LDAC, aptX-HD, aptX, AAC, and SBC via a custom BlueALSA stack, plus a dedicated low-latency mode (~80–120ms) for video sync and mobile gaming.
 - **Browser Remote Control & Web UI** — Built-in lightweight HTTP/WebSocket daemon (`diskos-webd`) on port 8080 for wireless playback control, queue jumping, volume management, and direct drag-and-drop MicroSD file uploads over Wi-Fi.
 - **Dedicated Mode Lockdown** — Distraction-free full-screen dashboards for USB DAC Host Mode, Bluetooth Audio Sink (with phone AVRCP controls), and USB Mass Storage.
 - **Power & Sleep Stability** — Real-time ADC fuel-gauge battery tracking, optional Touch-to-Wake (CST816T deep sleep at 0mA), zero-blink single-press power button wake, and multi-stage safe shutdown animation.
+- **Modal Touch & Gesture Isolation** — Swallows edge back-swipes, rim wheel scrolling, and track scrubbing while modal dialogs or bottom sheets are open to eliminate accidental input bleed-through.
+- **Circular Display Polish** — Header font step-down, tightened vertical descent, dialog minimum widths/padding, and inset quick settings layout to prevent bezel clipping on the round screen.
 - **Dual-Boot Hardware Fallback** — Hold **Volume Up** during power-on to boot into the stock FiiO UI at any time without reflashing or altering settings.
 
 ## Screenshots

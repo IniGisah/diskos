@@ -1,11 +1,11 @@
-# Install diskOS 1.2.2
+# Install diskOS (v1.6-custom)
 
 [Home](../README.md) | [Tour](TOUR.md) | [Privacy](PRIVACY.md)
 
 > [!CAUTION]
 > Flashing replaces the Disc's system software. Stored data is not wiped, and the SD card is not changed. Back up the card and keep a copy of the saved stock image on separate storage. Use a reliable USB cable, keep it connected, and keep the computer awake until flashing finishes. An interrupted flash may require [mask-ROM recovery](#restore-stock-and-recover).
 
-The installer builds an image locally from an official FiiO firmware archive. Select the version already on your Disc, then use **Get firmware** to download and verify its ZIP, or **Browse...** for a matching local copy. It accepts V2.09, V2.28, V2.40, and V2.57. 1.2.1 users can install the signed 1.2.2 app update if updates are allowed; fresh installs and older versions use the installer. App updates do not replace the boot install script. The network name hook, per-flash identity and boot-script update-retention fix require a full flash with the complete 1.2.2 installer; see the changes marked as requiring a full flash in the [release notes](RELEASE_NOTES_1.2.2.md).
+The installer builds an image locally from an official FiiO firmware archive. Select the version already on your Disc, then use **Get firmware** to download and verify its ZIP, or **Browse...** for a matching local copy. It accepts V2.09, V2.28, V2.40, and V2.57. This release installs diskOS **v1.6-custom** (based on upstream v1.2.2), bundling the custom UI (`mq_ui`), Web UI remote daemon (`diskos-webd`), and custom BlueALSA (`bluealsa-custom`). See the [v1.6-custom release notes](RELEASE_NOTES_1.6_CUSTOM.md) and [upstream 1.2.2 release notes](RELEASE_NOTES_1.2.2.md).
 
 ## Requirements
 
@@ -325,21 +325,17 @@ guessed block or bypass a refusal. If you cannot establish the matching firmware
 keep the logs and get help. The Linux installer also accepts
 `restore-stock --firmware <zip>` with the same matching firmware.
 
-## Upgrading to 1.2.2
+## Upgrading to v1.6-custom
 
-1.2.1 users can install the signed 1.2.2 app update over Wi-Fi from Settings > System >
-Update diskOS if updates are allowed. App updates do not replace the boot install script.
-The network name hook, per-flash identity and boot-script update-retention fix require a full flash with the
-complete 1.2.2 installer; see the [release notes](RELEASE_NOTES_1.2.2.md). Fresh installs
-and older versions also use the installer.
+Users on earlier releases can install signed app updates over Wi-Fi from **Settings > Device > Update diskOS** if updates are allowed, or push custom builds over Wi-Fi with `./tools/diskos-ota-push.sh`. Fresh installs, major base changes, and full upgrades use the complete installer.
 
-For a full flash, use the complete 1.2.2 installer and matching flash tools, supply your
+For a full flash, use the complete installer and matching flash tools, supply your
 official firmware archive, and follow the same steps. Back up the card and keep your
 saved stock image first. The installer accepts only unmodified official V2.09, V2.28, V2.40, and
 V2.57 firmware. Before writing, it checks that the Disc's kernel and recovery match the selected
 firmware. The saved stock image remains available for restore.
 
-The 1.2.2 release image includes the diskOS release key by default.
+The release image includes the diskOS release key by default.
 Settings > Device > Update diskOS checks for a newer signed release and updates only the diskOS app,
 not stock firmware or the whole flashed image. After a trial update, choose Keep or Go back;
 a broken update rolls back automatically. Settings > Device > Allow diskOS Updates can stop

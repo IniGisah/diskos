@@ -15,7 +15,7 @@
 
 ---
 
-Welcome to the diskOS documentation directory. This index categorizes the guides, technical architecture documents, reverse-engineering catalogues, and reference manuals across the project.
+Welcome to the diskOS documentation directory for **v1.6-custom** (maintained at [IniGisah/diskos](https://github.com/IniGisah/diskos), rebased on upstream [b0hemia/diskos](https://github.com/b0hemia/diskos) v1.2.2). This index categorizes the guides, technical architecture documents, reverse-engineering catalogues, and reference manuals across the project.
 
 ## Document Directory
 
@@ -33,7 +33,7 @@ Welcome to the diskOS documentation directory. This index categorizes the guides
 |---|---|---|
 | [**Interface Tour**](TOUR.md) | Exhaustive screen-by-screen breakdown covering Now Playing, Up Next, Library, Lyrics, Beam (Cast/AirPlay), Equalizer, Themes, and Quick Settings. | All Users |
 | [**Web UI & Remote Control**](WEBUI.md) | Architecture of the embedded `diskos-webd` daemon, browser player SPA, REST/WebSocket API endpoints, and MicroSD file manager. | Users & Developers |
-| [**Design System**](DESIGN_SYSTEM.md) | Round-screen visual design principles, 480×480 circular geometry constraints, touch affordances, typography, and LVGL 9 styling. | Designers & UI Devs |
+| [**Design System**](DESIGN_SYSTEM.md) | Round-screen visual design principles, 360×360 circular geometry constraints, touch affordances, typography, and LVGL 9 styling. | Designers & UI Devs |
 
 ### Hardware & Reverse Engineering
 

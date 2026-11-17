@@ -1,6 +1,6 @@
 # diskOS UI (`mq_ui`) - native player interface for the FiiO Snowsky Disc
 
-The on-device UI for [diskOS](https://github.com/b0hemia/diskos): a custom, round-screen music-player
+The on-device UI for [diskOS](https://github.com/IniGisah/diskos) (forked from [upstream](https://github.com/b0hemia/diskos)): a custom, round-screen music-player
 interface for the **FiiO Snowsky Disc** ($80 round-display DAP; Ingenic X2000 / MIPS32, Linux 4.4).
 It replaces the stock `mq_ui` while keeping the stock `mq_player` audio engine untouched, talking to
 it over the device's POSIX message-queue IPC.
@@ -28,10 +28,10 @@ Built with **LVGL 9.2.2** (software renderer) on a static-musl mipsel toolchain.
 | Area | Files |
 |---|---|
 | Core / loop / nav | `main.c`, `screenmgr.c` / `screens.h`, `fb_pan.c`, `ipc.c` / `ipc.h`, `config.c`, `splash.c` |
-| Now Playing + art | `ui.c` / `ui.h`, `art.c` / `art.h`, `artcache.c`, `saver.c`, `songinfo.c`, `npmenus.c` |
-| Library / browse | `home.c`, `library.c`, `musicdb.c`, `search.c`, `playlistview.c`, `scanner.c` |
-| Settings / features | `settings.c`, `power.c` / `power.h`, `eqcustom.c`, `quicksettings.c`, `modes.c`, `kbinput.c`, `colorpick.c`, `toast.c`, `apps.c`, `debug_ui.c`, `fwcaps.c` |
-| Connectivity | `wifi.c`, `bt.c`, `bt_codec_observe.c` / `bt_codec_observe.h`, `bt_prepare.c`, `weather.c`, `lyrics.c`, `lastfm.c` / `lastfm_ui.c` |
+| Now Playing + art | `ui.c` / `ui.h`, `art.c` / `art.h`, `artcache.c`, `saver.c`, `songinfo.c`, `npmenus.c`, `albumwall.c` |
+| Library / browse | `home.c`, `library.c`, `musicdb.c`, `search.c`, `playlistview.c`, `folderbrowser.c`, `upnext.c`, `scanner.c` |
+| Settings / features | `settings.c`, `power.c` / `power.h`, `usage.c`, `webui.c` / `webui.h`, `eqcustom.c`, `quicksettings.c`, `modes.c`, `kbinput.c`, `colorpick.c`, `toast.c`, `apps.c`, `debug_ui.c`, `fwcaps.c` |
+| Connectivity & Modes | `wifi.c`, `bt.c`, `modelock.c` / `modelock.h`, `bt_codec_observe.c` / `bt_codec_observe.h`, `bt_prepare.c`, `weather.c`, `lyrics.c`, `lastfm.c` / `lastfm_ui.c` |
 | Bundled third-party | `third_party/freetype-2.13.3/` (FTL), `sqlite3.c` (public domain), `jsmn.h` (MIT), `md5.c` (public domain), `font_*.c` (generated glyph data) |
 | Dev/diagnostic tools | `fbshot.c`, and other small on-device helpers (not part of the shipped UI) |
 
@@ -156,5 +156,5 @@ Bundled components retain their own licences, including LGPL-2.1-or-later for li
 See [the complete component index](../NOTICE.md) and [licence texts](../licenses/README.md).
 
 ## Contributing
-Issues and patches welcome via the [diskOS repo](https://github.com/b0hemia/diskos). By contributing
+Issues and patches welcome via the [diskOS repository](https://github.com/IniGisah/diskos) or [upstream](https://github.com/b0hemia/diskos). By contributing
 to this directory you agree your changes are licensed GPL-3.0-or-later.

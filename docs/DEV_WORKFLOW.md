@@ -77,7 +77,7 @@ relaunched from `/usr/data/mq_ui` the watchdog is satisfied and leaves it alone.
 
 The snippet above is the quick manual form; it prunes stock right away and relies on the watchdog to
 recover if your build does not start. For scripted use prefer [`../tools/diskos-deploy.sh`](../tools/diskos-deploy.sh),
-which includes stream upload progress (via `pv`), remote MD5 integrity verification before hot swap,
+which supports deploying and hot-reloading `mq_ui`, `payload/bluealsa`, `diskos-webd`, and web assets, with stream upload progress (via `pv`), remote MD5 integrity verification before hot swap,
 and polls until your build is confirmed running before pruning stock.
 
 To capture the live screen or inject touch gestures during development, use [`../tools/diskos-shot.sh`](../tools/diskos-shot.sh)

@@ -149,10 +149,17 @@ The shutdown animation mirrors the boot splash in reverse, providing graceful vi
 
 - Prefer five or fewer visible rows at once.
 - Use 56 px compact rows and 68 px artwork rows.
+- Selection lists (Songs, Folder Browser, Playlist View, Search, Up Next) render 36×36 track artwork thumbnail tiles backed by an in-memory 128-entry cache and 42px BMP disk lookup (`artcache_thumb_path()`).
 - High-volume lists use virtualized row recycling to avoid memory exhaustion on large collections.
 - Scrollbars (`ui_setup_scrollbar`): 3 px translucent indicator along the curvature, fading when at rest; active dragging displays scrub position.
 - Keep primary labels left-aligned inside the safe zone; reserve the outer edge for scrolling.
 - Truncate long text once; keep motion from competing with navigation.
+
+### Modals & Dialogs
+
+- Dialogs (`ui_dialog`): Enforce minimum width and horizontal padding to avoid squishing on the 360×360 circular panel.
+- Modal touch isolation: Main input loop latches `modal_touch` via `screen_modal_open()` to swallow edge back-swipes, rim wheel scrolling, and track scrubbing while modal dialogs or bottom sheets are open.
+- Dialog panels use `LV_OBJ_FLAG_CLICKABLE` to prevent accidental click bleed-through to the modal scrim.
 
 ### Circular 24-hour Usage Dial
 

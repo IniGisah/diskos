@@ -9,7 +9,7 @@ diskOS is a touch interface for the FiiO Snowsky Disc's 360x360 screen. Local pl
 - **Getting around:** [Home](#home), [Quick Settings](#quick-settings), [Volume](#volume), [Back and Home gestures](#back-and-home-gestures), [Screensaver and screen off](#screensaver-and-screen-off).
 - **Listening:** [Now Playing](#now-playing), [Now Playing menus](#now-playing-menus), [Beam](#beam), [AirPlay Receiving](#airplay-receiving), [Up Next](#up-next), [Song Info and lyrics](#song-info-and-lyrics), [Equalizer](#equalizer).
 - **Your library:** [Library](#library), [Search and keyboard](#search-and-keyboard), [Favourites and History](#favourites-and-history), [Playlists](#playlists), [Books and chapters](#books-and-chapters), [Browse Files](#browse-files).
-- **Make it yours:** [Settings](#settings), [Playback](#settings-playback), [Audio](#settings-audio), [Network](#settings-network), [Display](#settings-display), [Library](#settings-library), [Controls](#settings-controls), [Battery & Power](#settings-battery--power), [Device](#settings-device), [Eight themes](#eight-themes).
+- **Make it yours:** [Settings](#settings), [Playback](#settings-playback), [Audio](#settings-audio), [Network](#settings-network), [Display](#settings-display), [Library](#settings-library), [Controls](#settings-controls), [Battery & Power](#settings-battery-power), [Device](#settings-device), [Eight themes](#eight-themes).
 - **Network and apps:** [Wi-Fi and Bluetooth](#wi-fi-and-bluetooth), [Apps, Last.fm, and weather](#apps-lastfm-and-weather).
 - **Updates and safety:** [Updates, startup, and power](#updates-startup-and-power), [Limits](#limits), [Safety and stock UI](#safety-and-stock-ui).
 
@@ -375,6 +375,7 @@ Display controls appearance and idle behavior. Changing theme or text size redra
 |---|---|
 | Artists | By Artist by default; By Album Artist uses album-artist tags. Unsupported firmware says "Not on this firmware". |
 | Track Numbers | Off by default; show numbers in album song lists. |
+| Track Artwork | On by default; displays 36×36 album art thumbnail tiles across Library Songs, Folder Browser, Playlist View, Search results, and Up Next queue (backed by an in-memory 128-entry cache and 42px BMP lookup on MicroSD). |
 | Album View | List by default; choose List or Cover Flow for Albums. |
 
 #### Artwork and lyrics
@@ -506,12 +507,10 @@ With Weather on Home enabled, tap the glance to open Weather. "Weather unavailab
 
 ### Updates, startup, and power
 
-1.2.1 users can install the signed 1.2.2 app update over Wi-Fi from Settings > System >
-Update diskOS if updates are allowed. Fresh installs and older versions use the installer.
+Users can check for and install signed diskOS app updates over Wi-Fi from Settings > Device > Update diskOS if updates are allowed, or developers can stage signed builds using `./tools/diskos-ota-push.sh`. Fresh installs use the installer.
 The app update replaces only diskOS, not stock firmware or the whole image. It does not
-replace the boot install script. The network name hook, the per-flash identity and the
-boot-script update-retention fix require a full flash with the complete 1.2.2 installer; see the
-[release notes](RELEASE_NOTES_1.2.2.md).
+replace the boot install script. Major base updates and initial installations require a full flash with the
+complete installer; see the [release notes](RELEASE_NOTES_1.6_CUSTOM.md).
 A download shows a progress bar with a percentage and a Cancel button, then Verifying and Saving.
 With Automatic Update Checks on, a new release is announced once; downloading still needs your tap.
 The release installer includes the diskOS release key by default; untick "Allow diskOS

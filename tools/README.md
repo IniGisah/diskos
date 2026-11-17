@@ -10,7 +10,7 @@ first.
 ## Contents
 | Script | What it does |
 |---|---|
-| `diskos-deploy.sh` | Push a built `mq_ui` to the device, verify it, and hot-reload it safely |
+| `diskos-deploy.sh` | Push built `mq_ui`, `bluealsa`, `diskos-webd`, and web assets to the device, verify them, and hot-reload safely |
 | `diskos-ota-keygen.sh` | Generate ECDSA P-256 root and leaf keypairs for custom permanent OTA updates |
 | `diskos-ota-push.sh` | Sign and stage a custom `mq_ui` update to the device over Wi-Fi (permanent across reboots) |
 | `diskos-shot.sh` | Capture the device screen to a PNG |
