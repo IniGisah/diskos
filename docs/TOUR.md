@@ -1,4 +1,4 @@
-# A tour of diskOS 1.5-custom
+# A tour of diskOS 1.6-custom
 
 diskOS is a touch interface for the FiiO Snowsky Disc's 360x360 screen. Local playback uses the player supplied by the installed stock firmware; Beam plays through the selected receiver. The available player controls differ on V2.09, V2.28, V2.40, and V2.57; unavailable firmware-specific controls say "Not on this firmware". AirPlay Receiving is offered on V2.40 and V2.57 only.
 

@@ -8,7 +8,7 @@
 ### A custom round-screen interface and firmware for the FiiO Snowsky Disc
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-3D424B?style=flat-square)](docs/INSTALL.md#host-support)
-[![Release](https://img.shields.io/badge/release-v1.5--custom-blue?style=flat-square)](docs/RELEASE_NOTES_1.5_CUSTOM.md)
+[![Release](https://img.shields.io/badge/release-v1.6--custom-blue?style=flat-square)](docs/RELEASE_NOTES_1.6_CUSTOM.md)
 [![Device](https://img.shields.io/badge/device-FiiO%20Snowsky%20Disc-E06C75?style=flat-square)](docs/HARDWARE.md)
 [![Firmware](https://img.shields.io/badge/stock%20firmware-V2.09%20%7C%20V2.28%20%7C%20V2.40%20%7C%20V2.57-4E9A06?style=flat-square)](docs/INSTALL.md#requirements)
 [![Docs](https://img.shields.io/badge/docs-complete-informational?style=flat-square)](docs/README.md)
@@ -210,4 +210,4 @@ For a comprehensive error code table (`E1xx` preflight, `E2xx` build, `E3xx` fla
 | [**IPC Command Map**](docs/COMMAND_MAP.md) | Communication protocol between `mq_ui` and FiiO's `mq_player`. |
 | [**Reverse Engineering**](docs/RE_CATALOGUE.md) | Catalogue of stock binaries, audio libraries, and ioctl commands. |
 | [**Privacy & Network Use**](docs/PRIVACY.md) | Network disclosure, offline guarantees, and Last.fm privacy details. |
-| [**Release Notes v1.5-custom**](docs/RELEASE_NOTES_1.5_CUSTOM.md) | Changelog and technical enhancements for the current release. |
+| [**Release Notes v1.6-custom**](docs/RELEASE_NOTES_1.6_CUSTOM.md) | Changelog and technical enhancements for the current release. |

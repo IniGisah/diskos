@@ -56,7 +56,8 @@ Welcome to the diskOS documentation directory. This index categorizes the guides
 
 | Document | Description | Status |
 |---|---|---|
-| [**Release Notes v1.5-custom**](RELEASE_NOTES_1.5_CUSTOM.md) | Custom fork rebase onto upstream v1.2.2, Web UI daemon, Mode Lockdown screens, full BT codec suite, sleep/wake stability, and safe shutdown. | **Current** |
+| [**Release Notes v1.6-custom**](RELEASE_NOTES_1.6_CUSTOM.md) | Track artwork thumbnails across song lists, BT receiver device management, live codec picker dialog, USB DAC host mode unblocking, and circular display polish. | **Current** |
+| [**Release Notes v1.5-custom**](RELEASE_NOTES_1.5_CUSTOM.md) | Custom fork rebase onto upstream v1.2.2, Web UI daemon, Mode Lockdown screens, full BT codec suite, sleep/wake stability, and safe shutdown. | Historical |
 | [**Release Notes v1.2.2**](RELEASE_NOTES_1.2.2.md) | Upstream v1.2.2 features: Beam to Cast/AirPlay, AirPlay Receiving, custom image screensavers, and network device renaming. | Upstream Baseline |
 | [**Release Notes v1.4-custom**](RELEASE_NOTES_1.4_CUSTOM.md) | Custom fork v1.4 additions: Touch-to-Wake, battery usage history, and playback queue safeguards. | Historical |
 | [**Release Notes v1.3-custom**](RELEASE_NOTES_1.3_CUSTOM.md) | Custom fork v1.3 additions: Hardware power button listener and startup splash screens. | Historical |

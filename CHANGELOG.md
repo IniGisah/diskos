@@ -4,6 +4,45 @@ All notable changes to diskOS are documented here.
 
 Entries follow the Keep a Changelog format, with Added, Changed, and Fixed categories where applicable.
 
+## [1.6-custom] - 2026-11-17
+
+Feature release adding track artwork thumbnails across selection lists, Bluetooth receiver device management with paired devices sheet and live codec switching, unblocked USB DAC host audio playback (Mode 4), modal touch isolation, and circular display layout polish.
+
+### Added
+
+- **Track Artwork Thumbnails Across Song Selection Lists**:
+  - Render 36×36 album art thumbnails across Library Songs, Folder Browser, Playlist View, Search, and Up Next lists (`ui/library.c`, `ui/playlistview.c`, `ui/search.c`, `ui/folderbrowser.c`, `ui/upnext.c`).
+  - Implemented zero-copy 42px BMP thumbnail lookup (`artcache_thumb_path()`) with 128-entry direct-mapped memory cache in `ui/library.c`.
+  - Added user toggle under **Settings > Library > Browsing > Track Artwork** (`song_art`).
+- **Bluetooth Receiver Device Management & Live Codec Switching**:
+  - Filtered paired devices using BlueZ cached descriptors (UUID `0000110a` A2DP Audio Source vs `0000110b` Audio Sink) to display only transmitting audio sources (phones, tablets, PCs) while omitting headphones/earbuds (`ui/modelock.c`).
+  - Added "Paired Devices" modal sheet with connection status, one-tap switching, and device forget actions (`ui/ui.c`, `ui/modelock.c`).
+  - Added live receiver codec picker dialog accessible from Now Playing and Mode Lock screens (`ui/bt.c`, `ui/modelock.c`).
+  - Integrated receiver controls (Disconnect, Paired Devices, Pair New Device) into Now Playing Options Hub (`SCR_NPHUB`).
+  - Added 14 localized strings across 10 languages and updated i18n lookup tables (`ui/i18n/strings.tsv`, `ui/i18n_tables.c`).
+- **Developer Tooling**:
+  - Added support for deploying and hot-reloading `payload/bluealsa` in `tools/diskos-deploy.sh`.
+
+### Fixed
+
+- **USB DAC Host Audio Playback (Mode 4)**:
+  - Replaced premature `!ui_usb_dac_connected()` check in `ui_set_source_mode()` with `fw_has_usb_audio_out()` so DWC2 can switch to host mode and supply VBUS power before enumerating the external DAC (`ui/main.c`).
+  - Allowed Mode 4 in `ui_local_playback_allowed()`, MicroSD coldplug mounting, and playlist starts.
+  - Fixed `ui_detect_source_mode()` to report Mode 4, preventing spurious "Mode didn't switch" toasts and checkmark reversions.
+  - Initialized `usb_dac_disconnected_latched` outside Mode 4 to suppress false disconnect toasts during USB enumeration on initial entry.
+- **Bluetooth Stability**:
+  - Avoided sending transmitter command `06b3` to `mq_player` in receiver mode, preventing crashes on receiver codec changes (`ui/bt.c`).
+  - Added auto-healing watchdog in `bt_rx_worker()` for `bluetoothd` and `bluealsa`.
+- **Modal Gesture & Touch Isolation**:
+  - Latched `modal_touch` via `screen_modal_open()` in main input loop to swallow edge back-swipes, rim wheel scrolling, and track scrubbing while modal dialogs or sheets are active (`ui/main.c`).
+  - Added `LV_OBJ_FLAG_CLICKABLE` to `ui_dialog` panels to eliminate tap bleed-through to scrim layer (`ui/ui_dialog.c`).
+- **Circular Display Polish**:
+  - Header font step-down to `HEADER_SM` before multi-line split and tightened header vertical descent to prevent screen edge clipping.
+  - Inset quick settings header, date box, and battery summary away from round bezel corners.
+  - Enforced minimum dialog width and padding in `ui_dialog` to prevent squishing on round screens.
+  - Restricted fast-scroll activation to lists with content overflow $\ge 180\text{ px}$.
+  - Fixed A–Z rim scroll letter tick index calculation in library view.
+
 ## [1.5-custom] - 2026-10-26
 
 Integrated custom release merging upstream diskOS v1.2.2 (`53a9cc5`) into `release/v1.5-custom`, combining all upstream Beam/Cast/AirPlay receiver and device names features with diskOS custom extensions.
