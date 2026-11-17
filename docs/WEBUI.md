@@ -81,7 +81,7 @@ For users building or flashing a custom diskOS firmware image using `diskos_inst
 
 1. **How it works**:
    - The installer automatically embeds `diskos-webd`, `diskos-web.sh`, and `diskos-web-assets.tar.gz` into the SquashFS rootfs (`opt/diskos/bin/` and `opt/diskos/web.tar.gz`).
-   - On first boot, the fail-closed boot hook [`payload/S97diskos_install`](file:///home/luii/Documents/diskos/payload/S97diskos_install#L502-L516) unpacks and installs the binaries into the persistent UBIFS partition `/usr/data/bin/` and `/usr/data/web/`.
+   - On first boot, the fail-closed boot hook [`payload/S97diskos_install`](../payload/S97diskos_install) unpacks and installs the binaries into the persistent UBIFS partition `/usr/data/bin/` and `/usr/data/web/`.
 2. **Usage**:
    - Run the standard installer:
      ```sh
