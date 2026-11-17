@@ -54,6 +54,14 @@ WEB_DIR=""
 if [ -d "web" ] && [ -f "web/index.html" ]; then WEB_DIR="web"
 fi
 
+BLUEALSA_BIN=""
+if [ -f "payload/bluealsa" ]; then BLUEALSA_BIN="payload/bluealsa"
+fi
+
+BLUEALSA_CUSTOM_BIN=""
+if [ -f "payload/bluealsa-custom" ]; then BLUEALSA_CUSTOM_BIN="payload/bluealsa-custom"
+fi
+
 # password via SSHPASS (sshpass -e), not the command line, so it is not visible in the process list.
 # -o LogLevel=ERROR suppresses non-fatal warnings (e.g. OpenSSH post-quantum key exchange warnings).
 SSH=(sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 -o LogLevel=ERROR)
@@ -63,6 +71,8 @@ echo ">> Binary:      $BIN (${BIN_SIZE_MB} MB, md5: $MD5)"
 if [ -n "$WEBD_BIN" ]; then echo ">> Web daemon:  $WEBD_BIN"; fi
 if [ -n "$WEBSH_BIN" ]; then echo ">> Web script:  $WEBSH_BIN"; fi
 if [ -n "$WEB_DIR" ]; then echo ">> Web assets:  $WEB_DIR/"; fi
+if [ -n "$BLUEALSA_BIN" ]; then echo ">> BlueALSA:    $BLUEALSA_BIN"; fi
+if [ -n "$BLUEALSA_CUSTOM_BIN" ]; then echo ">> BlueALSA bin:$BLUEALSA_CUSTOM_BIN"; fi
 
 stream_with_progress() {
   local file="$1"
@@ -136,6 +146,16 @@ if [ -n "$WEB_DIR" ]; then
   tar -c -C "$WEB_DIR" index.html style.css app.js | "${SSH[@]}" "root@$IP" 'tar -x -C /usr/data/web/'
 fi
 
+# 3b. Deploy BlueALSA wrapper and binary if present
+if [ -n "$BLUEALSA_BIN" ]; then
+  echo ">> [3b/4] Uploading BlueALSA wrapper (/usr/data/bluealsa)..."
+  "${SSH[@]}" "root@$IP" 'cat > /usr/data/bluealsa && chmod 755 /usr/data/bluealsa' < "$BLUEALSA_BIN"
+fi
+if [ -n "$BLUEALSA_CUSTOM_BIN" ]; then
+  echo ">> [3c/4] Uploading bluealsa-custom binary (/usr/data/bin/bluealsa-custom)..."
+  "${SSH[@]}" "root@$IP" 'cat > /usr/data/bin/bluealsa-custom && chmod 755 /usr/data/bin/bluealsa-custom' < "$BLUEALSA_CUSTOM_BIN"
+fi
+
 # 4. Swap in and hot-reload, in a failure-aware order.
 #    IMPORTANT: only ever touch mq_ui. NEVER kill mq_player - that frees the SD card and the
 #    hardware MCU reboots the whole device (~10s).
@@ -205,6 +225,14 @@ fi
 echo "   [6/6] Restarting diskOS Web Server daemon..."
 if [ -x /usr/data/bin/diskos-web.sh ]; then
   /bin/sh /usr/data/bin/diskos-web.sh restart >/dev/null 2>&1 || true
+fi
+
+if [ -x /usr/data/bluealsa ] && [ -e /opt/diskos/bin/bluealsa ]; then
+  mount -o bind /usr/data/bluealsa /opt/diskos/bin/bluealsa 2>/dev/null || true
+fi
+if pidof bluealsa bluealsa-custom >/dev/null 2>&1; then
+  echo "   [+] Refreshing BlueALSA daemon..."
+  killall -9 bluealsa bluealsa-custom 2>/dev/null || true
 fi
 
 player_pid="$(pidof mq_player 2>/dev/null || true)"

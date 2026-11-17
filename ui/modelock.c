@@ -214,6 +214,34 @@ void bt_rx_get_progress(uint32_t *out_elapsed_ms, uint32_t *out_dur_ms, int *out
     if(out_fraction) *out_fraction = frac;
 }
 
+/* Ensure Bluetooth Receiver daemons & HCI interface are running and healthy */
+static void bt_rx_stack_heal(void){
+    char chk[64] = {0};
+    int btd_up = (exec_cmd_capture("pidof bluetoothd 2>/dev/null", chk, sizeof chk, 150) > 0 && chk[0]);
+    chk[0] = 0;
+    int hci_up = (exec_cmd_capture("hciconfig hci0 2>/dev/null | grep RUNNING", chk, sizeof chk, 200) > 0 && chk[0]);
+    chk[0] = 0;
+    int ba_up = (exec_cmd_capture("pidof bluealsa bluealsa-custom 2>/dev/null", chk, sizeof chk, 150) > 0 && chk[0]);
+
+    if(!btd_up || !hci_up || !ba_up){
+        diskos_trace("bt_rx_stack_heal: auto-healing BT receiver stack (btd=%d hci=%d ba=%d)", btd_up, hci_up, ba_up);
+        system(
+            "( hciconfig hci0 up 2>/dev/null || ( rfkill unblock bluetooth 2>/dev/null; sleep 0.5; hciconfig hci0 up 2>/dev/null ); "
+            "  pidof bluetoothd >/dev/null 2>&1 || /usr/project/bluetoothd --noplugin=sap --plugin=a2dp,avrcp >/tmp/btd.log 2>&1 & "
+            "  pidof bluealsa >/dev/null 2>&1 || pidof bluealsa-custom >/dev/null 2>&1 || /opt/diskos/bin/bluealsa -S --device=hci0 >/tmp/bluealsa.log 2>&1 & "
+            "  sleep 0.5; "
+            "  bluetoothctl power on 2>/dev/null; "
+            "  hciconfig hci0 piscan 2>/dev/null; "
+            "  hciconfig hci0 class 0x200414 2>/dev/null; "
+            "  bluetoothctl agent on 2>/dev/null; "
+            "  bluetoothctl default-agent 2>/dev/null; "
+            "  bluetoothctl discoverable on 2>/dev/null; "
+            "  bluetoothctl pairable on 2>/dev/null ) >/dev/null 2>&1 &"
+        );
+        ipc_send_cmd("0657000C0006");
+    }
+}
+
 /* Background worker thread: polls Bluetooth connection and AVRCP track info */
 static void *bt_rx_worker(void *arg){
     (void)arg;
@@ -224,6 +252,7 @@ static void *bt_rx_worker(void *arg){
     char pcm_path[128] = {0};
     char local_name[64] = {0};
     int found = 0;
+    int heal_counter = 0;
 
     dn_bt_name_copy(local_name, sizeof local_name);
 
@@ -325,9 +354,17 @@ static void *bt_rx_worker(void *arg){
                 g_bt_state.position_ms = 0;
                 g_bt_state.pos_anchor_ms = 0;
                 pthread_mutex_unlock(&g_bt_mu);
+
+                if(++heal_counter >= 3){
+                    heal_counter = 0;
+                    bt_rx_stack_heal();
+                }
+
                 usleep(1500000);
                 continue;
             }
+
+            heal_counter = 0;
 
             /* Connected! Query device name once */
             snprintf(name, sizeof name, "Connected Device");
@@ -690,8 +727,8 @@ static int rx_is_audio_source(const char *mac){
         if(has_src) return 1; /* Transmits audio */
         if(has_snk) return 0; /* Pure sink (earbuds/headphones/speakers) */
 
-        /* If services are listed but neither audio source nor audio sink, exclude */
-        return 0;
+        /* If services are listed but neither audio source nor audio sink,
+         * fall through to check Class of Device instead of blindly excluding! */
     }
 
     /*
@@ -724,7 +761,6 @@ int bt_rx_get_paired_devices(bt_rx_device_t *out, int max_devs){
     if(!out || max_devs <= 0) return 0;
     char buf[4096];
     int n = exec_cmd_capture("bluetoothctl paired-devices 2>/dev/null", buf, sizeof buf, 400);
-    if(n <= 0) return 0;
 
     char cur_mac[20] = {0};
     int is_conn = 0;
@@ -735,45 +771,121 @@ int bt_rx_get_paired_devices(bt_rx_device_t *out, int max_devs){
     pthread_mutex_unlock(&g_bt_mu);
 
     int count = 0;
-    char *line = buf;
-    while(line && *line && count < max_devs){
-        char *nl = strchr(line, '\n');
-        if(nl) *nl = 0;
-        char *cr = strchr(line, '\r');
-        if(cr) *cr = 0;
+    if(n > 0){
+        char *line = buf;
+        while(line && *line && count < max_devs){
+            char *nl = strchr(line, '\n');
+            if(nl) *nl = 0;
+            char *cr = strchr(line, '\r');
+            if(cr) *cr = 0;
 
-        /* format: "Device AA:BB:CC:DD:EE:FF Friendly Name" */
-        if(!strncmp(line, "Device ", 7) && strlen(line) > 7 + 17){
-            char mac[20];
-            memcpy(mac, line + 7, 17);
-            mac[17] = 0;
-            const char *raw_name = line + 7 + 17;
-            while(*raw_name == ' ' || *raw_name == '\t') raw_name++;
+            /* format: "Device AA:BB:CC:DD:EE:FF Friendly Name" */
+            if(!strncmp(line, "Device ", 7) && strlen(line) > 7 + 17){
+                char mac[20];
+                memcpy(mac, line + 7, 17);
+                mac[17] = 0;
+                const char *raw_name = line + 7 + 17;
+                while(*raw_name == ' ' || *raw_name == '\t') raw_name++;
 
-            if(rx_mac_valid(mac)){
-                int is_cur = (is_conn && cur_mac[0] && !strcasecmp(cur_mac, mac));
-                /* In BT Receiver mode, filter out non-audio sources (e.g. TWS earbuds, headphones, speakers) */
-                if(!is_cur && !rx_is_audio_source(mac)){
-                    diskos_trace("bt_rx_get_paired_devices: filtering out non-source %s (%s)", mac, raw_name);
-                    line = nl ? (nl + 1) : NULL;
-                    continue;
+                if(rx_mac_valid(mac)){
+                    int is_cur = (is_conn && cur_mac[0] && !strcasecmp(cur_mac, mac));
+                    /* In BT Receiver mode, filter out non-audio sources (e.g. TWS earbuds, headphones, speakers) */
+                    if(!is_cur && !rx_is_audio_source(mac)){
+                        diskos_trace("bt_rx_get_paired_devices: filtering out non-source %s (%s)", mac, raw_name);
+                        line = nl ? (nl + 1) : NULL;
+                        continue;
+                    }
+
+                    snprintf(out[count].mac, sizeof out[count].mac, "%s", mac);
+                    /* Try user-defined alias first */
+                    char alias[64] = {0};
+                    if(btalias_get(mac, alias, sizeof alias, 80) == BTALIAS_OK && alias[0]){
+                        snprintf(out[count].name, sizeof out[count].name, "%s", alias);
+                    } else if(raw_name[0]){
+                        snprintf(out[count].name, sizeof out[count].name, "%s", raw_name);
+                    } else {
+                        snprintf(out[count].name, sizeof out[count].name, "%s", mac);
+                    }
+                    out[count].connected = is_cur ? 1 : 0;
+                    count++;
                 }
-
-                snprintf(out[count].mac, sizeof out[count].mac, "%s", mac);
-                /* Try user-defined alias first */
-                char alias[64] = {0};
-                if(btalias_get(mac, alias, sizeof alias, 80) == BTALIAS_OK && alias[0]){
-                    snprintf(out[count].name, sizeof out[count].name, "%s", alias);
-                } else if(raw_name[0]){
-                    snprintf(out[count].name, sizeof out[count].name, "%s", raw_name);
-                } else {
-                    snprintf(out[count].name, sizeof out[count].name, "%s", mac);
-                }
-                out[count].connected = is_cur ? 1 : 0;
-                count++;
             }
+            line = nl ? (nl + 1) : NULL;
         }
-        line = nl ? (nl + 1) : NULL;
+    }
+
+    /* Fallback: if bluetoothctl failed, stalled, or returned 0 devices,
+     * read paired devices directly from BlueZ filesystem directories so
+     * the paired device list is never empty during daemon glitches or restarts! */
+    if(count == 0){
+        static const char *bases[] = {
+            "/usr/data/storebluetooth/lib/bluetooth",
+            "/var/lib/bluetooth",
+            NULL
+        };
+        for(int b = 0; bases[b] && count < max_devs; b++){
+            DIR *dir = opendir(bases[b]);
+            if(!dir) continue;
+            struct dirent *ade;
+            while((ade = readdir(dir)) != NULL && count < max_devs){
+                if(ade->d_name[0] == '.' || !strcmp(ade->d_name, "cache")) continue;
+                char ad_path[256];
+                snprintf(ad_path, sizeof ad_path, "%s/%s", bases[b], ade->d_name);
+                DIR *devdir = opendir(ad_path);
+                if(!devdir) continue;
+                struct dirent *dde;
+                while((dde = readdir(devdir)) != NULL && count < max_devs){
+                    if(dde->d_name[0] == '.') continue;
+                    char dmac[20] = {0};
+                    snprintf(dmac, sizeof dmac, "%s", dde->d_name);
+                    if(!rx_mac_valid(dmac)) continue;
+
+                    char ipath[300];
+                    snprintf(ipath, sizeof ipath, "%s/%s/info", ad_path, dmac);
+                    FILE *f = fopen(ipath, "r");
+                    if(!f) continue;
+                    char ibuf[1536];
+                    size_t rn = fread(ibuf, 1, sizeof ibuf - 1, f);
+                    fclose(f);
+                    if(rn == 0) continue;
+                    ibuf[rn] = 0;
+
+                    /* Check if device was paired / has a link key */
+                    if(!strstr(ibuf, "Key=") && !strstr(ibuf, "LinkKey") && !strstr(ibuf, "Paired=true"))
+                        continue;
+
+                    if(!rx_is_audio_source(dmac)) continue;
+
+                    /* Extract Name= */
+                    char dname[64] = {0};
+                    char *np = strstr(ibuf, "Name=");
+                    if(np){
+                        np += 5; while(*np == ' ' || *np == '\t') np++;
+                        char *ne = strpbrk(np, "\r\n");
+                        int nlen = ne ? (int)(ne - np) : (int)strlen(np);
+                        if(nlen > 0 && nlen < (int)sizeof(dname)){
+                            memcpy(dname, np, nlen);
+                            dname[nlen] = 0;
+                        }
+                    }
+
+                    int is_cur = (is_conn && cur_mac[0] && !strcasecmp(cur_mac, dmac));
+                    snprintf(out[count].mac, sizeof out[count].mac, "%s", dmac);
+                    char alias[64] = {0};
+                    if(btalias_get(dmac, alias, sizeof alias, 80) == BTALIAS_OK && alias[0]){
+                        snprintf(out[count].name, sizeof out[count].name, "%s", alias);
+                    } else if(dname[0]){
+                        snprintf(out[count].name, sizeof out[count].name, "%s", dname);
+                    } else {
+                        snprintf(out[count].name, sizeof out[count].name, "%s", dmac);
+                    }
+                    out[count].connected = is_cur ? 1 : 0;
+                    count++;
+                }
+                closedir(devdir);
+            }
+            closedir(dir);
+        }
     }
 
     /* Move connected device to index 0 if present */
@@ -1225,6 +1337,11 @@ static void modelock_back_btn_cb(lv_event_t *e){
     modelock_prompt_exit();
 }
 
+static void modelock_bt_codec_badge_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    bt_show_codec_dialog();
+}
+
 void modelock_create(lv_obj_t *root){
     g_lock_root = root;
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
@@ -1350,6 +1467,8 @@ void modelock_create(lv_obj_t *root){
     lv_obj_set_style_border_width(g_bt_codec_badge, 1, 0);
     lv_obj_set_style_border_color(g_bt_codec_badge, ui_current_accent(), 0);
     lv_obj_clear_flag(g_bt_codec_badge, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_bt_codec_badge, LV_OBJ_FLAG_CLICKABLE);
+    ui_on(g_bt_codec_badge, modelock_bt_codec_badge_cb, LV_EVENT_CLICKED, NULL, "modelock.codec_badge", UI_CORE);
 
     g_bt_codec_lbl = lv_label_create(g_bt_codec_badge);
     lv_label_set_text(g_bt_codec_lbl, "Bluetooth Audio");

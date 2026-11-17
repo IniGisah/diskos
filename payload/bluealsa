@@ -42,6 +42,12 @@ elif [ -f /usr/data/diskos.conf ]; then
     fi
 fi
 
+# Check if a specific receiver codec preference is configured
+RX_CODEC=""
+if [ -f /usr/data/bt_rx_codec ]; then
+    RX_CODEC="$(cat /usr/data/bt_rx_codec 2>/dev/null | tr -d '\r\n ')"
+fi
+
 # Ensure both a2dp-source and a2dp-sink are registered
 HAS_SOURCE=0
 HAS_SINK=0
@@ -86,6 +92,49 @@ if [ "$LL_ENABLED" -eq 1 ]; then
     # Disable high-latency / buffered codecs (AAC, aptX, aptX-HD, LDAC) so Android/iOS/PC
     # negotiates SBC only, keeping audio latency low (~80-120ms).
     exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD --codec=-ldac
+elif [ -n "$RX_CODEC" ] && [ "$RX_CODEC" != "AUTO" ] && [ "$RX_CODEC" != "Auto" ]; then
+    # PREFERRED RECEIVER CODEC MODE:
+    case "$RX_CODEC" in
+        SBC|sbc)
+            exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD --codec=-ldac
+            ;;
+        AAC|aac)
+            exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=aac --codec=sbc --codec=-aptX --codec=-aptX-HD --codec=-ldac
+            ;;
+        LDAC|ldac)
+            exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=ldac --codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD
+            ;;
+        aptX|aptx)
+            case "$TARGET" in
+                *bluealsa-custom*)
+                    exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=aptX --codec=sbc --codec=-aac --codec=-aptX-HD --codec=-ldac
+                    ;;
+                *)
+                    exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=aac --codec=ldac
+                    ;;
+            esac
+            ;;
+        aptX-HD|aptx-hd|aptXHD)
+            case "$TARGET" in
+                *bluealsa-custom*)
+                    exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=aptX-HD --codec=sbc --codec=-aac --codec=-aptX --codec=-ldac
+                    ;;
+                *)
+                    exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=aac --codec=ldac
+                    ;;
+            esac
+            ;;
+        *)
+            case "$TARGET" in
+                *bluealsa-custom*)
+                    exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=aac --codec=aptX --codec=aptX-HD --codec=ldac
+                    ;;
+                *)
+                    exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=aac --codec=ldac
+                    ;;
+            esac
+            ;;
+    esac
 else
     # STANDARD MODE:
     # Enable all codecs: SBC, AAC, aptX, aptX-HD, LDAC

@@ -880,13 +880,15 @@ static const setting_t TABLE[] = {
 static int get_val(const setting_t *s){
     if(s->cfg_key && !strcmp(s->cfg_key, "bt_codec")){
         int cfg_v = cfg_get_int("bt_codec", -1);
+        if(ui_get_source_mode() == 2)
+            return (cfg_v >= 0 && cfg_v < BT_CODEC_N) ? cfg_v : 0;
         if(cfg_v >= 5 && cfg_v < BT_CODEC_N) return cfg_v;
         int v = mdb_sysconfig_bt_codec();
         if(g_bt_codec_pending >= 0){
             if(v == g_bt_codec_pending) g_bt_codec_pending = -1;
             else return g_bt_codec_pending;
         }
-        return v;
+        return v >= 0 ? v : (cfg_v >= 0 ? cfg_v : 0);
     }
     if(s->cfg_key && !strcmp(s->cfg_key, "ota_auto"))
         return !strcmp(cfg_get_str(s->cfg_key, "0"), "1");
@@ -943,7 +945,7 @@ static int setting_unavailable(const setting_t *s){
     return s->cfg_key && ((!strcmp(s->cfg_key, "audio_gain") && fw_gain_tag() == NULL)
                        || (!strcmp(s->cfg_key, "artist_class") && !fw_artist_class_settable())
                        || (!strcmp(s->cfg_key, "folder_jump") && !fw_folder_jump_settable())
-                       || (!strcmp(s->cfg_key, "bt_codec") && fw_os_ver() != 257)
+                       || (!strcmp(s->cfg_key, "bt_codec") && ui_get_source_mode() != 2 && fw_os_ver() != 257)
                        || (!strcmp(s->cfg_key, "ota_allow") && !ota_supported(&OTA_DEV))
                        || (!strcmp(s->cfg_key, "ota_auto") && !ota_supported(&OTA_DEV))
                        || ((!strcmp(s->cfg_key, "idle_off_idx") || !strcmp(s->cfg_key, "charge_protect")
@@ -1062,6 +1064,13 @@ static void detail_slider_release_cb(lv_event_t *e){
 static void bt_codec_saved_tick(lv_timer_t *t){
     (void)t;
     if(screen_current() != SCR_SETTING_DETAIL || !g_active || !g_active->cfg_key || strcmp(g_active->cfg_key, "bt_codec")) return;
+    if(ui_get_source_mode() == 2){
+        if(g_bt_codec_pending >= 0){
+            g_bt_codec_pending = -1;
+            setting_detail_refresh();
+        }
+        return;
+    }
     int v = (cfg_get_int("bt_codec", -1) >= 5) ? cfg_get_int("bt_codec", -1) : mdb_sysconfig_bt_codec();
     if(g_bt_codec_pending >= 0){
         if(v == g_bt_codec_pending || ++g_bt_codec_pending_ticks > 3){

@@ -187,6 +187,7 @@ void bt_info_refresh(void);
 extern const char *const BT_CODEC_LABEL[BT_CODEC_N];
 int ui_bt_codec_frame(const char *mac, char *out, int cap); /* legacy route frame */
 int ui_bt_codec_set(int value);   /* explicit Settings action only; stock saves and applies it */
+void bt_show_codec_dialog(void);
 void bt_rx_low_latency_apply(int enable);
 int  bt_rx_low_latency_enabled(void);
 const char *ui_route_mac(void);                  /* main.c: MAC the player is routed to, "" when local */

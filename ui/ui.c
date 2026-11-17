@@ -3065,6 +3065,121 @@ void bt_show_paired_devices_dialog(void){
     ui_dialog_finalize(&d);
 }
 
+static lv_obj_t *s_bt_codec_dlg = NULL;
+
+typedef struct {
+    int codec_idx;
+    lv_obj_t *scrim;
+} bt_codec_row_ud_t;
+static bt_codec_row_ud_t s_codec_rows[BT_CODEC_N];
+
+static void bt_codec_dlg_cleanup(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_DELETE){
+        if(s_bt_codec_dlg == lv_event_get_target(e)){
+            s_bt_codec_dlg = NULL;
+        }
+    }
+}
+
+static void bt_codec_close_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    lv_obj_t *scrim = (lv_obj_t *)lv_event_get_user_data(e);
+    if(!scrim) scrim = s_bt_codec_dlg;
+    if(scrim){
+        lv_obj_delete_async(scrim);
+        s_bt_codec_dlg = NULL;
+    }
+}
+
+static void bt_codec_select_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    bt_codec_row_ud_t *ud = (bt_codec_row_ud_t *)lv_event_get_user_data(e);
+    int idx = ud ? ud->codec_idx : -1;
+    lv_obj_t *scrim = (ud && ud->scrim) ? ud->scrim : s_bt_codec_dlg;
+    if(scrim){
+        lv_obj_delete_async(scrim);
+        s_bt_codec_dlg = NULL;
+    }
+    if(idx >= 0 && idx < BT_CODEC_N){
+        if(ui_bt_codec_set(idx) == 0){
+            char toast_buf[64];
+            snprintf(toast_buf, sizeof toast_buf, "%s: %s", tr("Bluetooth Codec"), BT_CODEC_LABEL[idx]);
+            ui_toast(toast_buf);
+        } else {
+            ui_toast("Couldn't change Bluetooth codec");
+        }
+    }
+}
+
+void bt_show_codec_dialog(void){
+    if(s_bt_codec_dlg){
+        lv_obj_delete_async(s_bt_codec_dlg);
+        s_bt_codec_dlg = NULL;
+    }
+
+    ui_dialog_cfg_t cfg = { .width = 288, .margin = 4, .scrim = 1, .actions = 1, .fit_width = 1 };
+    ui_dialog_t d = ui_dialog_create(lv_layer_top(), &cfg);
+    s_bt_codec_dlg = d.scrim;
+    ui_on(d.scrim, bt_codec_close_cb, LV_EVENT_CLICKED, d.scrim, "bt.codec_scrim", UI_CORE);
+    lv_obj_add_event_cb(d.scrim, bt_codec_dlg_cleanup, LV_EVENT_DELETE, NULL);
+
+    lv_obj_t *t = ui_dialog_label(&d, tr("Bluetooth Codec"));
+    lv_obj_set_style_text_font(t, TF(UI_18), 0);
+    lv_obj_set_style_text_color(t, TC(TEXT_PRIMARY), 0);
+
+    lv_obj_set_style_pad_row(d.content, 4, 0);
+
+    int cur_idx = cfg_get_int("bt_codec", 0);
+    if(cur_idx < 0 || cur_idx >= BT_CODEC_N) cur_idx = 0;
+
+    for(int i = 0; i < BT_CODEC_N; i++){
+        s_codec_rows[i].codec_idx = i;
+        s_codec_rows[i].scrim = d.scrim;
+
+        lv_obj_t *row = lv_button_create(d.content);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_size(row, LV_PCT(100), 36);
+        lv_obj_set_style_radius(row, 8, 0);
+        lv_obj_set_style_bg_color(row, TC(SURFACE_RAISED), 0);
+        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(row, TC(SURFACE_PRESSED), LV_STATE_PRESSED);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        ui_on(row, bt_codec_select_cb, LV_EVENT_CLICKED, &s_codec_rows[i], "bt.codec_row", UI_CORE);
+
+        lv_obj_t *lbl = lv_label_create(row);
+        char disp[64];
+        if(i == cur_idx){
+            snprintf(disp, sizeof disp, "%s  %s", LV_SYMBOL_OK, BT_CODEC_LABEL[i]);
+            lv_obj_set_style_text_color(lbl, ui_current_accent(), 0);
+        } else {
+            snprintf(disp, sizeof disp, "    %s", BT_CODEC_LABEL[i]);
+            lv_obj_set_style_text_color(lbl, TC(TEXT_PRIMARY), 0);
+        }
+        lv_label_set_text(lbl, disp);
+        lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 12, 0);
+        lv_obj_set_style_text_font(lbl, TF(UI_14), 0);
+    }
+
+    ui_dialog_button(&d, tr("Cancel"), THEME_CLR_TEXT_SECONDARY, bt_codec_close_cb, "bt.codec_cancel");
+    ui_dialog_finalize(&d);
+}
+
+static void bt_tag_codec_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    lv_obj_t *dlg = (lv_obj_t *)lv_event_get_user_data(e);
+    if(!dlg) dlg = s_bt_tag_dlg;
+    if(dlg){
+        lv_obj_delete_async(dlg);
+        s_bt_tag_dlg = NULL;
+    }
+    bt_show_codec_dialog();
+}
+
+static void bt_codec_badge_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    bt_show_codec_dialog();
+}
+
 static void bt_devices_btn_cb(lv_event_t *e){
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     bt_show_paired_devices_dialog();
@@ -3131,6 +3246,7 @@ static void bt_tag_click_cb(lv_event_t *e){
             lv_obj_set_style_text_color(sub, ui_current_accent(), 0);
         }
 
+        bt_dlg_action_btn(d.content, tr("Change Codec"), THEME_CLR_ACCENT_PRIMARY, bt_tag_codec_cb, d.scrim, "bt.act_codec");
         bt_dlg_action_btn(d.content, tr("Disconnect"), THEME_CLR_STATUS_DANGER, bt_tag_disconnect_cb, d.scrim, "bt.act_disc");
         bt_dlg_action_btn(d.content, tr("Switch Device"), THEME_CLR_ACCENT_PRIMARY, bt_tag_switch_cb, d.scrim, "bt.act_switch");
         bt_dlg_action_btn(d.content, tr("Pair New Device"), THEME_CLR_ACCENT_PRIMARY, bt_tag_pairing_cb, d.scrim, "bt.act_pair");
@@ -3144,6 +3260,7 @@ static void bt_tag_click_cb(lv_event_t *e){
         lv_obj_set_style_text_font(sub, TF(UI_12), 0);
         lv_obj_set_style_text_color(sub, ui_current_accent(), 0);
 
+        bt_dlg_action_btn(d.content, tr("Change Codec"), THEME_CLR_ACCENT_PRIMARY, bt_tag_codec_cb, d.scrim, "bt.act_codec");
         bt_dlg_action_btn(d.content, tr("Paired Devices"), THEME_CLR_ACCENT_PRIMARY, bt_tag_switch_cb, d.scrim, "bt.act_devs");
         bt_dlg_action_btn(d.content, tr("Refresh Discovery"), THEME_CLR_ACCENT_PRIMARY, bt_tag_pairing_cb, d.scrim, "bt.act_pair");
         bt_dlg_action_btn(d.content, tr("Return to Local"), THEME_CLR_TEXT_PRIMARY, bt_exit_confirm_cb, d.scrim, "bt.act_exit");
@@ -3264,6 +3381,8 @@ static void bt_view_create(lv_obj_t *root){
     lv_obj_set_style_border_width(g_bt_codec_badge, 1, 0);
     lv_obj_set_style_border_color(g_bt_codec_badge, ui_current_accent(), 0);
     lv_obj_clear_flag(g_bt_codec_badge, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_bt_codec_badge, LV_OBJ_FLAG_CLICKABLE);
+    ui_on(g_bt_codec_badge, bt_codec_badge_cb, LV_EVENT_CLICKED, NULL, "bt.codec_badge", UI_CORE);
 
     g_bt_codec_lbl = lv_label_create(g_bt_codec_badge);
     lv_label_set_text(g_bt_codec_lbl, "Bluetooth Audio");

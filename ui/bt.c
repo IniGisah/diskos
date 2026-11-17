@@ -377,10 +377,7 @@ int ui_bt_codec_frame(const char *mac, char *out, int cap){
 int ui_bt_codec_set(int value){
     if(value < 0 || value >= BT_CODEC_N) return -1;
     cfg_set_int("bt_codec", value);
-    if(value <= 4 && fw_os_ver() == 257){
-        char frame[16]; snprintf(frame, sizeof frame, "06b3000C%04X", (unsigned)value);
-        ipc_send_cmd(frame);
-    }
+
     const char *codec_arg = NULL;
     switch(value){
         case 0: codec_arg = "SBC"; break;
@@ -391,11 +388,61 @@ int ui_bt_codec_set(int value){
         case 5: codec_arg = "aptX"; break;
         case 6: codec_arg = "aptX-HD"; break;
     }
+
+    if(ui_get_source_mode() == 2){
+        /* BLUETOOTH RECEIVING MODE (Mode 2 / A2DP Sink):
+         * NEVER send 06b3 to mq_player here: 06b3 is transmitter-only and invokes
+         * set_out_dev_sample_array(2, ...) inside mq_player, which crashes mq_player
+         * and kills the bluetooth daemon.
+         * Persist the chosen receiver codec so bluealsa applies it and preserves it. */
+        if(codec_arg){
+            FILE *f = fopen("/usr/data/bt_rx_codec", "w");
+            if(f){
+                fprintf(f, "%s\n", codec_arg);
+                fclose(f);
+            }
+            if(value >= 2 && value <= 4){
+                FILE *fq = fopen("/usr/data/bt_ldac_quality", "w");
+                if(fq){
+                    fprintf(fq, "%s\n", (value == 2) ? "mobile" : (value == 4) ? "high" : "standard");
+                    fclose(fq);
+                }
+            }
+        }
+        /* Dynamic live switch on any active PCM in BlueALSA.
+         * Matches both a2dpsnk/source and a2dp-sink/source. */
+        if(codec_arg){
+            char cmd[512];
+            snprintf(cmd, sizeof cmd,
+                     "( for p in $(bluealsa-cli list-pcms 2>/dev/null); do "
+                     "    case \"$p\" in "
+                     "      *dev_*) bluealsa-cli codec \"$p\" %s 2>/dev/null || true ;; "
+                     "    esac; "
+                     "  done; "
+                     "  bluetoothctl power on 2>/dev/null; "
+                     "  hciconfig hci0 piscan 2>/dev/null; "
+                     "  bluetoothctl discoverable on 2>/dev/null; "
+                     "  bluetoothctl pairable on 2>/dev/null ) >/dev/null 2>&1 &",
+                     codec_arg);
+            bg_system(cmd);
+        }
+        return 0;
+    }
+
+    /* BLUETOOTH TRANSMITTING / LOCAL MODE:
+     * Stock V2.57 06b3 selects transmitter codec (0..4). */
+    if(value <= 4 && fw_os_ver() == 257){
+        char frame[16]; snprintf(frame, sizeof frame, "06b3000C%04X", (unsigned)value);
+        ipc_send_cmd(frame);
+    }
     if(codec_arg){
         char cmd[256];
         snprintf(cmd, sizeof cmd,
-                 "for p in $(bluealsa-cli list-pcms 2>/dev/null | grep -i 'dev_.*sink'); do "
-                 "bluealsa-cli codec \"$p\" %s >/dev/null 2>&1; done &", codec_arg);
+                 "for p in $(bluealsa-cli list-pcms 2>/dev/null); do "
+                 "  case \"$p\" in "
+                 "    *dev_*) bluealsa-cli codec \"$p\" %s >/dev/null 2>&1 ;; "
+                 "  esac; "
+                 "done &", codec_arg);
         bg_system(cmd);
     }
     return 0;

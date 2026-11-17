@@ -381,6 +381,11 @@ static void hub_bt_devices_cb(lv_event_t *e){
     screen_show(SCR_NOWPLAYING);
     bt_show_paired_devices_dialog();
 }
+static void hub_bt_codec_cb(lv_event_t *e){
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    screen_show(SCR_NOWPLAYING);
+    bt_show_codec_dialog();
+}
 static void hub_bt_force_pairing_cb(lv_event_t *e){
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     bt_rx_force_pairing();
@@ -441,6 +446,7 @@ static void nphub_populate(void){
             if(bts.connected){
                 menu_row(g_hub_list, "Disconnect", hub_bt_disconnect_cb, NULL);
             }
+            menu_row(g_hub_list, "Bluetooth Codec", hub_bt_codec_cb, NULL);
             menu_row(g_hub_list, "Paired Devices", hub_bt_devices_cb, NULL);
             menu_row(g_hub_list, "Pair New Device", hub_bt_force_pairing_cb, NULL);
             menu_row(g_hub_list, "Return to Local", hub_local_cb, NULL);

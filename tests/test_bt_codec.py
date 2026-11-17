@@ -40,7 +40,7 @@ class TestBlueAlsaWrapper(unittest.TestCase):
     def tearDown(self):
         self.tmpdir.cleanup()
 
-    def run_wrapper(self, args, ll_enabled=False, custom_exists=False):
+    def run_wrapper(self, args, ll_enabled=False, custom_exists=False, rx_codec=None):
         env = os.environ.copy()
         # Custom mock roots
         wrapper_script = (
@@ -48,6 +48,7 @@ class TestBlueAlsaWrapper(unittest.TestCase):
             .replace("/opt/diskos/bin/bluealsa-custom", str(self.opt_bin / "bluealsa-custom"))
             .replace("/usr/bin/bluealsa", str(self.stock_bluealsa))
             .replace("/usr/data/bt_rx_ll", str(self.usr_data / "bt_rx_ll"))
+            .replace("/usr/data/bt_rx_codec", str(self.usr_data / "bt_rx_codec"))
             .replace("/usr/data/diskos.conf", str(self.usr_data / "diskos.conf"))
         )
         test_script = self.root / "run_test_wrapper.sh"
@@ -58,6 +59,11 @@ class TestBlueAlsaWrapper(unittest.TestCase):
             (self.usr_data / "bt_rx_ll").write_text("1\n")
         else:
             (self.usr_data / "bt_rx_ll").write_text("0\n")
+
+        if rx_codec:
+            (self.usr_data / "bt_rx_codec").write_text(f"{rx_codec}\n")
+        elif (self.usr_data / "bt_rx_codec").exists():
+            (self.usr_data / "bt_rx_codec").unlink()
 
         custom_log = self.root / "custom_invoked.log"
         if custom_exists:
@@ -103,6 +109,52 @@ class TestBlueAlsaWrapper(unittest.TestCase):
         self.assertIn("--codec=sbc", stock_out)
         self.assertIn("--codec=aac", stock_out)
         self.assertIn("--codec=ldac", stock_out)
+
+    def test_rx_codec_aac_selection_in_bluealsa(self):
+        args = [
+            "-S", "--device=hci0", "--profile=a2dp-sink",
+            "--codec=sbc", "--codec=aac", "--codec=ldac"
+        ]
+        res, stock_out, _ = self.run_wrapper(args, ll_enabled=False, custom_exists=False, rx_codec="AAC")
+        self.assertEqual(res.returncode, 0)
+        self.assertIsNotNone(stock_out)
+        self.assertIn("--codec=aac", stock_out)
+        self.assertIn("--codec=-ldac", stock_out)
+
+    def test_rx_codec_ldac_selection_in_bluealsa(self):
+        args = [
+            "-S", "--device=hci0", "--profile=a2dp-sink",
+            "--codec=sbc", "--codec=aac", "--codec=ldac"
+        ]
+        res, stock_out, _ = self.run_wrapper(args, ll_enabled=False, custom_exists=False, rx_codec="LDAC")
+        self.assertEqual(res.returncode, 0)
+        self.assertIsNotNone(stock_out)
+        self.assertIn("--codec=ldac", stock_out)
+        self.assertIn("--codec=-aac", stock_out)
+
+    def test_rx_codec_sbc_selection_in_bluealsa(self):
+        args = [
+            "-S", "--device=hci0", "--profile=a2dp-sink",
+            "--codec=sbc", "--codec=aac", "--codec=ldac"
+        ]
+        res, stock_out, _ = self.run_wrapper(args, ll_enabled=False, custom_exists=False, rx_codec="SBC")
+        self.assertEqual(res.returncode, 0)
+        self.assertIsNotNone(stock_out)
+        self.assertIn("--codec=sbc", stock_out)
+        self.assertIn("--codec=-aac", stock_out)
+        self.assertIn("--codec=-ldac", stock_out)
+
+    def test_low_latency_overrides_rx_codec(self):
+        args = [
+            "-S", "--device=hci0", "--profile=a2dp-sink",
+            "--codec=sbc", "--codec=aac", "--codec=ldac"
+        ]
+        res, stock_out, _ = self.run_wrapper(args, ll_enabled=True, custom_exists=False, rx_codec="LDAC")
+        self.assertEqual(res.returncode, 0)
+        self.assertIsNotNone(stock_out)
+        self.assertIn("--codec=sbc", stock_out)
+        self.assertIn("--codec=-ldac", stock_out)
+        self.assertIn("--codec=-aac", stock_out)
 
     def test_custom_bluealsa_injects_aptx(self):
         args = ["-S", "--device=hci0", "--profile=a2dp-source", "--codec=sbc"]
@@ -365,7 +417,7 @@ static int parse_is_audio_source_from_content(const char *buf){
 
         if(has_src) return 1;
         if(has_snk) return 0;
-        return 0;
+        /* Neither 110a nor 110b found in Services=: fall through to check Class */
     }
 
     const char *cls = strstr(buf, "Class=");
@@ -402,6 +454,13 @@ int main(void){
         "SupportedTechnologies=BR/EDR;\\n"
         "Services=00001105-0000-1000-8000-00805f9b34fb;0000110a-0000-1000-8000-00805f9b34fb;0000110c-0000-1000-8000-00805f9b34fb;\\n";
 
+    const char *phone_partial_svc =
+        "[General]\\n"
+        "Name=Smartphone Without Explicit A2DP In Info\\n"
+        "Class=0x5a420c\\n"
+        "SupportedTechnologies=BR/EDR;\\n"
+        "Services=00001105-0000-1000-8000-00805f9b34fb;0000110e-0000-1000-8000-00805f9b34fb;\\n";
+
     const char *tablet_info =
         "[General]\\n"
         "Name=Tablet\\n"
@@ -417,6 +476,7 @@ int main(void){
 
     assert(parse_is_audio_source_from_content(earbuds_info) == 0); /* Pure sink earbuds must be filtered out */
     assert(parse_is_audio_source_from_content(phone_info) == 1);   /* Phone kept */
+    assert(parse_is_audio_source_from_content(phone_partial_svc) == 1); /* Phone with non-A2DP Services fell through to Class= */
     assert(parse_is_audio_source_from_content(tablet_info) == 1);  /* Tablet kept */
     assert(parse_is_audio_source_from_content(tv_info) == 1);      /* TV (audio source) kept */
 

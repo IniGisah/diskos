@@ -64,5 +64,6 @@ void bt_rx_forget(const char *mac);
 void bt_rx_force_pairing(void);
 int  bt_rx_is_pairing(void);
 void bt_show_paired_devices_dialog(void);
+void bt_show_codec_dialog(void);
 
 
