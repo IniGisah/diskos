@@ -15,7 +15,7 @@
 [![License: MIT](https://img.shields.io/badge/installer-MIT-yellow?style=flat-square)](LICENSE)
 [![UI: GPL-3.0-or-later](https://img.shields.io/badge/UI-GPL--3.0--or--later-8EAF93?style=flat-square)](ui/COPYING)
 
-[Overview](#overview) • [Features](#features) • [Screenshots](#screenshots) • [Requirements](#requirements) • [Installation](#installation) • [How It Works](#how-it-works) • [Web UI](#web-ui-remote-control) • [Troubleshooting](#troubleshooting-recovery) • [Documentation](#documentation)
+[Overview](#overview) • [Fork Differences](#differences-from-upstream) • [Features](#features) • [Screenshots](#screenshots) • [Requirements](#requirements) • [Installation](#installation) • [How It Works](#how-it-works) • [Web UI](#web-ui-remote-control) • [Troubleshooting](#troubleshooting-recovery) • [Documentation](#documentation)
 
 <br>
 
@@ -32,21 +32,53 @@ The installer builds the system image locally on your host computer using an off
 > [!IMPORTANT]
 > **Non-destructive flashing**: Flashing rewrites the read-only root filesystem partition (`mtd2`). Music and files stored on your MicroSD card and the persistent data partition (`mtd7`) remain untouched. The boot process is fail-closed, allows instant dual-booting into the stock UI via hardware buttons, and uses the Ingenic mask-ROM USB mode as a recovery safety net.
 
+## Differences from Upstream
+
+This fork builds upon upstream [b0hemia/diskos v1.2.2](https://github.com/b0hemia/diskos), preserving all upstream capabilities (Beam to Cast/AirPlay, AirPlay Receiving, custom image screensavers, and network device renaming) while introducing significant enhancements to audio routing, Bluetooth workflows, wireless management, power stability, and round-screen ergonomics:
+
+### Track Artwork & Selection Ergonomics (v1.6-custom)
+- **Album Art Thumbnails**: Renders 36×36 thumbnail tiles for tracks across Library Songs, Folder Browser, Playlist View, Search results, and Up Next lists.
+- **Fast Zero-Copy Cache**: Retrieves 42px BMP thumbnails cached on the MicroSD card with an in-memory 128-entry cache in `ui/library.c`, ensuring smooth 60 FPS list scrolling without disk bottlenecks.
+- **User Toggle**: Enable or disable track artwork thumbnails under **Settings > Library > Browsing > Track Artwork**.
+
+### Bluetooth Receiver & Device Management (v1.6-custom & v1.5-custom)
+- **Smart Audio Source Filtering**: BlueZ descriptor inspection filters device lists to show only transmitting audio hosts (phones, tablets, PCs) while omitting wireless headphones and earbuds.
+- **Paired Devices Bottom Sheet**: Dedicated button and modal sheet in Bluetooth Receiving mode for one-tap switching, disconnect, and device forget actions.
+- **Live Receiver Codec Switching**: Interactive codec picker dialog from Now Playing and Mode Lock screens to switch between LDAC, aptX-HD, aptX, AAC, and SBC without audio interruption.
+- **Full 5-Codec Suite**: High-resolution bidirectional Bluetooth supporting LDAC, aptX-HD, aptX, AAC, and SBC dynamically linked to on-device Qualcomm and Sony libraries.
+- **Low Latency Mode**: Dedicated toggle under **Settings > Bluetooth > Low Latency Mode** that locks sink negotiation to SBC, reducing latency to ~80–120ms for gaming and video sync.
+- **Auto-Healing Watchdog**: Background watchdog in `bt_rx_worker()` automatically recovers `bluetoothd` and `bluealsa` if interrupted.
+
+### Restored External USB DAC Host Audio (Mode 4)
+- **Host Power Sequencing**: Replaces premature connection checks with firmware capability verification (`fw_has_usb_audio_out()`), allowing the DWC2 USB controller to enter host mode and supply 5V VBUS power before enumerating the external DAC.
+- **Unblocked Local Playback**: Permits Mode 4 in local playback checks, coldplug mounting, and playlist playback routines, eliminating checkmark rollbacks.
+- **Dedicated Mode Lockdown**: Full-screen status and transport hub for external USB DAC output with sample-rate badges and safe edge-swipe navigation.
+
+### Web UI & Wireless Remote Control (`diskos-webd`)
+- **Embedded Lightweight Server**: Standalone C99 daemon running on port 8080 with ~2.5 MB RSS footprint.
+- **Full Remote Management**: Browser-based playback controls, live volume and seek adjustments, queue jumping, MicroSD file browsing, folder creation, and direct drag-and-drop audio uploads over Wi-Fi.
+- **Zero-Reflash Installation**: Can be installed and updated directly on the MicroSD card without flashing rootfs.
+
+### Power, Sleep & Display Polish
+- **Physical Power Button Wake**: Synchronizes `mq_player` power state via Linux evdev (`KEY_POWER`) injection, eliminating the false-wake loop and screen-off touch freeze.
+- **Touch to Wake Toggle**: Switch between CST816T deep sleep (0mA power draw) and responsive tap-to-wake under **Settings > Display > Touch to Wake**.
+- **Graceful Safe Shutdown**: Reverse boot splash animation contracts the vinyl disc over Home, displays orbiting spectra during storage flush and filesystem sync, and cuts the backlight rail safely. Triggerable from **Settings > Device > Shut down** or physical power button hold (3–5s).
+- **24-Hour Circular Battery Dial**: Interactive dial under **Apps > Battery & Power** tracking charge percentage, runtime estimates, and screen-on vs. playback active segments.
+- **Modal Gesture & Touch Isolation**: Swallows edge back-swipes, rim wheel scrolling, and track scrubbing while modal dialogs or bottom sheets are open, eliminating accidental input bleed-through.
+- **Circular Display Polish**: Header font step-down, tightened vertical descent, dialog minimum widths/padding, and inset quick settings layout to prevent bezel clipping on the 360×360 screen.
+
 ## Features
 
 - **Bespoke Circular UI** — Native 360×360 round-screen interface built on LVGL 9, featuring 8 distinct themes (Bauhaus, Blueprint, Hi-Fi, Terminal, Stone, Zine, and more) with smooth 60 FPS transitions and edge-swipe gestures.
-- **Track Artwork Thumbnails Across Song Lists** — Renders 36×36 album art thumbnails across Library Songs, Folder Browser, Playlist View, Search results, and Up Next lists, backed by an in-memory 128-entry cache and fast 42px BMP disk lookup (toggleable in Settings > Library > Browsing > Track Artwork).
 - **Bit-Perfect Local Audio** — Retains FiiO's native audio daemon (`mq_player`) and kernel ioctl routing across all 4× Cirrus Logic CS43131 balanced DACs, supporting FLAC, DSD, WAV, MP3, AAC, and Ogg Opus.
-- **Bluetooth Receiver Device Management & Live Codec Switching** — Smart paired devices modal sheet filtering transmitting audio hosts (phones, tablets, PCs) from audio sinks (headphones), live receiver codec picker dialog (LDAC, aptX-HD, aptX, AAC, SBC), Options Hub shortcuts, and auto-healing watchdog.
-- **External USB DAC Host Audio Restored (Mode 4)** — Unblocked USB Audio Out routing to external USB DACs over USB-C OTG (V2.40/V2.57) with DWC2 host power sequencing.
-- **Full Bluetooth Codec Suite** — High-resolution bidirectional Bluetooth supporting LDAC, aptX-HD, aptX, AAC, and SBC via a custom BlueALSA stack, plus a dedicated low-latency mode (~80–120ms) for video sync and mobile gaming.
+- **Track Artwork in Song Lists** — Renders 36×36 album art thumbnails across Library Songs, Folder Browser, Playlist View, Search, and Up Next lists with a 128-entry in-memory cache.
 - **Wireless Streaming with Beam** — Stream audio wirelessly from the Disc's MicroSD card to Google Cast devices and Apple AirPlay speakers or TVs over local Wi-Fi, using the player as a remote control.
 - **AirPlay Receiving** — Turn the Disc into a wireless Hi-Fi AirPlay receiver from iOS, iPadOS, and macOS with synchronized volume and live metadata display (requires stock firmware V2.40 or V2.57).
+- **Comprehensive Bluetooth Stack** — High-resolution bidirectional Bluetooth supporting LDAC, aptX-HD, aptX, AAC, and SBC, smart paired host management, live codec switching, and low-latency mode (~80–120ms).
+- **External USB DAC Host Audio** — Bit-perfect digital audio output to external USB DACs over USB-C OTG (Mode 4).
 - **Browser Remote Control & Web UI** — Built-in lightweight HTTP/WebSocket daemon (`diskos-webd`) on port 8080 for wireless playback control, queue jumping, volume management, and direct drag-and-drop MicroSD file uploads over Wi-Fi.
 - **Dedicated Mode Lockdown** — Distraction-free full-screen dashboards for USB DAC Host Mode, Bluetooth Audio Sink (with phone AVRCP controls), and USB Mass Storage.
-- **Power & Sleep Stability** — Real-time ADC fuel-gauge battery tracking, optional Touch-to-Wake (CST816T deep sleep at 0mA), zero-blink single-press power button wake, and multi-stage safe shutdown animation.
-- **Modal Touch & Gesture Isolation** — Swallows edge back-swipes, rim wheel scrolling, and track scrubbing while modal dialogs or bottom sheets are open to eliminate accidental input bleed-through.
-- **Circular Display Polish** — Header font step-down, tightened vertical descent, dialog minimum widths/padding, and inset quick settings layout to prevent bezel clipping on the round screen.
+- **Power & Sleep Stability** — Real-time ADC fuel-gauge battery tracking, 24-hour circular usage dial, optional Touch-to-Wake (CST816T deep sleep at 0mA), zero-blink single-press power button wake, and multi-stage safe shutdown.
 - **Dual-Boot Hardware Fallback** — Hold **Volume Up** during power-on to boot into the stock FiiO UI at any time without reflashing or altering settings.
 
 ## Screenshots
