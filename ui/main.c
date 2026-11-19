@@ -5329,7 +5329,7 @@ int main(int argc, char **argv){
              * (default scroll_limit=10). NB: scroll_throw is a slowdown-%, left at its
              * default - coast feel is a user-testing call, not safe to guess blind. */
             lv_indev_set_scroll_limit(g_touch, 18);
-            lv_indev_set_scroll_throw(g_touch, 12);
+            lv_indev_set_scroll_throw(g_touch, 10);
             lv_indev_add_event_cb(g_touch, touch_modal_press_cb,
                                  LV_EVENT_PRESSED, NULL);
             g_dbg = (access("/usr/data/touch_dbg", 0)==0);

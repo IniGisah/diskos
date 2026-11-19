@@ -34,6 +34,9 @@
 /*Drag throw slow-down in [%]. Greater value -> faster slow-down*/
 #define LV_INDEV_DEF_SCROLL_THROW         10
 
+/*Maximum fling velocity in pixels per 33ms frame (~2040 px/sec)*/
+#define LV_INDEV_MAX_FLING_VEL            68.0f
+
 /*Long press time in milliseconds.
  *Time to send `LV_EVENT_LONG_PRESSED`)*/
 #define LV_INDEV_DEF_LONG_PRESS_TIME      400
@@ -1283,6 +1286,11 @@ static void indev_proc_press(lv_indev_t * indev)
         s_touch_vel_y = 0.0f;
     }
 
+    if(s_touch_vel_x >  LV_INDEV_MAX_FLING_VEL) s_touch_vel_x =  LV_INDEV_MAX_FLING_VEL;
+    if(s_touch_vel_x < -LV_INDEV_MAX_FLING_VEL) s_touch_vel_x = -LV_INDEV_MAX_FLING_VEL;
+    if(s_touch_vel_y >  LV_INDEV_MAX_FLING_VEL) s_touch_vel_y =  LV_INDEV_MAX_FLING_VEL;
+    if(s_touch_vel_y < -LV_INDEV_MAX_FLING_VEL) s_touch_vel_y = -LV_INDEV_MAX_FLING_VEL;
+
     indev->pointer.scroll_throw_vect.x = (int32_t)roundf(s_touch_vel_x);
     indev->pointer.scroll_throw_vect.y = (int32_t)roundf(s_touch_vel_y);
     indev->pointer.scroll_throw_vect_ori = indev->pointer.scroll_throw_vect;
@@ -1419,11 +1427,10 @@ static void indev_proc_release(lv_indev_t * indev)
                 s_touch_vel_y = 0.0f;
             }
 
-            #define MAX_FLING_VEL 24.0f
-            if(s_touch_vel_x >  MAX_FLING_VEL) s_touch_vel_x =  MAX_FLING_VEL;
-            if(s_touch_vel_x < -MAX_FLING_VEL) s_touch_vel_x = -MAX_FLING_VEL;
-            if(s_touch_vel_y >  MAX_FLING_VEL) s_touch_vel_y =  MAX_FLING_VEL;
-            if(s_touch_vel_y < -MAX_FLING_VEL) s_touch_vel_y = -MAX_FLING_VEL;
+            if(s_touch_vel_x >  LV_INDEV_MAX_FLING_VEL) s_touch_vel_x =  LV_INDEV_MAX_FLING_VEL;
+            if(s_touch_vel_x < -LV_INDEV_MAX_FLING_VEL) s_touch_vel_x = -LV_INDEV_MAX_FLING_VEL;
+            if(s_touch_vel_y >  LV_INDEV_MAX_FLING_VEL) s_touch_vel_y =  LV_INDEV_MAX_FLING_VEL;
+            if(s_touch_vel_y < -LV_INDEV_MAX_FLING_VEL) s_touch_vel_y = -LV_INDEV_MAX_FLING_VEL;
 
             indev->pointer.scroll_throw_vect.x = (int32_t)roundf(s_touch_vel_x);
             indev->pointer.scroll_throw_vect.y = (int32_t)roundf(s_touch_vel_y);
