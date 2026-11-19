@@ -715,11 +715,6 @@ static void indev_pointer_proc(lv_indev_t * i, lv_indev_data_t * data)
         indev_proc_press(i);
     }
     else {
-        if(i->pointer.act_obj != NULL &&
-           (i->pointer.last_point.x != i->pointer.act_point.x ||
-            i->pointer.last_point.y != i->pointer.act_point.y)) {
-            indev_proc_press(i);
-        }
         indev_proc_release(i);
     }
 
@@ -1251,11 +1246,8 @@ static void indev_proc_press(lv_indev_t * indev)
     indev->pointer.vect.x = indev->pointer.act_point.x - indev->pointer.last_point.x;
     indev->pointer.vect.y = indev->pointer.act_point.y - indev->pointer.last_point.y;
 
-    if(indev->pointer.scroll_throw_vect.x == 0) indev->pointer.scroll_throw_vect.x = indev->pointer.vect.x;
-    else indev->pointer.scroll_throw_vect.x = (indev->pointer.scroll_throw_vect.x + indev->pointer.vect.x) / 2;
-
-    if(indev->pointer.scroll_throw_vect.y == 0) indev->pointer.scroll_throw_vect.y = indev->pointer.vect.y;
-    else indev->pointer.scroll_throw_vect.y = (indev->pointer.scroll_throw_vect.y + indev->pointer.vect.y) / 2;
+    indev->pointer.scroll_throw_vect.x = (indev->pointer.scroll_throw_vect.x + indev->pointer.vect.x) / 2;
+    indev->pointer.scroll_throw_vect.y = (indev->pointer.scroll_throw_vect.y + indev->pointer.vect.y) / 2;
 
     indev->pointer.scroll_throw_vect_ori = indev->pointer.scroll_throw_vect;
 
@@ -1401,16 +1393,6 @@ static void indev_proc_release(lv_indev_t * indev)
     }
 
     if(scroll_obj) {
-        if(indev->mode == LV_INDEV_MODE_EVENT) {
-            /* CST816T touch events arrive at ~100Hz (~10ms interval) from evdev,
-             * while the LVGL scroll throw animation ticks at LV_DEF_REFR_PERIOD (33ms).
-             * Scale the velocity vector to match the 33ms animation frame time so
-             * the fling velocity matches the finger's actual speed. */
-            indev->pointer.scroll_throw_vect.x = indev->pointer.scroll_throw_vect.x * 5 / 2;
-            indev->pointer.scroll_throw_vect.y = indev->pointer.scroll_throw_vect.y * 5 / 2;
-            indev->pointer.scroll_throw_vect_ori = indev->pointer.scroll_throw_vect;
-        }
-
         if(!indev->scroll_throw_anim) {
             indev_scroll_throw_anim_start(indev);
         }

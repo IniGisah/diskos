@@ -115,7 +115,6 @@ int row_pool_start(row_pool_t *p, lv_obj_t *list, int count, int height,
     if(!p->list){
         p->next = g_pools; g_pools = p; p->list = list;
         lv_obj_add_event_cb(list, pool_scroll, LV_EVENT_SCROLL, p);
-        lv_obj_add_event_cb(list, pool_scroll, LV_EVENT_SCROLL_END, p);
     }
     p->count = count; p->height = height; p->pitch = height + gap;
     p->start = start; p->x = x; p->phase = phase; p->numbered_prefix = numbered_prefix;
