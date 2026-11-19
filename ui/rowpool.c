@@ -112,6 +112,7 @@ int row_pool_start(row_pool_t *p, lv_obj_t *list, int count, int height,
      * currently dispatching SCROLL. LVGL 9.2 keeps that callback array borrowed. */
     p->viewport_token = indic_viewport_retain(list);
     if(!p->viewport_token) return 0;
+    lv_obj_remove_flag(list, LV_OBJ_FLAG_SCROLL_ELASTIC);
     if(!p->list){
         p->next = g_pools; g_pools = p; p->list = list;
         lv_obj_add_event_cb(list, pool_scroll, LV_EVENT_SCROLL, p);

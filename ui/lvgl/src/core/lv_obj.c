@@ -499,7 +499,7 @@ static void lv_obj_constructor(const lv_obj_class_t * class_p, lv_obj_t * obj)
     if(parent) obj->flags |= LV_OBJ_FLAG_SCROLL_CHAIN;
     obj->flags |= LV_OBJ_FLAG_CLICK_FOCUSABLE;
     obj->flags |= LV_OBJ_FLAG_SCROLLABLE;
-    obj->flags |= LV_OBJ_FLAG_SCROLL_ELASTIC;
+    /* obj->flags |= LV_OBJ_FLAG_SCROLL_ELASTIC; -- diskos: round screen lists have no elastic overscroll */
     obj->flags |= LV_OBJ_FLAG_SCROLL_MOMENTUM;
     obj->flags |= LV_OBJ_FLAG_SCROLL_WITH_ARROW;
     if(parent) obj->flags |= LV_OBJ_FLAG_GESTURE_BUBBLE;

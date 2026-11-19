@@ -874,6 +874,7 @@ int screen_anim_on(void){ return s_anim; }
 void ui_setup_scrollbar(lv_obj_t *list)
 {
     if (!list) return;
+    lv_obj_remove_flag(list, LV_OBJ_FLAG_SCROLL_ELASTIC);
     lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_set_style_width(list, 8, LV_PART_SCROLLBAR);
     lv_obj_set_style_bg_color(list, TC(TEXT_MUTED), LV_PART_SCROLLBAR);

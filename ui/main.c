@@ -5329,6 +5329,7 @@ int main(int argc, char **argv){
              * (default scroll_limit=10). NB: scroll_throw is a slowdown-%, left at its
              * default - coast feel is a user-testing call, not safe to guess blind. */
             lv_indev_set_scroll_limit(g_touch, 18);
+            lv_indev_set_scroll_throw(g_touch, 12);
             lv_indev_add_event_cb(g_touch, touch_modal_press_cb,
                                  LV_EVENT_PRESSED, NULL);
             g_dbg = (access("/usr/data/touch_dbg", 0)==0);
@@ -5743,7 +5744,7 @@ int main(int argc, char **argv){
                         s_fast_scroll_active = 0;
                         s_fast_scroll_cand = 0;
                         s_fast_scroller = ui_active_scroller();
-                        if (s_fast_scroller && sx >= 280 && sy >= 60 && sy <= 320) {
+                        if (s_fast_scroller && sx >= 310 && sy >= 60 && sy <= 320) {
                             if(screen_current() == SCR_LIBRARY && !library_fast_scroll_ok()){
                                 s_fast_scroller = NULL;
                             } else {

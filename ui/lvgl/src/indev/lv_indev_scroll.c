@@ -641,8 +641,19 @@ static int32_t elastic_diff(lv_obj_t * scroll_obj, int32_t diff, int32_t scroll_
 {
     /*Scroll back to the edge if required*/
     if(!lv_obj_has_flag(scroll_obj, LV_OBJ_FLAG_SCROLL_ELASTIC)) {
-        if(scroll_end + diff < 0) diff = - scroll_end;
-        if(scroll_start - diff < 0) diff = scroll_start;
+        if(scroll_end <= 0) {
+            if(diff < 0) diff = 0;
+        }
+        else if(scroll_end + diff < 0) {
+            diff = -scroll_end;
+        }
+
+        if(scroll_start <= 0) {
+            if(diff > 0) diff = 0;
+        }
+        else if(scroll_start - diff < 0) {
+            diff = scroll_start;
+        }
     }
     /*Handle elastic scrolling*/
     else {

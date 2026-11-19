@@ -23,6 +23,7 @@
 #include "../misc/lv_math.h"
 #include "../misc/lv_profiler.h"
 #include "../stdlib/lv_string.h"
+#include <math.h>
 
 /*********************
  *      DEFINES
@@ -96,6 +97,12 @@ static inline void indev_scroll_throw_anim_reset(lv_indev_t * indev)
 /**********************
  *  STATIC VARIABLES
  **********************/
+static uint32_t         s_touch_last_move_tick = 0;
+static int32_t          s_touch_last_x = 0;
+static int32_t          s_touch_last_y = 0;
+static float            s_touch_vel_x = 0.0f;
+static float            s_touch_vel_y = 0.0f;
+static lv_indev_state_t s_touch_prev_state = LV_INDEV_STATE_RELEASED;
 
 /**********************
  *      MACROS
@@ -708,6 +715,14 @@ static void indev_pointer_proc(lv_indev_t * i, lv_indev_data_t * data)
     i->pointer.act_point.y = data->point.y;
     i->pointer.diff = data->enc_diff;
 
+    if(s_touch_prev_state == LV_INDEV_STATE_RELEASED && i->state == LV_INDEV_STATE_PRESSED) {
+        s_touch_last_move_tick = lv_tick_get();
+        s_touch_last_x = i->pointer.act_point.x;
+        s_touch_last_y = i->pointer.act_point.y;
+        s_touch_vel_x = 0.0f;
+        s_touch_vel_y = 0.0f;
+    }
+
     /*Process the diff first as scrolling will be processed in indev_proc_release*/
     indev_proc_pointer_diff(i);
 
@@ -720,6 +735,7 @@ static void indev_pointer_proc(lv_indev_t * i, lv_indev_data_t * data)
 
     i->pointer.last_point.x = i->pointer.act_point.x;
     i->pointer.last_point.y = i->pointer.act_point.y;
+    s_touch_prev_state = i->state;
 }
 
 /**
@@ -1246,9 +1262,29 @@ static void indev_proc_press(lv_indev_t * indev)
     indev->pointer.vect.x = indev->pointer.act_point.x - indev->pointer.last_point.x;
     indev->pointer.vect.y = indev->pointer.act_point.y - indev->pointer.last_point.y;
 
-    indev->pointer.scroll_throw_vect.x = (indev->pointer.scroll_throw_vect.x + indev->pointer.vect.x) / 2;
-    indev->pointer.scroll_throw_vect.y = (indev->pointer.scroll_throw_vect.y + indev->pointer.vect.y) / 2;
+    int32_t dx = indev->pointer.act_point.x - s_touch_last_x;
+    int32_t dy = indev->pointer.act_point.y - s_touch_last_y;
+    uint32_t now = lv_tick_get();
+    uint32_t dt = now - s_touch_last_move_tick;
 
+    if(dx != 0 || dy != 0) {
+        if(dt >= 8) {
+            float vx = ((float)dx / (float)dt) * 33.0f;
+            float vy = ((float)dy / (float)dt) * 33.0f;
+            s_touch_vel_x = s_touch_vel_x * 0.4f + vx * 0.6f;
+            s_touch_vel_y = s_touch_vel_y * 0.4f + vy * 0.6f;
+            s_touch_last_x = indev->pointer.act_point.x;
+            s_touch_last_y = indev->pointer.act_point.y;
+            s_touch_last_move_tick = now;
+        }
+    }
+    else if(dt > 80) {
+        s_touch_vel_x = 0.0f;
+        s_touch_vel_y = 0.0f;
+    }
+
+    indev->pointer.scroll_throw_vect.x = (int32_t)roundf(s_touch_vel_x);
+    indev->pointer.scroll_throw_vect.y = (int32_t)roundf(s_touch_vel_y);
     indev->pointer.scroll_throw_vect_ori = indev->pointer.scroll_throw_vect;
 
     if(LV_ABS(indev->pointer.vect.x) > indev->scroll_limit || LV_ABS(indev->pointer.vect.y) > indev->scroll_limit) {
@@ -1368,6 +1404,31 @@ static void indev_proc_release(lv_indev_t * indev)
 
         /*Get the transformed vector with this object*/
         if(scroll_obj) {
+            uint32_t now = lv_tick_get();
+            int32_t rdx = indev->pointer.act_point.x - s_touch_last_x;
+            int32_t rdy = indev->pointer.act_point.y - s_touch_last_y;
+            uint32_t dt = now - s_touch_last_move_tick;
+            if((rdx != 0 || rdy != 0) && dt >= 4 && dt < 100) {
+                float vx = ((float)rdx / (float)dt) * 33.0f;
+                float vy = ((float)rdy / (float)dt) * 33.0f;
+                s_touch_vel_x = s_touch_vel_x * 0.4f + vx * 0.6f;
+                s_touch_vel_y = s_touch_vel_y * 0.4f + vy * 0.6f;
+            }
+            else if(dt > 80) {
+                s_touch_vel_x = 0.0f;
+                s_touch_vel_y = 0.0f;
+            }
+
+            #define MAX_FLING_VEL 24.0f
+            if(s_touch_vel_x >  MAX_FLING_VEL) s_touch_vel_x =  MAX_FLING_VEL;
+            if(s_touch_vel_x < -MAX_FLING_VEL) s_touch_vel_x = -MAX_FLING_VEL;
+            if(s_touch_vel_y >  MAX_FLING_VEL) s_touch_vel_y =  MAX_FLING_VEL;
+            if(s_touch_vel_y < -MAX_FLING_VEL) s_touch_vel_y = -MAX_FLING_VEL;
+
+            indev->pointer.scroll_throw_vect.x = (int32_t)roundf(s_touch_vel_x);
+            indev->pointer.scroll_throw_vect.y = (int32_t)roundf(s_touch_vel_y);
+            indev->pointer.scroll_throw_vect_ori = indev->pointer.scroll_throw_vect;
+
             int16_t angle = 0;
             int16_t scale_x = 256;
             int16_t scale_y = 256;
