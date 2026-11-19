@@ -5326,9 +5326,10 @@ int main(int argc, char **argv){
             if(g_touch_raw>=0)lv_indev_set_mode(g_touch,LV_INDEV_MODE_EVENT);
             /* cst816t is noisy on a small round panel: require more travel before a
              * press becomes a scroll, so deliberate taps aren't eaten as scrolls
-             * (default scroll_limit=10). NB: scroll_throw is a slowdown-%, left at its
-             * default - coast feel is a user-testing call, not safe to guess blind. */
+             * (default scroll_limit=10). Tune scroll_throw deceleration (7% per frame)
+             * so vertical lists fling and coast naturally across items. */
             lv_indev_set_scroll_limit(g_touch, 18);
+            lv_indev_set_scroll_throw(g_touch, 7);
             lv_indev_add_event_cb(g_touch, touch_modal_press_cb,
                                  LV_EVENT_PRESSED, NULL);
             g_dbg = (access("/usr/data/touch_dbg", 0)==0);
