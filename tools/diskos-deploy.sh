@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 diskOS contributors
 # diskos-deploy.sh - push locally built diskOS binaries (mq_ui, diskos-webd, scripts, web assets)
 # to the device and hot-reload them, safely.
 #

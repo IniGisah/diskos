@@ -8,12 +8,12 @@
 ### A custom round-screen interface and firmware for the FiiO Snowsky Disc
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-3D424B?style=flat-square)](docs/INSTALL.md#host-support)
-[![Release](https://img.shields.io/badge/release-v1.6--custom-blue?style=flat-square)](docs/RELEASE_NOTES_1.6_CUSTOM.md)
+[![Release](https://img.shields.io/badge/release-v1.7--custom-blue?style=flat-square)](CHANGELOG.md)
+[![Upstream](https://img.shields.io/badge/upstream-diskOS%201.2.3-green?style=flat-square)](https://github.com/b0hemia/diskos)
 [![Device](https://img.shields.io/badge/device-FiiO%20Snowsky%20Disc-E06C75?style=flat-square)](docs/HARDWARE.md)
 [![Firmware](https://img.shields.io/badge/stock%20firmware-V2.09%20%7C%20V2.28%20%7C%20V2.40%20%7C%20V2.57-4E9A06?style=flat-square)](docs/INSTALL.md#requirements)
 [![Docs](https://img.shields.io/badge/docs-complete-informational?style=flat-square)](docs/README.md)
-[![License: MIT](https://img.shields.io/badge/installer-MIT-yellow?style=flat-square)](LICENSE)
-[![UI: GPL-3.0-or-later](https://img.shields.io/badge/UI-GPL--3.0--or--later-8EAF93?style=flat-square)](ui/COPYING)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-8EAF93?style=flat-square)](LICENSE)
 
 [Overview](#overview) • [Fork Differences](#differences-from-upstream) • [Features](#features) • [Screenshots](#screenshots) • [Requirements](#requirements) • [Installation](#installation) • [How It Works](#how-it-works) • [Web UI](#web-ui-remote-control) • [Troubleshooting](#troubleshooting-recovery) • [Documentation](#documentation)
 
@@ -25,7 +25,7 @@
 
 ## Overview
 
-**diskOS** is a custom user interface and firmware patch engineered specifically for the **FiiO Snowsky Disc** (Ingenic X2000 MIPS SoC). This repository is a customized fork maintained at [IniGisah/diskos](https://github.com/IniGisah/diskos) (rebased on upstream [b0hemia/diskos](https://github.com/b0hemia/diskos) v1.2.2). It replaces the stock interface with a bespoke, themeable UI tailored to the player's 360×360 circular display, while retaining FiiO's low-level audio engine, hardware decoders, and quad-DAC routing for bit-perfect local playback.
+**diskOS** is a custom user interface and firmware patch engineered specifically for the **FiiO Snowsky Disc** (Ingenic X2000 MIPS SoC). This repository is a customized fork maintained at [IniGisah/diskos](https://github.com/IniGisah/diskos), synchronized with upstream [b0hemia/diskos](https://github.com/b0hemia/diskos) v1.2.3. It replaces the stock interface with a bespoke, themeable UI tailored to the player's 360×360 circular display, while retaining FiiO's low-level audio engine, hardware decoders, and quad-DAC routing for bit-perfect local playback.
 
 The installer builds the system image locally on your host computer using an official FiiO firmware archive. It preserves existing music files and user data on the MicroSD card, retains dual-boot access to the stock interface, and incorporates hardware-level recovery protections.
 
@@ -34,24 +34,22 @@ The installer builds the system image locally on your host computer using an off
 
 ## Differences from Upstream
 
-This fork builds upon upstream [b0hemia/diskos v1.2.2](https://github.com/b0hemia/diskos), preserving all upstream capabilities (Beam to Cast/AirPlay, AirPlay Receiving, custom image screensavers, and network device renaming) while introducing significant enhancements to audio routing, Bluetooth workflows, wireless management, power stability, and round-screen ergonomics:
+This fork builds upon upstream [b0hemia/diskos v1.2.3](https://github.com/b0hemia/diskos), preserving all upstream capabilities (low-battery safe turn-off countdown, sort tags, WAV tags, Gurmukhi/Devanagari/Urdu/Hebrew text shaping, 4 GiB shared cover cache, Beam to Cast/AirPlay, AirPlay Receiving, custom image screensavers, and network device renaming) while introducing significant enhancements to audio routing, Bluetooth workflows, wireless management, power stability, and round-screen ergonomics:
 
-### Track Artwork & Selection Ergonomics (v1.6-custom)
-- **Album Art Thumbnails**: Renders 36×36 thumbnail tiles for tracks across Library Songs, Folder Browser, Playlist View, Search results, and Up Next lists.
-- **Fast Zero-Copy Cache**: Retrieves 42px BMP thumbnails cached on the MicroSD card with an in-memory 128-entry cache in `ui/library.c`, ensuring smooth 60 FPS list scrolling without disk bottlenecks.
+### Track Artwork & Selection Ergonomics (v1.6-custom / v1.7-custom)
+- **Album Art Thumbnails**: Renders 36×36 thumbnail tiles for tracks across Library Songs, Folder Browser, Playlist View, Search results, and Up Next lists. Fully integrated with upstream's `rowpool` virtualization for smooth 60 FPS scrolling without heap allocation.
+- **Fast Zero-Copy Cache**: Retrieves 42px BMP thumbnails cached on the MicroSD card with an in-memory direct cache in `ui/library.c`.
 - **User Toggle**: Enable or disable track artwork thumbnails under **Settings > Library > Browsing > Track Artwork**.
 
-### Bluetooth Receiver & Device Management (v1.6-custom & v1.5-custom)
-- **Smart Audio Source Filtering**: BlueZ descriptor inspection filters device lists to show only transmitting audio hosts (phones, tablets, PCs) while omitting wireless headphones and earbuds.
-- **Paired Devices Bottom Sheet**: Dedicated button and modal sheet in Bluetooth Receiving mode for one-tap switching, disconnect, and device forget actions.
-- **Live Receiver Codec Switching**: Interactive codec picker dialog from Now Playing and Mode Lock screens to switch between LDAC, aptX-HD, aptX, AAC, and SBC without audio interruption.
-- **Full 5-Codec Suite**: High-resolution bidirectional Bluetooth supporting LDAC, aptX-HD, aptX, AAC, and SBC dynamically linked to on-device Qualcomm and Sony libraries.
-- **Low Latency Mode**: Dedicated toggle under **Settings > Bluetooth > Low Latency Mode** that locks sink negotiation to SBC, reducing latency to ~80–120ms for gaming and video sync.
-- **Auto-Healing Watchdog**: Background watchdog in `bt_rx_worker()` automatically recovers `bluetoothd` and `bluealsa` if interrupted.
+### Bluetooth Receiver Subsystem & Audio Codec Suite
+- **Full 5-Codec Suite**: Adds high-resolution **LDAC** (990/660/330 kbps), **aptX-HD**, **aptX**, **AAC**, and **SBC** support via bundled custom `bluealsa` daemon.
+- **Smart Paired Devices Sheet**: Filters paired devices by BlueZ cached profile UUIDs (`0000110a` A2DP Audio Source) so the list shows transmitting audio sources (smartphones, tablets, PCs) while omitting headphones.
+- **Live Codec Switcher**: Change Bluetooth receiver codecs on the fly directly from the Mode Lock screen or Now Playing Options hub.
+- **Low-Latency Mode**: Reduces A2DP buffer latency (~80–120ms) for synchronized video and gaming audio.
 
-### Restored External USB DAC Host Audio (Mode 4)
-- **Host Power Sequencing**: Replaces premature connection checks with firmware capability verification (`fw_has_usb_audio_out()`), allowing the DWC2 USB controller to enter host mode and supply 5V VBUS power before enumerating the external DAC.
-- **Unblocked Local Playback**: Permits Mode 4 in local playback checks, coldplug mounting, and playlist playback routines, eliminating checkmark rollbacks.
+### External USB DAC Host Audio (Mode 4)
+- **Host Power Sequencing**: Verifies firmware capabilities (`fw_has_usb_audio_out()`), allowing the DWC2 USB controller to enter host mode and supply 5V VBUS power before enumerating the external DAC.
+- **Unblocked Local Playback**: Permits Mode 4 in local playback checks, coldplug mounting, and playlist playback routines.
 - **Dedicated Mode Lockdown**: Full-screen status and transport hub for external USB DAC output with sample-rate badges and safe edge-swipe navigation.
 
 ### Web UI & Wireless Remote Control (`diskos-webd`)
@@ -62,7 +60,7 @@ This fork builds upon upstream [b0hemia/diskos v1.2.2](https://github.com/b0hemi
 ### Power, Sleep & Display Polish
 - **Physical Power Button Wake**: Synchronizes `mq_player` power state via Linux evdev (`KEY_POWER`) injection, eliminating the false-wake loop and screen-off touch freeze.
 - **Touch to Wake Toggle**: Switch between CST816T deep sleep (0mA power draw) and responsive tap-to-wake under **Settings > Display > Touch to Wake**.
-- **Graceful Safe Shutdown**: Reverse boot splash animation contracts the vinyl disc over Home, displays orbiting spectra during storage flush and filesystem sync, and cuts the backlight rail safely. Triggerable from **Settings > Device > Shut down** or physical power button hold (3–5s).
+- **Graceful Safe Shutdown**: Reverse boot splash animation contracts the vinyl disc over Home, displays orbiting spectra during storage flush and filesystem sync, and cuts the backlight rail safely. Triggerable from **Settings > Device > Shut down**, 0% battery countdown, or physical power button hold (3–5s).
 - **24-Hour Circular Battery Dial**: Interactive dial under **Apps > Battery & Power** tracking charge percentage, runtime estimates, and screen-on vs. playback active segments.
 - **Modal Gesture & Touch Isolation**: Swallows edge back-swipes, rim wheel scrolling, and track scrubbing while modal dialogs or bottom sheets are open, eliminating accidental input bleed-through.
 - **Circular Display Polish**: Header font step-down, tightened vertical descent, dialog minimum widths/padding, and inset quick settings layout to prevent bezel clipping on the 360×360 screen.
@@ -71,7 +69,9 @@ This fork builds upon upstream [b0hemia/diskos v1.2.2](https://github.com/b0hemi
 
 - **Bespoke Circular UI** — Native 360×360 round-screen interface built on LVGL 9, featuring 8 distinct themes (Bauhaus, Blueprint, Hi-Fi, Terminal, Stone, Zine, and more) with smooth 60 FPS transitions and edge-swipe gestures.
 - **Bit-Perfect Local Audio** — Retains FiiO's native audio daemon (`mq_player`) and kernel ioctl routing across all 4× Cirrus Logic CS43131 balanced DACs, supporting FLAC, DSD, WAV, MP3, AAC, and Ogg Opus.
-- **Track Artwork in Song Lists** — Renders 36×36 album art thumbnails across Library Songs, Folder Browser, Playlist View, Search, and Up Next lists with a 128-entry in-memory cache.
+- **Track Artwork in Song Lists** — Renders 36×36 album art thumbnails across Library Songs, Folder Browser, Playlist View, Search, and Up Next lists.
+- **Low-Battery Safety & Shutdown** — Notices at <=10% and <=5%, 100% full notice, and a 30-second safe turn-off countdown dialog at 0% battery.
+- **Complex Text Shaping** — HarfBuzz and SheenBidi text shaping for Gurmukhi, Devanagari, Urdu, and Hebrew text with right-to-left scrolling.
 - **Wireless Streaming with Beam** — Stream audio wirelessly from the Disc's MicroSD card to Google Cast devices and Apple AirPlay speakers or TVs over local Wi-Fi, using the player as a remote control.
 - **AirPlay Receiving** — Turn the Disc into a wireless Hi-Fi AirPlay receiver from iOS, iPadOS, and macOS with synchronized volume and live metadata display (requires stock firmware V2.40 or V2.57).
 - **Comprehensive Bluetooth Stack** — High-resolution bidirectional Bluetooth supporting LDAC, aptX-HD, aptX, AAC, and SBC, smart paired host management, live codec switching, and low-latency mode (~80–120ms).
@@ -123,45 +123,34 @@ Read the **[Web UI & Remote Control Guide](docs/WEBUI.md)** for architecture det
 1. Install system prerequisites and configure USB permissions:
    ```bash
    # Debian / Ubuntu:
-   sudo apt install python3 python3-venv python3-tk libusb-1.0-0 squashfs-tools
+   sudo apt install python3 python3-tk libusb-1.0-0-dev
 
    # Arch / CachyOS:
-   sudo pacman -S python tk libusb squashfs-tools
-
-   # Fedora:
-   sudo dnf install python3 python3-tkinter libusb1 squashfs-tools
+   sudo pacman -S python tk libusb
    ```
-
-2. Clone or extract the release, install local udev rules, and run setup:
+2. Configure udev rules for the Ingenic mask-ROM device:
    ```bash
-   sudo cp udev/70-diskos-maskrom.rules /etc/udev/rules.d/
+   echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="a108", ATTRS{idProduct}=="eaef", MODE="0666"' | sudo tee /etc/udev/rules.d/99-ingenic.rules
    sudo udevadm control --reload-rules && sudo udevadm trigger
-
-   ./install.sh
    ```
-
-3. Launch the installer:
+3. Run the installer:
    ```bash
-   ./diskos-installer gui
+   ./diskos-installer
    ```
-   *Or install via the command line:*
-   ```bash
-   ./diskos-installer install --firmware SNOWSKY_DISC_update_*.zip --variant public
-   ```
-
-> [!WARNING]
-> Do **not** run `./diskos-installer` with `sudo`. Saved backup images and recovery state belong under your normal user account. The udev rule handles non-root USB access.
 
 ### macOS
 
-1. Download `diskos-installer-macos-arm64.tar.gz` from the Releases page and extract it.
-2. Drag **diskOS Installer.app** to your Applications folder. No Python, Homebrew, or extra libraries are required.
-3. Open the app. If macOS Gatekeeper blocks it on first run, go to **System Settings > Privacy & Security > Open Anyway**.
-4. Select the firmware version currently on your Disc, click **Get firmware**, and proceed with flashing.
+1. Download `diskos-installer-macos-arm64.dmg` from the latest release.
+2. Open the DMG and drag **diskOS Installer** to `/Applications`.
+3. Open Terminal and run the one-line setup helper to clear macOS Gatekeeper quarantine:
+   ```bash
+   xattr -cr "/Applications/diskOS Installer.app"
+   ```
+4. Launch the application from Finder or Spotlight.
 
 ### Windows
 
-1. Extract `diskos-installer-windows-x86_64.zip`. Keep all files in the extracted directory intact.
+1. Extract the release ZIP.
 2. Launch **diskos-installer.exe**. If Windows SmartScreen displays a warning, select **More info** > **Run anyway**.
 3. If prompted by the Ready checklist, select **Set up USB driver...** to configure WinUSB for device `a108:eaef`.
 4. Select the matching firmware version, click **Get firmware**, review the checklist, and start the flash.
@@ -216,7 +205,7 @@ Read the **[Web UI & Remote Control Guide](docs/WEBUI.md)** for architecture det
 - **Display & Acceleration**: UI rendering is performed on the CPU via LVGL 9 with MIPS MSA SIMD optimization. The Ingenic X2000 has no GPU, VPU, or hardware JPEG decoder.
 - **Audio Controls**: The four CS43131 DACs are driven by kernel ioctls, not standard ALSA mixer controls.
 - **Mask-ROM Flashing**: The hardware mask-ROM USB link permits roughly one flashing run per power cycle. If a run stalls during connection, power-cycle the Disc back into mask-ROM mode and retry.
-- **Firmware Variations**: AirPlay Receiving and USB Audio Output require stock firmware V2.40 or V2.57. On V2.57, the custom EQ curve editor is view-only.
+- **Firmware Variations**: AirPlay Receiving and USB Audio Output require stock firmware V2.40 or V2.57. On V2.57, Custom EQ edits ten-band USER presets; advanced parametric presets stay view-only.
 
 ## Troubleshooting & Recovery
 
@@ -247,4 +236,22 @@ For a comprehensive error code table (`E1xx` preflight, `E2xx` build, `E3xx` fla
 | [**IPC Command Map**](docs/COMMAND_MAP.md) | Communication protocol between `mq_ui` and FiiO's `mq_player`. |
 | [**Reverse Engineering**](docs/RE_CATALOGUE.md) | Catalogue of stock binaries, audio libraries, and ioctl commands. |
 | [**Privacy & Network Use**](docs/PRIVACY.md) | Network disclosure, offline guarantees, and Last.fm privacy details. |
-| [**Release Notes v1.6-custom**](docs/RELEASE_NOTES_1.6_CUSTOM.md) | Changelog and technical enhancements for the current release. |
+
+## Contributing
+
+Bug reports, hardware findings, documentation fixes, and focused patches are welcome.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing flashing or security-sensitive code.
+Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
+
+## License and Support
+
+diskOS is free software under the GNU GPL v3.0 or later; see [LICENSE](LICENSE). This covers the
+installer, scripts, documentation, the on-device UI in [ui/](ui/) and the website in [site/](site/).
+Third-party components keep their own licences (see [NOTICE.md](NOTICE.md)). Releases up to 1.2.2
+published the installer and tools under the MIT licence; see [NOTICE.md](NOTICE.md).
+Third-party license details and corresponding source are listed in [NOTICE.md](NOTICE.md),
+[SPL_SOURCE.md](SPL_SOURCE.md), and [licenses/](licenses/).
+
+> [!WARNING]
+> Do not redistribute generated `diskos_*.bin` images. They contain FiiO's root filesystem.
+> Build them locally from firmware you obtained from FiiO and share the installer instead.

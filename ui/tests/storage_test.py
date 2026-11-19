@@ -126,6 +126,7 @@ int ipc_player_ready(void){ return test_player_ready; }
 unsigned ipc_rx_frames(void){ return test_rx_frames; }
 int ui_player_settling(void){ return test_settling; }
 static void ui_library_check(void){ test_lib_checks++; }   /* Cover Flow refresh request; counted, not run */
+static void custom_picker_dark(void){}   /* no CustomCover preview is open in these storage fixtures */
 int ipc_send_cmd(const char *s){
     test_sends++;
     if(test_fail) return -1;

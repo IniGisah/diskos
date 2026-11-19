@@ -1,6 +1,8 @@
+#include "indic.h"
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 diskOS contributors */
 #include "screens.h"
+#include "rowpool.h"
 #include "theme.h"
 #include "theme_kit.h"
 #include "sdio.h"
@@ -63,7 +65,7 @@ typedef struct {
 static char        g_dir[FB_MAXPATH];
 static fb_entry_t *g_ent;                  /* grown on demand up to FB_MAX_ENTRIES */
 static char       *g_first;                /* first letter per entry for fast scrolling */
-static int         g_nent, g_ent_cap, g_first_cap;
+static int         g_nent, g_first_cap;
 static int         g_opened;
 static lv_obj_t   *g_list;
 static lv_obj_t   *g_title;
@@ -73,8 +75,7 @@ static lv_obj_t   *g_lhint = NULL, *g_lhint_lbl = NULL;
 static uint32_t    g_lhint_tick = 0;
 static char        g_lhint_ch = 0;
 static int         g_has_play_header = 0;
-static lv_timer_t *g_fb_fill;              /* incremental row builder (avoids a long open stall) */
-static int         g_fb_i;                 /* next entry index to render */
+static row_pool_t  g_rows;
 
 static char first_letter(const char *s){
     while(*s==' ') s++;
@@ -106,7 +107,7 @@ static int fb_cmp(const void *a, const void *b){
     return strcasecmp(x->name, y->name);
 }
 
-static void fb_fill_stop(void){ if(g_fb_fill){ lv_timer_del(g_fb_fill); g_fb_fill = NULL; } }
+static void fb_fill_stop(void){ row_pool_clear(&g_rows); }
 
 /* Single worker, latest request wins; the UI timer owns all widgets. */
 typedef struct {
@@ -255,6 +256,7 @@ static void fb_poll_cb(lv_timer_t *t){
         fb_fill_stop();
         /* hidden: just drop the scan; visible: show the error once */
         if(visible && !g_fb_error_shown){
+            fb_fill_stop();
             free(g_ent); g_ent = NULL; g_nent = 0; g_opened = 0;
             fb_rebuild(); g_fb_error_shown = 1;
         }
@@ -276,14 +278,8 @@ static void fb_poll_cb(lv_timer_t *t){
         lv_timer_set_period(t, 200);
         return;
     }
+    fb_fill_stop();
     free(g_ent); g_ent = res.ent; g_nent = res.nent; g_opened = res.opened;
-    if(g_nent > g_first_cap){
-        char *nf = realloc(g_first, (size_t)g_nent);
-        if(nf){ g_first = nf; g_first_cap = g_nent; }
-    }
-    if(g_first){
-        for(int i = 0; i < g_nent; i++) g_first[i] = first_letter(g_ent[i].name);
-    }
     fb_rebuild();
     lv_timer_del(t); g_fb_poll = NULL;
 }
@@ -332,128 +328,129 @@ static void fb_empty_label(const char *msg){
 
 static void fb_row_cb(lv_event_t *e);
 
-static void fb_add_row(int i){
-        fb_entry_t *en = &g_ent[i];
-        lv_obj_t *r = lv_button_create(g_list);
-        lv_obj_remove_style_all(r);
-        lv_obj_set_size(r, 268, 46);
-        lv_obj_set_style_radius(r, 8, 0);
-        lv_obj_set_style_bg_color(r, TC(LIST_PRESSED), LV_STATE_PRESSED);
-        lv_obj_set_style_bg_opa(r, LV_OPA_70, LV_STATE_PRESSED);
-        lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_ext_click_area(r, 2);
-        ui_on(r, fb_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i, "folderbrowser.fb_row", UI_CORE);
-        kit_row_layout(r, KIT_ROW_ICON);
+static void fb_bind(row_slot_t *s, int fresh){
+    fb_entry_t *en=&g_ent[s->index];
+    if(fresh){
+        s->row=lv_button_create(g_list);
+        lv_obj_clear_flag(s->row,LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_ext_click_area(s->row,2);
+        ui_on(s->row,fb_row_cb,LV_EVENT_CLICKED,s,"folderbrowser.fb_row",UI_CORE);
 
-        int is_song = (!en->is_dir && en->kind == FB_K_AUDIO);
-        int show_art = (is_song && cfg_get_int("song_art", 1));
-        char bmp[600];
-        int have_thumb = 0;
-        if(show_art && i < 200){
-            char full[FB_MAXPATH];
-            snprintf(full, sizeof full, "%s/%s", g_dir, en->name);
-            have_thumb = (artcache_thumb_path(full, bmp, sizeof bmp) == 0);
-        }
+        s->tile = lv_obj_create(s->row);
+        lv_obj_remove_style_all(s->tile);
+        lv_obj_set_size(s->tile, 36, 36);
+        lv_obj_set_pos(s->tile, 6, 5);
+        lv_obj_set_style_radius(s->tile, 6, 0);
+        lv_obj_set_style_clip_corner(s->tile, true, 0);
+        lv_obj_clear_flag(s->tile, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
-        if(show_art){
-            lv_obj_t *tile = lv_obj_create(r);
-            lv_obj_remove_style_all(tile);
-            lv_obj_set_pos(tile, 8, 5);
-            lv_obj_set_size(tile, 36, 36);
-            lv_obj_set_style_radius(tile, 6, 0);
-            lv_obj_set_style_clip_corner(tile, true, 0);
-            lv_obj_set_style_bg_color(tile, TC(SURFACE_STRONG), 0);
-            lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
-            lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        s->tile_img = lv_image_create(s->tile);
+        lv_obj_set_size(s->tile_img, 36, 36);
+        lv_obj_center(s->tile_img);
+        lv_obj_clear_flag(s->tile_img, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
-            if(have_thumb){
-                char src[620];
-                snprintf(src, sizeof src, "A:%s", bmp);
-                lv_obj_t *img = lv_image_create(tile);
-                lv_image_set_src(img, src);
-                lv_obj_center(img);
-                lv_obj_clear_flag(img, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-            } else {
-                lv_obj_t *ic = lv_label_create(tile);
-                lv_label_set_text(ic, LV_SYMBOL_AUDIO);
-                lv_obj_set_style_text_font(ic, TF(UI_16), 0);
-                lv_obj_set_style_text_color(ic, TC(TEXT_MUTED), 0);
-                lv_obj_center(ic);
-                lv_obj_clear_flag(ic, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-            }
+        s->tile_glyph = lv_label_create(s->row);
+        lv_obj_set_style_text_font(s->tile_glyph, TF(UI_16), 0);
+        lv_obj_clear_flag(s->tile_glyph, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
-            lv_obj_t *nm = lv_label_create(r);
-            lv_label_set_text(nm, en->name);
-            lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
-            lv_obj_set_pos(nm, 52, 13);
-            lv_obj_set_size(nm, 204, 20);
-            lv_obj_set_style_text_font(nm, TF(USER_16), 0);
-            lv_obj_set_style_text_color(nm, TC(TEXT_PRIMARY), 0);
-        } else {
-            lv_obj_t *ic = lv_label_create(r);
-            lv_label_set_text(ic, en->is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_AUDIO);
-            lv_obj_set_pos(ic, 10, 14);
-            lv_obj_set_style_text_font(ic, TF(UI_16), 0);
-            lv_obj_set_style_text_color(ic, en->is_dir ? TC(FOLDER_ICON) : TC(TEXT_MUTED), 0);
-
-            lv_obj_t *nm = lv_label_create(r);
-            lv_label_set_text(nm, en->name);
-            lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
-            lv_obj_set_pos(nm, 40, 14);
-            lv_obj_set_size(nm, en->is_dir ? 194 : 216, 20);
-            lv_obj_set_style_text_font(nm, TF(USER_16), 0);   /* CJK filenames, like Library/Search */
-            lv_obj_set_style_text_color(nm, TC(TEXT_PRIMARY), 0);
-
-            if(en->is_dir){
-                lv_obj_t *ch = lv_label_create(r);
-                lv_label_set_text(ch, LV_SYMBOL_RIGHT);
-                lv_obj_set_pos(ch, 244, 15);
-                lv_obj_set_style_text_font(ch, TF(UI_16), 0);
-                lv_obj_set_style_text_color(ch, TC(TEXT_DISABLED), 0);
-            }
-        }
-        theme_list_row(r);
-}
-
-static void fb_fill_cb(lv_timer_t *t){
-    (void)t;
-    if(screen_current() != SCR_FOLDER) return;
-    uint32_t start = lv_tick_get();
-    int end = g_fb_i + 40; if(end > g_nent) end = g_nent;   /* render in batches so scrolling stays responsive */
-    while(g_fb_i < end){
-        fb_add_row(g_fb_i++);
-        if(lv_tick_elaps(start) >= 4) break;
+        s->label[0] = s->tile_glyph;
+        s->label[1] = indic_label_create(s->row);
+        s->label[2] = lv_label_create(s->row);
     }
-    if(g_fb_i >= g_nent) fb_fill_stop();
+    row_slot_reset(s);
+    lv_obj_t *r=s->row,*ic=s->label[0],*nm=s->label[1],*ch=s->label[2];
+    lv_obj_set_size(r,268,46); lv_obj_set_style_radius(r,8,0);
+    lv_obj_set_style_bg_color(r,TC(LIST_PRESSED),LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(r,LV_OPA_70,LV_STATE_PRESSED);
+    kit_row_layout(r,KIT_ROW_ICON);
+
+    int show_art = cfg_show_art();
+    const char *thumb = NULL;
+    if(show_art && !en->is_dir && en->kind == FB_K_AUDIO){
+        char full[FB_MAXPATH];
+        snprintf(full, sizeof full, "%s/%s", g_dir, en->name);
+        thumb = artcache_thumb_path(full);
+    }
+
+    if(thumb){
+        if(strcmp(s->img_src, thumb) != 0){
+            snprintf(s->img_src, sizeof s->img_src, "%s", thumb);
+            lv_image_set_src(s->tile_img, s->img_src);
+        }
+        lv_obj_remove_flag(s->tile, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(s->tile_img, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(ic, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_pos(nm, 50, 14);
+        lv_obj_set_size(nm, 206, 20);
+    } else {
+        lv_obj_add_flag(s->tile, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(ic, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(ic, en->is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_AUDIO);
+        lv_obj_set_pos(ic, 10, 14);
+        lv_obj_set_style_text_color(ic, en->is_dir ? TC(FOLDER_ICON) : TC(TEXT_MUTED), 0);
+        lv_obj_set_pos(nm, 40, 14);
+        lv_obj_set_size(nm, en->is_dir ? 194 : 216, 20);
+    }
+
+    lv_label_set_text(nm,en->name); lv_label_set_long_mode(nm,LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(nm,TF(USER_16),0); lv_obj_set_style_text_color(nm,TC(TEXT_PRIMARY),0);
+    lv_label_set_text(ch,en->is_dir?LV_SYMBOL_RIGHT:"");
+    lv_obj_set_pos(ch,244,15); lv_obj_set_style_text_font(ch,TF(UI_16),0);
+    lv_obj_set_style_text_color(ch,TC(TEXT_DISABLED),0);
+    if(!en->is_dir) lv_obj_add_flag(ch,LV_OBJ_FLAG_HIDDEN);
+    indic_row_fit(r,nm,NULL);
+    theme_list_row(r);
 }
 
-static void fb_fill_flush(void){
-    for(; g_fb_i < g_nent; g_fb_i++) fb_add_row(g_fb_i);
-    fb_fill_stop();
-}
-
-/* Fast scrolling "Jump to" letter lookup:
- * Dirs sort first, then files. Check exact match in dirs then files,
- * then nearest >= L in dirs then files. */
-static void fb_jump_to_letter(char L){
-    if(g_nent <= 0 || !g_first) return;
-    fb_fill_flush();
-    int ndirs = 0;
+static void fb_play_folder_mode(int mode){
+    if(g_nent <= 0){ ui_toast("No audio files"); return; }
+    if(ui_source_mode() == 4){ ui_toast("USB DAC mode: controls on host"); return; }
+    int n_audio = 0;
     for(int i = 0; i < g_nent; i++){
-        if(g_ent[i].is_dir) ndirs++; else break;
+        if(!g_ent[i].is_dir && g_ent[i].kind == FB_K_AUDIO) n_audio++;
     }
+    if(n_audio <= 0){ ui_toast("No audio files"); return; }
+    const char **files = malloc((size_t)n_audio * sizeof *files);
+    if(!files){ ui_toast("Out of memory"); return; }
+    int k = 0;
+    for(int i = 0; i < g_nent; i++){
+        if(!g_ent[i].is_dir && g_ent[i].kind == FB_K_AUDIO) files[k++] = g_ent[i].name;
+    }
+    mdb_plan_t plan;
+    int ok = mdb_folder_plan(g_dir, files, k, &plan);
+    free(files);
+    if(!ok){ ui_toast("Not in library"); return; }
+
+    cfg_set_int("work_mode", mode);
+    ui_set_workmode(mode);
+
+    int start_id = (mode == 1 && plan.count > 1) ? plan.ids[rand() % plan.count] : plan.ids[0];
+    int played = ui_play_plan(&plan, start_id);
+    mdb_plan_free(&plan);
+    if(played) screen_show(SCR_NOWPLAYING);
+}
+
+static void fb_play_all_cb(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED) fb_play_folder_mode(0);
+}
+static void fb_shuffle_cb(lv_event_t *e){
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED) fb_play_folder_mode(1);
+}
+
+static void fb_az_show(int on);
+
+static void fb_jump_to_letter(char target){
+    if(!g_nent || !g_first) return;
+    char L = toupper((unsigned char)target);
     int idx = -1;
-    for(int i = 0; i < ndirs; i++){
+    int ndirs = 0;
+    while(ndirs < g_nent && g_ent[ndirs].is_dir) ndirs++;
+    for(int i = ndirs; i < g_nent; i++){
         if(g_first[i] == L){ idx = i; break; }
     }
-    if(idx < 0){
-        for(int i = ndirs; i < g_nent; i++){
-            if(g_first[i] == L){ idx = i; break; }
-        }
-    }
-    if(idx < 0){
+    if(idx < 0 && ndirs > 0){
         for(int i = 0; i < ndirs; i++){
-            if(g_first[i] >= L){ idx = i; break; }
+            if(g_first[i] == L){ idx = i; break; }
         }
     }
     if(idx < 0){
@@ -462,8 +459,9 @@ static void fb_jump_to_letter(char L){
         }
     }
     if(idx < 0) idx = g_nent - 1;
-    int y = (idx + g_has_play_header) * 52;
+    int y = (g_has_play_header ? 52 : 0) + idx * 52;
     lv_obj_scroll_to_y(g_list, y, LV_ANIM_OFF);
+    row_pool_update(&g_rows);
 }
 
 static void fb_letter_cb(lv_event_t *e){
@@ -498,64 +496,27 @@ static void fb_lhint_timer_cb(lv_timer_t *t){
         lv_obj_add_flag(g_lhint, LV_OBJ_FLAG_HIDDEN);
 }
 
-void folderbrowser_scroll_letter_tick(void){
+void folderbrowser_scroll_letter_tick(char ch){
+    (void)ch;
     if(!g_list || !g_lhint || g_nent <= 0 || !g_first) return;
     int top = lv_obj_get_scroll_top(g_list);
     int bot = lv_obj_get_scroll_bottom(g_list);
     int total = top + bot;
     int idx = 0;
     if(total > 0){
-        float t = (float)top / (float)total;
-        if(t < 0.0f) t = 0.0f; else if(t > 1.0f) t = 1.0f;
-        idx = (int)(t * (float)(g_nent - 1) + 0.5f);
+        idx = (int)(((long long)top * g_nent) / total);
+        if(idx >= g_nent) idx = g_nent - 1;
+        if(idx < 0) idx = 0;
     }
-    if(idx < 0) idx = 0; else if(idx >= g_nent) idx = g_nent - 1;
-    char ch = g_first[idx];
-    if(ch && ch != g_lhint_ch){
-        g_lhint_ch = ch;
-        char b[2] = {ch, 0};
-        lv_label_set_text(g_lhint_lbl, b);
-    }
+    char c = g_first[idx];
+    if(c == g_lhint_ch && lv_tick_elaps(g_lhint_tick) < 700) return;
+    g_lhint_ch = c;
     g_lhint_tick = lv_tick_get();
-    lv_obj_clear_flag(g_lhint, LV_OBJ_FLAG_HIDDEN);
-}
-
-lv_obj_t *folderbrowser_scroller(void){ return g_list; }
-
-/* Play whole folder in Sequential (mode=0) or Shuffle (mode=1) */
-static void fb_play_folder_mode(int mode){
-    if(ui_get_source_mode() == 4 && !ui_usb_dac_connected()){
-        ui_toast("USB DAC not connected"); return;
+    if(g_lhint && g_lhint_lbl){
+        char b[2] = {c, 0};
+        lv_label_set_text(g_lhint_lbl, b);
+        lv_obj_remove_flag(g_lhint, LV_OBJ_FLAG_HIDDEN);
     }
-    int n_audio = 0;
-    for(int i = 0; i < g_nent; i++){
-        if(!g_ent[i].is_dir && g_ent[i].kind == FB_K_AUDIO) n_audio++;
-    }
-    if(n_audio <= 0){ ui_toast("No audio files"); return; }
-    const char **files = malloc((size_t)n_audio * sizeof *files);
-    if(!files){ ui_toast("Out of memory"); return; }
-    int k = 0;
-    for(int i = 0; i < g_nent; i++){
-        if(!g_ent[i].is_dir && g_ent[i].kind == FB_K_AUDIO) files[k++] = g_ent[i].name;
-    }
-    mdb_plan_t plan;
-    int ok = mdb_folder_plan(g_dir, files, k, &plan);
-    free(files);
-    if(!ok){ ui_toast("Not in library"); return; }
-
-    cfg_set_int("work_mode", mode);
-    ui_set_workmode(mode);
-
-    int start_id = (mode == 1 && plan.count > 1) ? plan.ids[rand() % plan.count] : plan.ids[0];
-    int played = ui_play_plan(&plan, start_id);
-    mdb_plan_free(&plan);
-    if(played) screen_show(SCR_NOWPLAYING);
-}
-static void fb_play_all_cb(lv_event_t *e){
-    if(lv_event_get_code(e) == LV_EVENT_CLICKED) fb_play_folder_mode(0);
-}
-static void fb_shuffle_cb(lv_event_t *e){
-    if(lv_event_get_code(e) == LV_EVENT_CLICKED) fb_play_folder_mode(1);
 }
 
 static void fb_rebuild(void){
@@ -582,6 +543,14 @@ static void fb_rebuild(void){
         return;
     }
 
+    if(g_nent > g_first_cap){
+        char *nf = realloc(g_first, (size_t)g_nent * sizeof *nf);
+        if(nf){ g_first = nf; g_first_cap = g_nent; }
+    }
+    if(g_first){
+        for(int i = 0; i < g_nent; i++) g_first[i] = first_letter(g_ent[i].name);
+    }
+
     /* If folder contains playable audio tracks, provide Play All and Shuffle header */
     int n_audio = 0;
     for(int i = 0; i < g_nent; i++){
@@ -590,7 +559,9 @@ static void fb_rebuild(void){
     if(n_audio > 0){
         lv_obj_t *hr = lv_obj_create(g_list);
         lv_obj_remove_style_all(hr);
+        lv_obj_add_flag(hr, LV_OBJ_FLAG_IGNORE_LAYOUT);
         lv_obj_set_size(hr, 268, 46);
+        lv_obj_set_pos(hr, 11, 0);
         lv_obj_clear_flag(hr, LV_OBJ_FLAG_SCROLLABLE);
 
         lv_obj_t *b_play = lv_button_create(hr);
@@ -626,14 +597,8 @@ static void fb_rebuild(void){
         g_has_play_header = 1;
     }
 
-    /* Render the first screenful synchronously, then the rest on a timer so a folder with
-     * thousands of files doesn't stall the UI on open (mirrors the Library song list). */
-    g_fb_i = 0;
-    int first = g_nent < 20 ? g_nent : 20;
-    for(; g_fb_i < first; g_fb_i++) fb_add_row(g_fb_i);
-    if(g_fb_i < g_nent) g_fb_fill = lv_timer_create(fb_fill_cb, 16, NULL);
-    lv_obj_scroll_to_y(g_list, 0, LV_ANIM_OFF);
-
+    lv_obj_scroll_to_y(g_list,0,LV_ANIM_OFF);
+    if(!row_pool_start(&g_rows,g_list,g_nent,46,6,g_has_play_header ? 52 : 0,11,0,0,1,fb_bind)) ui_toast("Out of memory");
     fb_az_show(g_nent > 12);
 }
 
@@ -659,49 +624,47 @@ static void fb_ascend(void){
     fb_scan();
 }
 
-int folderbrowser_back(void){
-    if(g_grid && !lv_obj_has_flag(g_grid, LV_OBJ_FLAG_HIDDEN)){
-        lv_obj_add_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
-        return 1;
-    }
-    if(strcmp(g_dir, FB_ROOT) != 0){
-        fb_ascend();
-        return 1;
-    }
-    return 0;
-}
-
 static void fb_play(const char *name){
+    if(ui_source_mode() == 4){ ui_toast("USB DAC mode: controls on host"); return; }
+    int n_audio = 0;
+    int tap_idx = 0;
+    for(int i = 0; i < g_nent; i++){
+        if(!g_ent[i].is_dir && g_ent[i].kind == FB_K_AUDIO){
+            if(!strcmp(g_ent[i].name, name)) tap_idx = n_audio;
+            n_audio++;
+        }
+    }
+    if(n_audio > 0){
+        const char **files = malloc((size_t)n_audio * sizeof *files);
+        if(files){
+            int k = 0;
+            for(int i = 0; i < g_nent; i++){
+                if(!g_ent[i].is_dir && g_ent[i].kind == FB_K_AUDIO) files[k++] = g_ent[i].name;
+            }
+            mdb_plan_t plan;
+            int ok = mdb_folder_plan(g_dir, files, k, &plan);
+            free(files);
+            if(ok && plan.count > 0 && tap_idx < plan.count){
+                cfg_set_int("work_mode", 0);
+                ui_set_workmode(0);
+                int played = ui_play_plan(&plan, plan.ids[tap_idx]);
+                mdb_plan_free(&plan);
+                if(played){ screen_show(SCR_NOWPLAYING); return; }
+            } else if(ok){
+                mdb_plan_free(&plan);
+            }
+        }
+    }
+
     char full[FB_MAXPATH];
     int n = snprintf(full, sizeof full, "%s/%s", g_dir, name);
     if(n <= 0 || n >= (int)sizeof full){ ui_toast("Path too long"); return; }
-    int target_id = mdb_song_id_by_path(full);
-    if(target_id <= 0){ ui_toast("Not in library"); return; }
-
-    /* Build a folder queue: collect all audio files currently in this folder */
-    int n_audio = 0;
-    for(int i = 0; i < g_nent; i++){
-        if(!g_ent[i].is_dir && g_ent[i].kind == FB_K_AUDIO) n_audio++;
-    }
-    const char **files = malloc((size_t)n_audio * sizeof *files);
-    if(!files){ ui_toast("Out of memory"); return; }
-    int k = 0;
-    for(int i = 0; i < g_nent; i++){
-        if(!g_ent[i].is_dir && g_ent[i].kind == FB_K_AUDIO) files[k++] = g_ent[i].name;
-    }
-
-    mdb_plan_t plan;
-    int ok = mdb_folder_plan(g_dir, files, k, &plan);
-    free(files);
-    if(!ok){ ui_toast("Not in library"); return; }
-
-    int played = ui_play_plan(&plan, target_id);
-    mdb_plan_free(&plan);
-    if(played) screen_show(SCR_NOWPLAYING);
+    if(ui_play_song_by_path(full)) screen_show(SCR_NOWPLAYING);
 }
 
 /* Play the CUE/ISO tracks of `paths` (their SONG rows, TRACK order) through the exact queue the album drill uses. */
 static void fb_play_tracks(const char *const *paths, int n){
+    if(ui_source_mode() == 4){ ui_toast("USB DAC mode: controls on host"); return; }
     mdb_plan_t plan;
     if(!mdb_ui_read_begin()){ ui_toast("Library busy - try again"); return; }
     int found=mdb_subtrack_plan(paths,n,&plan);
@@ -743,13 +706,26 @@ static void fb_play_iso(const char *name){
 
 static void fb_row_cb(lv_event_t *e){
     if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    int i = row_slot_index(lv_event_get_user_data(e));
     if(i < 0 || i >= g_nent) return;
     fb_entry_t *en = &g_ent[i];
     if(en->is_dir) fb_descend(en->name);
     else if(en->kind == FB_K_ISO) fb_play_iso(en->name);
     else if(en->kind == FB_K_CUE) fb_play_sheet(en->name);
     else           fb_play(en->name);
+}
+
+int folderbrowser_back(void){
+    if(screen_current() != SCR_FOLDER) return 0;
+    if(g_grid && !lv_obj_has_flag(g_grid, LV_OBJ_FLAG_HIDDEN)){
+        lv_obj_add_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+        return 1;
+    }
+    if(strcmp(g_dir, FB_ROOT) != 0){
+        fb_ascend();
+        return 1;
+    }
+    return 0;
 }
 
 static void fb_header_back_cb(lv_event_t *e){
@@ -862,3 +838,5 @@ void folderbrowser_open(void){
     fb_scan();
     screen_show(SCR_FOLDER);
 }
+
+lv_obj_t *folderbrowser_scroller(void){ return g_list; }
