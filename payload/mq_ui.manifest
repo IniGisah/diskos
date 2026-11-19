@@ -1,6 +1,6 @@
 artifact: mq_ui
-md5: 98a07f8072eb821daa162a1b1e56c88d
-size: 7707884
-built: 2026-11-19T09:17:09Z
+md5: 8061f41159daaaf78362878a682eabb0
+size: 7707500
+built: 2026-11-19T09:56:22Z
 cc: mipsel-linux-musl-gcc (GCC) 11.2.1 20211120
-src_md5: fa2d8a22254652533681ba15af1a0175
+src_md5: 15d3432b38c666d10b2bf752230f8c88

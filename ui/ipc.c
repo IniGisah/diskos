@@ -931,7 +931,6 @@ static void conv_on_reply(const char*buf,int n);   /* still-image conversion (en
 static void conv_new_generation(unsigned generation);
 static void parse_frame(const char*buf,int n){
     if(n<4) return;
-    diskos_trace("ipc_rx: len=%d hdr=%.8s", n, buf);
     if(!memcmp(buf,"aa05",4)){
         /* STOCK-PARITY (owner decision 55): bind by receipt, not verified item.
          * V2.40 converter 0x45b69c -> aa05=1 at 0x45b6fc-0x45b710;
@@ -1031,9 +1030,7 @@ static void parse_frame(const char*buf,int n){
         pthread_mutex_lock(&g_recov_mu);
         unsigned generation=g_generation; int pending=g_rx_reopen;
         pthread_mutex_unlock(&g_recov_mu);
-        diskos_trace("ipc: parse_a2 start len=%d", n - 8);
         int accepted=parse_a2(buf+8, n-8);
-        diskos_trace("ipc: parse_a2 done acc=%d track=%d", accepted, g_state.have_track);
         pthread_mutex_lock(&g_recov_mu);
         if(complete && accepted && !pending && !g_rx_reopen && generation==g_generation){
             g_confirmed=1;

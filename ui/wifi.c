@@ -390,7 +390,7 @@ static int wifi_sanitize_savenets(void){
         g_save_pending = 0;
     }
     /* Enable 802.11 power saving (DTIM beacon sleep) on AP6212 / BCM43438 */
-    system("iw dev wlan0 set power_save on 2>/dev/null || iw wlan0 set power_save on 2>/dev/null || iwconfig wlan0 power on 2>/dev/null");
+    system("wl PM 2 >/dev/null 2>&1 || iw dev wlan0 set power_save on 2>/dev/null || iw wlan0 set power_save on 2>/dev/null || iwconfig wlan0 power on 2>/dev/null");
     return wifi_attempt_clear();
 }
 
@@ -1591,6 +1591,9 @@ static int wifi_monitor_drain(void){
         if(strstr(b,"CTRL-EVENT-DISCONNECTED")){
             g_lease.net.allowed=0;
             if(g_lease.phase==LEASE_RELEASE || g_lease.phase==LEASE_ACQUIRE){g_lease.resume=g_lease.phase;g_lease.phase=LEASE_FAILED;}
+        }
+        if(strstr(b,"CTRL-EVENT-CONNECTED")){
+            system("wl PM 2 >/dev/null 2>&1");
         }
         if(strstr(b,"CTRL-EVENT-SCAN-RESULTS") && g_scanning)g_scan_due=wifi_now();
     }

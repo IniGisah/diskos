@@ -125,6 +125,8 @@ static void hardware_screen_sleep(int is_auto_sleep) {
     /* Disable UI touch processing in LVGL so dark screen never registers blind clicks */
     if(g_touch)
         lv_indev_enable(g_touch, false);
+    /* Ensure Wi-Fi radio enters 802.11 power save mode during sleep */
+    system("wl PM 2 >/dev/null 2>&1");
 }
 
 /* Real hardware screen turn-on matching stock firmware (0x4dde48):
@@ -3078,15 +3080,6 @@ void diskos_trace(const char *fmt, ...){
     va_start(ap, fmt);
     vsnprintf(g_trace_ring[idx].msg, sizeof(g_trace_ring[idx].msg), fmt, ap);
     va_end(ap);
-
-    /* Also write to /usr/data/bt_rx.log in real time */
-    int fd = open("/usr/data/bt_rx.log", O_WRONLY|O_CREAT|O_APPEND, 0666);
-    if(fd >= 0){
-        char line[128];
-        int len = snprintf(line, sizeof line, "[%u.%03u] %s\n", ms / 1000, ms % 1000, g_trace_ring[idx].msg);
-        if(len > 0) write(fd, line, len);
-        close(fd);
-    }
 }
 
 /* async-signal-safe: log the fatal signal number, fault address, registers and trace ring to the boot and crash logs so a hard crash
@@ -6167,16 +6160,10 @@ int main(int argc, char **argv){
                 case PK_OFF:      /* the player put the panel to sleep: power the rail down to match */
                     draw_set_dark(1);
                     bl_state = 2; g_screen_off = 1; manual_btn_off = 1;
-                    ui_backlight(0);
-                    if(g_touch) lv_indev_enable(g_touch, false);
-                    {
-                        int fd_touch = open("/dev/cst816t", O_RDWR | O_NONBLOCK);
-                        if(fd_touch >= 0){ ioctl(fd_touch, 0x2000ef03); close(fd_touch); }
-                        int fd_lcd = open("/dev/lcd_st77916", O_RDWR | O_NONBLOCK);
-                        if(fd_lcd >= 0){ ioctl(fd_lcd, 0x2000ef01); close(fd_lcd); }
-                    }
+                    hardware_screen_sleep(0);
                     mclock_sync(0);
                     kit_cursor_sync(0);
+                    g_last_sleep_tick = lv_tick_get();
                     if(screen_current() == SCR_SAVER) screen_back();
                     break;
                 case PK_WAKE:     /* the player woke the panel: light it at the user's level (Outdoor: full), not the player's */
@@ -6309,9 +6296,17 @@ int main(int argc, char **argv){
                   lv_tick_elaps(last_activity) > (uint32_t)screenoff_extra*1000){
             /* No saver means no dim stage: honour the one selected deadline,
              * without adding a second delay or opening a screen just to close it. */
-            ui_backlight(0); bl_state = 2; g_screen_off = 1;
+            draw_set_dark(1);
+            hardware_screen_sleep(1);
+            bl_state = 2; g_screen_off = 1; manual_btn_off = 0;
             mclock_sync(0);
             kit_cursor_sync(0);
+            g_last_sleep_tick = lv_tick_get();
+            if(!pk.player_off){
+                g_syncing_player_sleep = 1;
+                g_syncing_player_sleep_at = lv_tick_get();
+                (void)power_key_inject();
+            }
             if(screen_current()==SCR_SAVER) screen_back();
         }
 
