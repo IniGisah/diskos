@@ -3192,6 +3192,26 @@ int mdb_playlist_occurrence_pos(long pid, long long occurrence){
     int pos=sqlite3_step(st)==SQLITE_ROW ? sqlite3_column_int(st,0) : 0;
     sqlite3_finalize(st); return pos;
 }
+int mdb_playlist_occurrence_path(long pid, long long occurrence, char *out, int cap){
+    if(!out || cap <= 0) return 0;
+    out[0] = 0;
+    sqlite3 *d = db(); if(!d) return 0;
+    sqlite3_stmt *st = NULL;
+    const char *sql = "SELECT PATH FROM CUSTOM_PLAYLIST WHERE PLAYLIST_ID=? AND ID=?;";
+    if(sqlite3_prepare_v2(d, sql, -1, &st, NULL) != SQLITE_OK) return 0;
+    sqlite3_bind_int64(st, 1, pid);
+    sqlite3_bind_int64(st, 2, occurrence);
+    int ok = 0;
+    if(sqlite3_step(st) == SQLITE_ROW){
+        const char *p = colt(st, 0);
+        if(p && p[0]){
+            snprintf(out, cap, "%s", p);
+            ok = 1;
+        }
+    }
+    sqlite3_finalize(st);
+    return ok;
+}
 int mdb_playlist_remove_occurrence(long pid, long long occurrence){
     sqlite3 *d=db(); if(!d) return 0;
     sqlite3_stmt *st;

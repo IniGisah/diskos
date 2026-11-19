@@ -445,12 +445,6 @@ static int32_t seek_pt_to_value(int x, int y){
     return v;
 }
 
-void ui_np_seek_cancel(void) {
-    g_seek_cand = 0;
-    g_seek_on = 0;
-    g_scrubbing = 0;
-}
-
 /* press: returns 1 if this touch could be a seek (and arms the recognizer) */
 int ui_np_seek_press(int x, int y){
     g_seek_cand = 0; g_seek_on = 0; g_scrubbing = 0;   /* also clears a stuck scrub from a missed release */

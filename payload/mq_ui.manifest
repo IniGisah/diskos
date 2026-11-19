@@ -1,1 +1,6 @@
-1251583a0cafb34bbb42cb95a8dbf7ebd77d607c2ba19ec346b8249ebfb72225  payload/mq_ui
+artifact: mq_ui
+md5: f08dbb3f17c307759d69c5a832a3795e
+size: 7721508
+built: 2026-11-19T06:41:49Z
+cc: mipsel-linux-musl-gcc (GCC) 11.2.1 20211120
+src_md5: 7c0f93d8cfd37a850eb170407c0dc48f

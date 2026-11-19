@@ -257,6 +257,7 @@ typedef struct {
 /* Owned compact display snapshot. -1 keeps the old view on read/allocation failure. */
 int mdb_playlist_display(long pid, mdb_playlist_display_t **out);
 int mdb_playlist_occurrence_pos(long pid, long long occurrence);
+int mdb_playlist_occurrence_path(long pid, long long occurrence, char *out, int cap);
 int mdb_playlist_remove_occurrence(long pid, long long occurrence);
 int  mdb_playlist_songs(long pid, mdb_song_t *out, int cap);
 int  mdb_playlist_count(long pid);

@@ -10,6 +10,7 @@
 #include "musicdb.h"
 #include "scanner.h"
 #include "config.h"
+#include "modes.h"
 #include "artcache.h"
 #include "i18n.h"
 #include <stdio.h>
@@ -364,17 +365,22 @@ static void fb_bind(row_slot_t *s, int fresh){
     lv_obj_set_style_bg_opa(r,LV_OPA_70,LV_STATE_PRESSED);
     kit_row_layout(r,KIT_ROW_ICON);
 
-    int show_art = cfg_show_art();
-    const char *thumb = NULL;
+    int show_art = cfg_get_int("song_art", 1);
+    char bmp[600];
+    int has_thumb = 0;
     if(show_art && !en->is_dir && en->kind == FB_K_AUDIO){
         char full[FB_MAXPATH];
         snprintf(full, sizeof full, "%s/%s", g_dir, en->name);
-        thumb = artcache_thumb_path(full);
+        if(artcache_thumb_path(full, bmp, sizeof bmp) == 0){
+            has_thumb = 1;
+        }
     }
 
-    if(thumb){
-        if(strcmp(s->img_src, thumb) != 0){
-            snprintf(s->img_src, sizeof s->img_src, "%s", thumb);
+    if(has_thumb){
+        char src[620];
+        snprintf(src, sizeof src, "A:%s", bmp);
+        if(strcmp(s->img_src, src) != 0){
+            snprintf(s->img_src, sizeof s->img_src, "%s", src);
             lv_image_set_src(s->tile_img, s->img_src);
         }
         lv_obj_remove_flag(s->tile, LV_OBJ_FLAG_HIDDEN);
@@ -404,7 +410,7 @@ static void fb_bind(row_slot_t *s, int fresh){
 
 static void fb_play_folder_mode(int mode){
     if(g_nent <= 0){ ui_toast("No audio files"); return; }
-    if(ui_source_mode() == 4){ ui_toast("USB DAC mode: controls on host"); return; }
+    if(ui_get_source_mode() == 4){ ui_toast("USB DAC mode: controls on host"); return; }
     int n_audio = 0;
     for(int i = 0; i < g_nent; i++){
         if(!g_ent[i].is_dir && g_ent[i].kind == FB_K_AUDIO) n_audio++;
@@ -496,8 +502,7 @@ static void fb_lhint_timer_cb(lv_timer_t *t){
         lv_obj_add_flag(g_lhint, LV_OBJ_FLAG_HIDDEN);
 }
 
-void folderbrowser_scroll_letter_tick(char ch){
-    (void)ch;
+void folderbrowser_scroll_letter_tick(void){
     if(!g_list || !g_lhint || g_nent <= 0 || !g_first) return;
     int top = lv_obj_get_scroll_top(g_list);
     int bot = lv_obj_get_scroll_bottom(g_list);
@@ -625,7 +630,7 @@ static void fb_ascend(void){
 }
 
 static void fb_play(const char *name){
-    if(ui_source_mode() == 4){ ui_toast("USB DAC mode: controls on host"); return; }
+    if(ui_get_source_mode() == 4){ ui_toast("USB DAC mode: controls on host"); return; }
     int n_audio = 0;
     int tap_idx = 0;
     for(int i = 0; i < g_nent; i++){
@@ -664,7 +669,7 @@ static void fb_play(const char *name){
 
 /* Play the CUE/ISO tracks of `paths` (their SONG rows, TRACK order) through the exact queue the album drill uses. */
 static void fb_play_tracks(const char *const *paths, int n){
-    if(ui_source_mode() == 4){ ui_toast("USB DAC mode: controls on host"); return; }
+    if(ui_get_source_mode() == 4){ ui_toast("USB DAC mode: controls on host"); return; }
     mdb_plan_t plan;
     if(!mdb_ui_read_begin()){ ui_toast("Library busy - try again"); return; }
     int found=mdb_subtrack_plan(paths,n,&plan);

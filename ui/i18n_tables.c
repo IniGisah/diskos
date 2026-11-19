@@ -106,12 +106,9 @@ static const i18n_entry_t T_ZH[] = {
     { "Close", "\345\205\263\351\227\255" },
     { "Confirm exit?", "\351\200\200\345\207\272?" },
     { "Connect to Wi-Fi to beam", "\350\277\236\346\216\245\346\227\240\347\272\277\347\275\221\347\273\234\345\220\216\346\211\215\350\203\275\346\212\225\345\260\204" },
-<<<<<<< HEAD
-    { "Connecting to", "\346\255\243\345\234\250\350\277\236\346\216\245" },
-=======
     { "Connected", "\345\267\262\350\277\236\346\216\245" },
+    { "Connecting to", "\346\255\243\345\234\250\350\277\236\346\216\245" },
     { "Connecting...", "\346\255\243\345\234\250\350\277\236\346\216\245..." },
->>>>>>> upstream/main
     { "Connection failed", "\346\227\240\346\263\225\350\277\236\346\216\245" },
     { "Controls", "\346\216\247\345\210\266" },
     { "Could not change style - Custom kept", "\346\227\240\346\263\225\346\233\264\346\224\271\346\240\267\345\274\217\357\274\214\345\267\262\344\277\235\347\225\231\350\207\252\345\256\232\344\271\211" },
@@ -539,12 +536,9 @@ static const i18n_entry_t T_TW[] = {
     { "Close", "\351\227\234\351\226\211" },
     { "Confirm exit?", "\351\200\200\345\207\272?" },
     { "Connect to Wi-Fi to beam", "\351\200\243\346\216\245\347\204\241\347\267\232\347\266\262\350\267\257\345\276\214\346\211\215\350\203\275\345\202\263\351\200\201" },
-<<<<<<< HEAD
-    { "Connecting to", "\346\255\243\345\234\250\351\200\243\347\267\232" },
-=======
     { "Connected", "\345\267\262\351\200\243\347\267\232" },
+    { "Connecting to", "\346\255\243\345\234\250\351\200\243\347\267\232" },
     { "Connecting...", "\346\255\243\345\234\250\351\200\243\347\267\232..." },
->>>>>>> upstream/main
     { "Connection failed", "\351\200\243\347\267\232\345\244\261\346\225\227" },
     { "Controls", "\346\216\247\345\210\266" },
     { "Could not change style - Custom kept", "\347\204\241\346\263\225\350\256\212\346\233\264\346\250\243\345\274\217\357\274\214\345\267\262\344\277\235\347\225\231\350\207\252\350\250\202" },
@@ -972,12 +966,9 @@ static const i18n_entry_t T_JA[] = {
     { "Close", "\351\226\211\343\201\230\343\202\213" },
     { "Confirm exit?", "\347\265\202\344\272\206?" },
     { "Connect to Wi-Fi to beam", "Beam\343\201\231\343\202\213\343\201\253\343\201\257Wi-Fi\343\201\253\346\216\245\347\266\232\343\201\227\343\201\246\343\201\217\343\201\240\343\201\225\343\201\204" },
-<<<<<<< HEAD
-    { "Connecting to", "\346\216\245\347\266\232\344\270\255" },
-=======
     { "Connected", "\346\216\245\347\266\232\343\201\227\343\201\276\343\201\227\343\201\237" },
+    { "Connecting to", "\346\216\245\347\266\232\344\270\255" },
     { "Connecting...", "\346\216\245\347\266\232\344\270\255..." },
->>>>>>> upstream/main
     { "Connection failed", "\346\216\245\347\266\232\343\201\253\345\244\261\346\225\227" },
     { "Controls", "\343\202\263\343\203\263\343\203\210\343\203\255\343\203\274\343\203\253" },
     { "Could not change style - Custom kept", "\343\202\271\343\202\277\343\202\244\343\203\253\343\202\222\345\244\211\346\233\264\343\201\247\343\201\215\343\201\276\343\201\233\343\202\223\343\200\202\343\202\253\343\202\271\343\202\277\343\203\240\343\201\256\343\201\276\343\201\276\343\201\247\343\201\231" },
@@ -1405,12 +1396,9 @@ static const i18n_entry_t T_KO[] = {
     { "Close", "\353\213\253\352\270\260" },
     { "Confirm exit?", "\354\242\205\353\243\214?" },
     { "Connect to Wi-Fi to beam", "Beam\355\225\230\353\240\244\353\251\264 Wi-Fi\354\227\220 \354\227\260\352\262\260\355\225\230\354\204\270\354\232\224" },
-<<<<<<< HEAD
-    { "Connecting to", "\354\227\260\352\262\260 \354\244\221" },
-=======
     { "Connected", "\354\227\260\352\262\260\353\220\250" },
+    { "Connecting to", "\354\227\260\352\262\260 \354\244\221" },
     { "Connecting...", "\354\227\260\352\262\260 \354\244\221..." },
->>>>>>> upstream/main
     { "Connection failed", "\354\227\260\352\262\260 \354\213\244\355\214\250" },
     { "Controls", "\354\241\260\354\236\221" },
     { "Could not change style - Custom kept", "\354\212\244\355\203\200\354\235\274\354\235\204 \353\263\200\352\262\275\355\225\240 \354\210\230 \354\227\206\354\235\214. \354\202\254\354\232\251\354\236\220 \354\247\200\354\240\225 \354\234\240\354\247\200" },
@@ -1837,12 +1825,9 @@ static const i18n_entry_t T_ES[] = {
     { "Close", "Cerrar" },
     { "Confirm exit?", "\302\277Salir?" },
     { "Connect to Wi-Fi to beam", "Con\303\251ctate al Wi-Fi para usar Beam" },
-<<<<<<< HEAD
-    { "Connecting to", "Conectando a" },
-=======
     { "Connected", "Conectado" },
+    { "Connecting to", "Conectando a" },
     { "Connecting...", "Conectando..." },
->>>>>>> upstream/main
     { "Connection failed", "Error de conexi\303\263n" },
     { "Controls", "Controles" },
     { "Could not change style - Custom kept", "No se pudo cambiar el estilo; se mantiene Personalizado" },
@@ -2253,12 +2238,9 @@ static const i18n_entry_t T_PT[] = {
     { "Close", "Fechar" },
     { "Confirm exit?", "Sair?" },
     { "Connect to Wi-Fi to beam", "Conecte-se ao Wi-Fi para usar o Beam" },
-<<<<<<< HEAD
-    { "Connecting to", "Conectando a" },
-=======
     { "Connected", "Ligado" },
+    { "Connecting to", "Conectando a" },
     { "Connecting...", "A ligar..." },
->>>>>>> upstream/main
     { "Connection failed", "Falha na liga\303\247\303\243o" },
     { "Controls", "Controlos" },
     { "Could not change style - Custom kept", "N\303\243o foi poss\303\255vel mudar o estilo; mantido Personalizado" },
@@ -2657,12 +2639,9 @@ static const i18n_entry_t T_IT[] = {
     { "Close", "Chiudi" },
     { "Confirm exit?", "Uscire?" },
     { "Connect to Wi-Fi to beam", "Collegati al Wi-Fi per usare Beam" },
-<<<<<<< HEAD
-    { "Connecting to", "Connessione a" },
-=======
     { "Connected", "Connesso" },
+    { "Connecting to", "Connessione a" },
     { "Connecting...", "Connessione..." },
->>>>>>> upstream/main
     { "Connection failed", "Connessione non riuscita" },
     { "Controls", "Controlli" },
     { "Could not change style - Custom kept", "Impossibile cambiare stile, resta Personalizzato" },
@@ -3090,12 +3069,9 @@ static const i18n_entry_t T_DE[] = {
     { "Close", "Schlie\303\237en" },
     { "Confirm exit?", "Beenden?" },
     { "Connect to Wi-Fi to beam", "F\303\274r Beam mit WLAN verbinden" },
-<<<<<<< HEAD
-    { "Connecting to", "Verbinden mit" },
-=======
     { "Connected", "Verbunden" },
+    { "Connecting to", "Verbinden mit" },
     { "Connecting...", "Verbinde..." },
->>>>>>> upstream/main
     { "Connection failed", "Verbindung fehlgeschlagen" },
     { "Controls", "Steuerung" },
     { "Could not change style - Custom kept", "Stil nicht \303\244nderbar, Eigenes bleibt" },
@@ -3523,12 +3499,9 @@ static const i18n_entry_t T_FR[] = {
     { "Close", "Fermer" },
     { "Confirm exit?", "Quitter ?" },
     { "Connect to Wi-Fi to beam", "Connectez-vous au Wi-Fi pour utiliser Beam" },
-<<<<<<< HEAD
-    { "Connecting to", "Connexion \303\240" },
-=======
     { "Connected", "Connect\303\251" },
+    { "Connecting to", "Connexion \303\240" },
     { "Connecting...", "Connexion..." },
->>>>>>> upstream/main
     { "Connection failed", "\303\211chec de la connexion" },
     { "Controls", "Commandes" },
     { "Could not change style - Custom kept", "Changement impossible, Personnalis\303\251 conserv\303\251" },
@@ -3956,12 +3929,9 @@ static const i18n_entry_t T_RU[] = {
     { "Close", "\320\227\320\260\320\272\321\200\321\213\321\202\321\214" },
     { "Confirm exit?", "\320\222\321\213\320\271\321\202\320\270?" },
     { "Connect to Wi-Fi to beam", "\320\237\320\276\320\264\320\272\320\273\321\216\321\207\320\270\321\202\320\265\321\201\321\214 \320\272 Wi-Fi \320\264\320\273\321\217 Beam" },
-<<<<<<< HEAD
-    { "Connecting to", "\320\237\320\276\320\264\320\272\320\273\321\216\321\207\320\265\320\275\320\270\320\265 \320\272" },
-=======
     { "Connected", "\320\237\320\276\320\264\320\272\320\273\321\216\321\207\320\265\320\275\320\276" },
+    { "Connecting to", "\320\237\320\276\320\264\320\272\320\273\321\216\321\207\320\265\320\275\320\270\320\265 \320\272" },
     { "Connecting...", "\320\237\320\276\320\264\320\272\320\273\321\216\321\207\320\265\320\275\320\270\320\265..." },
->>>>>>> upstream/main
     { "Connection failed", "\320\236\321\210\320\270\320\261\320\272\320\260 \320\277\320\276\320\264\320\272\320\273\321\216\321\207\320\265\320\275\320\270\321\217" },
     { "Controls", "\320\243\320\277\321\200\320\260\320\262\320\273\320\265\320\275\320\270\320\265" },
     { "Could not change style - Custom kept", "\320\235\320\265 \321\203\320\264\320\260\320\273\320\276\321\201\321\214 \321\201\320\274\320\265\320\275\320\270\321\202\321\214 \321\201\321\202\320\270\320\273\321\214, \320\276\321\201\321\202\320\260\320\262\320\273\320\265\320\275\320\276 \320\241\320\262\320\276\321\221" },
