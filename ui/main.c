@@ -3420,6 +3420,8 @@ static int       s_fast_scroll_cand = 0;
 static lv_obj_t *s_fast_scroller = NULL;
 static int       s_aw_bar_drag = 0;
 
+int ui_is_fast_scrolling(void){ return s_fast_scroll_active; }
+
 static lv_obj_t *ui_active_scroller(void){
     switch(screen_current()){
         case SCR_LIBRARY:        return library_scroller();
@@ -5843,18 +5845,25 @@ int main(int argc, char **argv){
                 } else if(qs_drag){
                     /* Quick Settings pull owns the touch */
                 } else if(s_fast_scroll_active && s_fast_scroller && lv_obj_is_valid(s_fast_scroller)){
-                    float t_top = 75.0f, t_bot = 285.0f;
-                    float norm = ((float)p.y - t_top) / (t_bot - t_top);
-                    if(norm < 0.0f) norm = 0.0f;
-                    if(norm > 1.0f) norm = 1.0f;
-                    int top = lv_obj_get_scroll_top(s_fast_scroller);
-                    int bot = lv_obj_get_scroll_bottom(s_fast_scroller);
-                    int total = top + bot;
-                    if(total > 0){
-                        int target_y = (int)(norm * (float)total);
-                        lv_obj_scroll_to_y(s_fast_scroller, target_y, LV_ANIM_OFF);
-                        if(cur_scr == SCR_FOLDER) folderbrowser_scroll_letter_tick();
-                        else if(cur_scr == SCR_LIBRARY) library_scroll_letter_tick();
+                    if(s_fast_scroller != ui_active_scroller()){
+                        s_fast_scroll_active = 0;
+                        s_fast_scroller = NULL;
+                    } else {
+                        float t_top = 75.0f, t_bot = 285.0f;
+                        float norm = ((float)p.y - t_top) / (t_bot - t_top);
+                        if(norm < 0.0f) norm = 0.0f;
+                        if(norm > 1.0f) norm = 1.0f;
+                        int top = lv_obj_get_scroll_top(s_fast_scroller);
+                        int bot = lv_obj_get_scroll_bottom(s_fast_scroller);
+                        int total = top + bot;
+                        if(total > 0){
+                            int target_y = (int)(norm * (float)total);
+                            if(target_y < 0) target_y = 0;
+                            else if(target_y > total) target_y = total;
+                            lv_obj_scroll_to_y(s_fast_scroller, target_y, LV_ANIM_OFF);
+                            if(cur_scr == SCR_FOLDER) folderbrowser_scroll_letter_tick();
+                            else if(cur_scr == SCR_LIBRARY) library_scroll_letter_tick();
+                        }
                     }
                 } else if(s_aw_bar_drag){
                     float norm = ((float)p.x - 110.0f) / 140.0f;
@@ -5890,6 +5899,10 @@ int main(int argc, char **argv){
                     woke = 0;   /* swallow the release that woke the saver */
                 } else if(s_fast_scroll_active || s_aw_bar_drag){
                     if(s_aw_bar_drag) albumwall_settle();
+                    if(s_fast_scroll_active && s_fast_scroller && lv_obj_is_valid(s_fast_scroller)){
+                        s_fast_scroll_active = 0;
+                        lv_obj_send_event(s_fast_scroller, LV_EVENT_SCROLL, NULL);
+                    }
                     s_fast_scroll_active = 0;
                     s_fast_scroll_cand = 0;
                     s_fast_scroller = NULL;

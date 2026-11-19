@@ -104,6 +104,7 @@ static void plv_bind(row_slot_t *s, int fresh){
         for(int j=0;j<3;j++) s->label[j]=indic_label_create(s->row);
     }
     row_slot_reset(s);
+    if(!s || s->index < 0 || s->index >= g_fill_n || !g_songs) return;
     lv_obj_t *r=s->row,*t=s->label[0],*a=s->label[1],*d=s->label[2];
     mdb_playlist_display_t *song=&g_songs[s->index];
     lv_obj_set_size(r,268,g_row_height); lv_obj_set_style_radius(r,8,0);
@@ -113,7 +114,7 @@ static void plv_bind(row_slot_t *s, int fresh){
     int show_art = cfg_get_int("song_art", 1);
     char bmp[512];
     int have_thumb = 0;
-    if(show_art && song->occurrence > 0){
+    if(show_art && song->occurrence > 0 && !ui_is_fast_scrolling()){
         char p[1024];
         if(mdb_playlist_occurrence_path(g_pid, song->occurrence, p, sizeof p)){
             if(artcache_thumb_path(p, bmp, sizeof bmp) == 0) have_thumb = 1;

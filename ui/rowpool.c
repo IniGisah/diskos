@@ -141,7 +141,7 @@ int row_pool_start(row_pool_t *p, lv_obj_t *list, int count, int height,
     return 1;
 }
 void row_slot_reset(row_slot_t *s){
-    kit_row_recycle(s->row, s->label, 3);
+    kit_row_recycle(s->row, s->label, 3, s->tile);
     if(s->tile) lv_obj_add_flag(s->tile, LV_OBJ_FLAG_HIDDEN);
     /* Recycling clears local styles, including metadata direction. Restore
      * automatic direction before setting the next text and preparing layout. */

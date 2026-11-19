@@ -330,6 +330,7 @@ static void fb_empty_label(const char *msg){
 static void fb_row_cb(lv_event_t *e);
 
 static void fb_bind(row_slot_t *s, int fresh){
+    if(!s || s->index < 0 || s->index >= g_nent || !g_ent) return;
     fb_entry_t *en=&g_ent[s->index];
     if(fresh){
         s->row=lv_button_create(g_list);
@@ -368,7 +369,7 @@ static void fb_bind(row_slot_t *s, int fresh){
     int show_art = cfg_get_int("song_art", 1);
     char bmp[600];
     int has_thumb = 0;
-    if(show_art && !en->is_dir && en->kind == FB_K_AUDIO){
+    if(show_art && !en->is_dir && en->kind == FB_K_AUDIO && !ui_is_fast_scrolling()){
         char full[FB_MAXPATH];
         snprintf(full, sizeof full, "%s/%s", g_dir, en->name);
         if(artcache_thumb_path(full, bmp, sizeof bmp) == 0){
@@ -393,6 +394,7 @@ static void fb_bind(row_slot_t *s, int fresh){
         lv_obj_remove_flag(ic, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(ic, en->is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_AUDIO);
         lv_obj_set_pos(ic, 10, 14);
+        lv_obj_set_style_text_font(ic, TF(UI_16), 0);
         lv_obj_set_style_text_color(ic, en->is_dir ? TC(FOLDER_ICON) : TC(TEXT_MUTED), 0);
         lv_obj_set_pos(nm, 40, 14);
         lv_obj_set_size(nm, en->is_dir ? 194 : 216, 20);
@@ -503,7 +505,7 @@ static void fb_lhint_timer_cb(lv_timer_t *t){
 }
 
 void folderbrowser_scroll_letter_tick(void){
-    if(!g_list || !g_lhint || g_nent <= 0 || !g_first) return;
+    if(!g_list || !g_lhint || !g_lhint_lbl || g_nent <= 0 || !g_first || g_first_cap <= 0) return;
     int top = lv_obj_get_scroll_top(g_list);
     int bot = lv_obj_get_scroll_bottom(g_list);
     int total = top + bot;
@@ -511,6 +513,7 @@ void folderbrowser_scroll_letter_tick(void){
     if(total > 0){
         idx = (int)(((long long)top * g_nent) / total);
         if(idx >= g_nent) idx = g_nent - 1;
+        if(idx >= g_first_cap) idx = g_first_cap - 1;
         if(idx < 0) idx = 0;
     }
     char c = g_first[idx];

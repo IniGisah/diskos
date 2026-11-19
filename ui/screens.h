@@ -450,6 +450,7 @@ void library_ensure_capacity(void);  /* grow row buffers to fit the library (aft
 /* primary scrollable list per long-list screen (for rim-scroll); NULL if none */
 lv_obj_t *library_scroller(void);
 int library_fast_scroll_ok(void);
+int ui_is_fast_scrolling(void);
 void library_scroll_letter_tick(void);   /* flash the current A-Z position while rim-scrolling */
 lv_obj_t *playlistview_scroller(void);
 lv_obj_t *search_scroller(void);

@@ -238,11 +238,11 @@ void kit_restyle(lv_obj_t *root){
 
 /* A recycled row is restyled in isolation. Its labels survive; decorations can
  * change shape with the logical row and are rebuilt without action handlers. */
-void kit_row_recycle(lv_obj_t *row, lv_obj_t **labels, int count){
+void kit_row_recycle(lv_obj_t *row, lv_obj_t **labels, int count, lv_obj_t *tile){
     kit_row_decor_reset(row);
     for(int i = (int)lv_obj_get_child_count(row) - 1; i >= 0; i--){
         lv_obj_t *child = lv_obj_get_child(row, i);
-        int keep = 0;
+        int keep = (tile && child == tile);
         for(int j = 0; j < count; j++) if(child == labels[j]) keep = 1;
         if(!keep) lv_obj_delete(child);
     }
