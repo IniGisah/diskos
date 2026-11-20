@@ -176,8 +176,12 @@ static void touch_modal_press_cb(lv_event_t *e){
     (void)e;
     lv_point_t p;
     lv_indev_get_point(g_touch, &p);
+    int grid_open = (screen_current() == SCR_ALBUMWALL && (albumwall_is_grid_open() || albumwall_is_az_btn_hit(p.x, p.y))) ||
+                    (screen_current() == SCR_LIBRARY && library_is_grid_open()) ||
+                    (screen_current() == SCR_FOLDER && folderbrowser_is_grid_open());
     g_touch_modal_press |= screen_dialog_open() ||
-                           ui_volume_hit(p.x, p.y);
+                           ui_volume_hit(p.x, p.y) ||
+                           grid_open;
 }
 
 /* Manual "Sleep" (Quick Settings tile): a deliberate screen-off request. It must dim+power
@@ -5716,13 +5720,16 @@ int main(int argc, char **argv){
                                      (sy <= 55 || (s_press_scr == SCR_MODELOCK && sy <= 100)));
                     s_qs_close_cand = (s_press_scr == SCR_QUICK);
                     cover_tap = 0;
-                    modal_touch = screen_modal_open();    /* latch: modal dialog on top layer owns this whole gesture */
                     fsart_touch = ui_np_fsart_active();   /* latch: overlay owns this whole gesture */
                     sleep_touch = ui_np_overlay_active(); /* latch: the sleep popover owns this whole gesture */
-                    /* latch: a dialog (or a press on the volume overlay) owns this whole gesture. g_touch_modal_press keeps
-                     * a dialog LVGL saw at the press even if a timer removed it before this check */
-                    modal_touch = g_touch_modal_press ||
-                                  screen_dialog_open() || ui_volume_hit(sx, sy);
+                    /* latch: a modal, dialog, volume overlay, or alphabet grid overlay owns this whole gesture.
+                     * g_touch_modal_press keeps a dialog/grid LVGL saw at the press even if an event handler
+                     * dismissed it before this check */
+                    int grid_touch = (screen_current() == SCR_ALBUMWALL && (albumwall_is_grid_open() || albumwall_is_az_btn_hit(sx, sy))) ||
+                                     (screen_current() == SCR_LIBRARY && library_is_grid_open()) ||
+                                     (screen_current() == SCR_FOLDER && folderbrowser_is_grid_open());
+                    modal_touch = screen_modal_open() || g_touch_modal_press ||
+                                  screen_dialog_open() || ui_volume_hit(sx, sy) || grid_touch;
                     if(fsart_touch || sleep_touch || modal_touch){
                         /* a modal overlay is up -> LVGL handles it; arm no ring seek / rim scroll / cover-flow drag here */
                     } else if(screen_current()==SCR_NOWPLAYING){
@@ -5986,7 +5993,7 @@ int main(int argc, char **argv){
                     } else if(cur==SCR_HOME && horiz && dx<0 && adx>=g_swipe_thresh && dt<700){
                         apps_reload();
                         screen_show(SCR_APPS);    /* slide in the Apps panel */
-                    } else if(cur==SCR_ALBUMWALL && s_press_scr==SCR_ALBUMWALL){
+                    } else if(cur==SCR_ALBUMWALL && s_press_scr==SCR_ALBUMWALL && !albumwall_is_grid_open()){
                         /* gated on s_press_scr so the very tap that OPENED the cover flow (a click on the
                          * Library "Albums" row) is never re-read here as a cover tap that plays. */
                         if(sx < BACK_START_MAX_X && horiz && dx>0 && adx>=g_swipe_thresh && (dt<700 || slow)){
@@ -6003,8 +6010,10 @@ int main(int argc, char **argv){
                     } else if(horiz && dx>0 && adx>=g_swipe_thresh && (dt<700 || slow) &&
                               sx < BACK_START_MAX_X){
                         fprintf(stderr,"BACK swipe sx=%d dx=%d dy=%d dt=%u\n",sx,dx,dy,dt); fflush(stderr);
-                        /* inside Library, step through its sub-views first */
-                        if(!(cur==SCR_LIBRARY && library_back())) screen_back();
+                        /* inside Library or Folder Browser, step through internal sub-views / folders first */
+                        if(cur==SCR_LIBRARY && library_back()){}
+                        else if(cur==SCR_FOLDER && folderbrowser_back()){}
+                        else screen_back();
                     }
                     }
                 }

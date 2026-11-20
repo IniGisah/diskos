@@ -370,9 +370,12 @@ void screen_show(int which)
         } else {
             /* Check if the target screen is already in the back stack.
              * If so, unwind the stack back to that screen instead of pushing a duplicate,
-             * preventing navigation cycles (e.g. Now Playing -> Options -> Queue -> Now Playing). */
+             * preventing navigation cycles (e.g. Now Playing -> Options -> Queue -> Now Playing).
+             * Exception: opening Library as a drill-down / deep-link from Cover Flow (SCR_ALBUMWALL)
+             * or Now Playing / Hub must push the caller onto the stack rather than unwinding. */
             int found = -1;
-            if (which != SCR_QUICK && which != SCR_SAVER) {
+            int skip_cycle_check = (which == SCR_LIBRARY && (s_current == SCR_ALBUMWALL || library_is_deeplink()));
+            if (which != SCR_QUICK && which != SCR_SAVER && !skip_cycle_check) {
                 for (int i = 0; i < s_sp; i++) {
                     if (s_stack[i] == which) {
                         found = i;

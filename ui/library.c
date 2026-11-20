@@ -303,11 +303,21 @@ static void menu_cb(lv_event_t *e){
 /* Step one level back WITHIN the library (drill-in -> its category list -> the
  * category menu). Returns 1 if it handled an internal step, 0 if already at the
  * top menu (so the caller should leave the Library screen). */
+int library_is_grid_open(void){
+    return g_grid && !lv_obj_has_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+}
+int library_is_deeplink(void){
+    return g_deeplink;
+}
 int library_back(void){
+    if(library_is_grid_open()){
+        lv_obj_add_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+        return 1;
+    }
     if(g_view==VIEW_GROUP){
         if(g_drill_kind!=1 && g_scope_lvl==2){ g_scope_lvl=1; library_reload(); return 1; }   /* album songs -> that scope's albums */
         if(g_drill_kind!=1 && g_scope_lvl==0 && g_scope_from_albums){ g_scope_from_albums=0; g_scope_lvl=1; library_reload(); return 1; }   /* All Songs -> albums */
-        if(g_deeplink){  /* opened from the hub -> leave Library entirely (back to hub) */
+        if(g_deeplink || (g_drill_kind==1 && cfg_get_int("album_view", 0)==1)){  /* opened from the hub or coverflow -> leave Library entirely */
             g_deeplink=0; g_view=VIEW_MENU; g_drill_kind=0; place_forget(); library_reload(); return 0;
         }
         g_view=(g_drill_kind==1)?VIEW_ALBUMS:(g_drill_kind==3)?VIEW_GENRES:VIEW_ARTISTS;

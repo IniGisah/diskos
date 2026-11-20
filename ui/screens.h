@@ -200,6 +200,8 @@ void bt_notify_player_restart(void);   /* player restarted: forget stale auto-ro
 int  ui_player_settling(void);         /* 1 while the player is still in its post-restart late-init settle window */
 void library_open_album(const char *name);
 void library_open_artist(const char *name);
+int  library_is_deeplink(void);
+int  library_is_grid_open(void);
 void albumwall_create(lv_obj_t *root);     /* SCR_ALBUMWALL: cover-flow album browser */
 void albumwall_refresh(void);              /* rebuilt per entry from the album list */
 void albumwall_wake(void);
@@ -484,6 +486,8 @@ void folderbrowser_scroll_letter_tick(void);
 int  folderbrowser_back(void);
 void albumwall_scroll_letter_tick(void);
 int  albumwall_is_grid_open(void);
+int  albumwall_is_az_btn_hit(int x, int y);
 int  albumwall_back(void);
+int  folderbrowser_is_grid_open(void);
 void ui_setup_scrollbar(lv_obj_t *list);
 #endif

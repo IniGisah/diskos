@@ -691,6 +691,11 @@ int albumwall_is_grid_open(void){
     return g_grid && !lv_obj_has_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
 }
 
+int albumwall_is_az_btn_hit(int x, int y){
+    if(!g_az_btn || lv_obj_has_flag(g_az_btn, LV_OBJ_FLAG_HIDDEN)) return 0;
+    return (x >= 290 && x <= 355 && y >= 145 && y <= 215);
+}
+
 int albumwall_back(void){
     if(albumwall_is_grid_open()){
         lv_obj_add_flag(g_grid, LV_OBJ_FLAG_HIDDEN);

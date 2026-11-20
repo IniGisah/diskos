@@ -10,4 +10,5 @@
  * whole-folder queue playback. */
 void folderbrowser_create(lv_obj_t *root);   /* build the screen once (from screens_init) */
 void folderbrowser_open(void);               /* reset to the SD root + show SCR_FOLDER */
+int  folderbrowser_is_grid_open(void);
 #endif

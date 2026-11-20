@@ -723,9 +723,13 @@ static void fb_row_cb(lv_event_t *e){
     else           fb_play(en->name);
 }
 
+int folderbrowser_is_grid_open(void){
+    return g_grid && !lv_obj_has_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
+}
+
 int folderbrowser_back(void){
     if(screen_current() != SCR_FOLDER) return 0;
-    if(g_grid && !lv_obj_has_flag(g_grid, LV_OBJ_FLAG_HIDDEN)){
+    if(folderbrowser_is_grid_open()){
         lv_obj_add_flag(g_grid, LV_OBJ_FLAG_HIDDEN);
         return 1;
     }
