@@ -55,6 +55,7 @@ static const unsigned char s_figure[SCR_COUNT] = {
     [SCR_BT_INFO] = 31, [SCR_WORKMODE] = 32, [SCR_LASTFM] = 33,
     [SCR_DEBUG] = 34, [SCR_CASTPICK] = 40, [SCR_CUSTOM_PICKER] = 35, [SCR_CUSTOM_PAGE] = 36,
     [SCR_CUSTOM_OVERLAYS] = 37, [SCR_CUSTOM_FONT] = 38, [SCR_CUSTOM_PREVIEW] = 39, [SCR_DEVICE_NAMES] = 41,
+    [SCR_ARTMGR] = 42,
 };
 int screen_figure_number(int which){
     return which >= 0 && which < SCR_COUNT ? s_figure[which] : 0;
@@ -194,6 +195,7 @@ static void screen_refresh_entry(int to)
     else if (to == SCR_LIBRARY) library_enter(); /* pick up playlists created (NP New Playlist) or imported
                                                     * (Settings) elsewhere, without needing a restart */
     else if (to == SCR_USAGE) usage_refresh();
+    else if (to == SCR_ARTMGR) artmgr_refresh();
 }
 
 /* Slide between screens. dir = +1 push (new from right), -1 pop (new from left). */
@@ -808,6 +810,7 @@ void screens_init(void)
     s_roots[SCR_MODELOCK] = screen_make_root(parent);
     s_roots[SCR_USAGE] = screen_make_root(parent);
     s_roots[SCR_WEBUI] = screen_make_root(parent);
+    s_roots[SCR_ARTMGR] = screen_make_root(parent);
 
     /* depth scrim: a full-screen translucent-black overlay, created LAST so it sits above the
      * roots in sibling order; re-parented in z during a transition to dim the screen beneath the
@@ -867,6 +870,7 @@ void screens_init(void)
     modelock_create(s_roots[SCR_MODELOCK]);
     usage_create(s_roots[SCR_USAGE]);
     webui_create(s_roots[SCR_WEBUI]);
+    artmgr_screen_create(s_roots[SCR_ARTMGR]);
 
     screen_show(SCR_HOME);
 }

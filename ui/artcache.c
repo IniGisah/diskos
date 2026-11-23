@@ -5,6 +5,8 @@
 #include "track_path.h"
 #include "art.h"
 #include "artstore.h"
+#include "netart.h"
+#include "musicdb.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +14,7 @@
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <stdatomic.h>
@@ -153,14 +156,40 @@ static void cache_paths(const char *fp, char *cv, char *th, char *bg, int cap){
     snprintf(bg,cap,ARTCACHE_MEDIA_ROOT "/.diskos/artcache/%s/b.bmp",fp);
 }
 
-/* Return the native path of the cached 42px thumb for a track (no copy).
+#define THUMB_RAM_DIR "/tmp/diskos-thumbs"
+
+/* Return the path of the cached 42px thumb for a track.
+ * First checks RAM cache (/tmp/diskos-thumbs/<fp>.bmp), then legacy SD cache,
+ * and if missing from RAM, materializes it from artstore (artcache-v2.sqlite).
  * Returns 0 + fills out on a cache hit, -1 if not cached. */
 static int artcache_thumb_path_leased(const char *track, char *out, int cap, int validate){
-    char fp[24]; if(fingerprint(track,fp,sizeof fp)!=0) return -1;
-    char cv[600],th[600],bg[600]; cache_paths(fp,cv,th,bg,600);
-    if(validate && !TH_OK(th)) return -1;
-    snprintf(out, cap, "%s", th);
-    return 0;
+    char fp[24];
+    if(fingerprint(track, fp, sizeof fp) != 0) return -1;
+
+    /* 1. Fast RAM cache: already materialized in /tmp */
+    char rpath[128];
+    snprintf(rpath, sizeof rpath, "%s/%s.bmp", THUMB_RAM_DIR, fp);
+    if(validate ? TH_OK(rpath) : (access(rpath, F_OK) == 0)){
+        snprintf(out, cap, "%s", rpath);
+        return 0;
+    }
+
+    /* 2. Legacy SD disk cache (if still present) */
+    char cv[600], th[600], bg[600];
+    cache_paths(fp, cv, th, bg, 600);
+    if(validate ? TH_OK(th) : (access(th, F_OK) == 0)){
+        snprintf(out, cap, "%s", th);
+        return 0;
+    }
+
+    /* 3. Materialize from artstore (artcache-v2.sqlite) into RAM */
+    mkdir(THUMB_RAM_DIR, 0755);
+    if(artstore_read(fp, NULL, rpath, NULL, 0) == 0 && (validate ? TH_OK(rpath) : 1)){
+        snprintf(out, cap, "%s", rpath);
+        return 0;
+    }
+
+    return -1;
 }
 /* Monotonic counter bumped whenever a new cover lands in the cache (any decoder: live NP art,
  * per-track prewarm, or the album prewarm). The cover flow watches it to re-bake placeholders. */
@@ -435,4 +464,97 @@ int artcache_resolve_cover(const char *track,const char *cover,const char *thumb
     int previous=t_cover_only; t_cover_only=1;
     int rc=artcache_resolve(track,cover,thumb,bg,cancellable,gen,known,out);
     t_cover_only=previous; return rc;
+}
+
+int artcache_legacy_stats(uint64_t *total_bytes, int *entry_count){
+    if(total_bytes) *total_bytes = 0;
+    if(entry_count) *entry_count = 0;
+    if(!sd_io_begin()) return 0;
+    DIR *d = opendir(CACHE_ROOT);
+    if(d){
+        struct dirent *e;
+        while((e = readdir(d))){
+            if(e->d_name[0] == '.') continue;
+            char dirpath[512];
+            snprintf(dirpath, sizeof dirpath, "%s/%s", CACHE_ROOT, e->d_name);
+            struct stat st;
+            if(stat(dirpath, &st) == 0 && S_ISDIR(st.st_mode)){
+                if(entry_count) (*entry_count)++;
+                DIR *sub = opendir(dirpath);
+                if(sub){
+                    struct dirent *se;
+                    while((se = readdir(sub))){
+                        if(se->d_name[0] == '.') continue;
+                        char fpath[600];
+                        snprintf(fpath, sizeof fpath, "%s/%s", dirpath, se->d_name);
+                        struct stat fst;
+                        if(stat(fpath, &fst) == 0 && S_ISREG(fst.st_mode)){
+                            if(total_bytes) *total_bytes += (uint64_t)fst.st_size;
+                        }
+                    }
+                    closedir(sub);
+                }
+            }
+        }
+        closedir(d);
+    }
+    sd_io_end();
+    return 1;
+}
+
+int artcache_legacy_clear(void){
+    if(!sd_io_begin()) return -1;
+    if(!sd_write_begin()){ sd_io_end(); return -1; }
+    pthread_mutex_lock(&cache_write_mu);
+    DIR *d = opendir(CACHE_ROOT);
+    if(d){
+        struct dirent *e;
+        while((e = readdir(d))){
+            if(e->d_name[0] == '.') continue;
+            char dirpath[512];
+            snprintf(dirpath, sizeof dirpath, "%s/%s", CACHE_ROOT, e->d_name);
+            struct stat st;
+            if(stat(dirpath, &st) == 0 && S_ISDIR(st.st_mode)){
+                DIR *sub = opendir(dirpath);
+                if(sub){
+                    struct dirent *se;
+                    while((se = readdir(sub))){
+                        if(se->d_name[0] == '.') continue;
+                        char fpath[600];
+                        snprintf(fpath, sizeof fpath, "%s/%s", dirpath, se->d_name);
+                        unlink(fpath);
+                    }
+                    closedir(sub);
+                }
+                rmdir(dirpath);
+            } else if(S_ISREG(st.st_mode)){
+                unlink(dirpath);
+            }
+        }
+        closedir(d);
+    }
+    pthread_mutex_unlock(&cache_write_mu);
+    sd_write_end();
+    sd_io_end();
+    return 0;
+}
+
+int artcache_clear_all(void){
+    artstore_clear();
+    artcache_legacy_clear();
+    netart_clear();
+    artcache_resolution_invalidate();
+    DIR *td = opendir(THUMB_RAM_DIR);
+    if(td){
+        struct dirent *te;
+        while((te = readdir(td))){
+            if(te->d_name[0] == '.') continue;
+            char tf[160];
+            snprintf(tf, sizeof tf, "%s/%s", THUMB_RAM_DIR, te->d_name);
+            unlink(tf);
+        }
+        closedir(td);
+    }
+    atomic_fetch_add(&g_ac_gen, 1);
+    return 0;
 }

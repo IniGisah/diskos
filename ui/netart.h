@@ -2,6 +2,7 @@
 /* Copyright (C) 2026 diskOS contributors */
 #ifndef NETART_H
 #define NETART_H
+#include <stdint.h>
 /* Online album art: a cover picture from the iTunes Search API for a song that has none of its own. The lookup runs
  * on its own lowest-priority thread in diskOS (never in the player); pictures live on the SD card. See netart.c. */
 #ifndef NETART_DIR
@@ -21,4 +22,6 @@ void netart_reject(const char *path);
 int  netart_take_ready(char *track, int cap);
 /* The iTunes storefront for the player's LANGUAGE setting (stock's table), "US" when unknown. */
 const char *netart_country(int language);
+int netart_stats(uint64_t *total_bytes, int *file_count);
+int netart_clear(void);
 #endif

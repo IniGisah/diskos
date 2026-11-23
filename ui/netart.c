@@ -417,3 +417,48 @@ int netart_take_ready(char *track, int cap){
     pthread_mutex_unlock(&g_mu);
     return got;
 }
+
+int netart_stats(uint64_t *total_bytes, int *file_count){
+    if(total_bytes) *total_bytes = 0;
+    if(file_count) *file_count = 0;
+    if(!sd_io_begin()) return 0;
+    DIR *d = opendir(NETART_DIR);
+    if(d){
+        struct dirent *e;
+        while((e = readdir(d))){
+            if(!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            char p[512];
+            snprintf(p, sizeof p, "%s/%s", NETART_DIR, e->d_name);
+            struct stat st;
+            if(stat(p, &st) == 0 && S_ISREG(st.st_mode)){
+                if(file_count) (*file_count)++;
+                if(total_bytes) *total_bytes += (uint64_t)st.st_size;
+            }
+        }
+        closedir(d);
+    }
+    sd_io_end();
+    return 1;
+}
+
+int netart_clear(void){
+    netart_cancel();
+    if(!sd_io_begin()) return -1;
+    if(!sd_write_begin()){ sd_io_end(); return -1; }
+    pthread_mutex_lock(&g_file_mu);
+    DIR *d = opendir(NETART_DIR);
+    if(d){
+        struct dirent *e;
+        while((e = readdir(d))){
+            if(!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            char p[512];
+            snprintf(p, sizeof p, "%s/%s", NETART_DIR, e->d_name);
+            unlink(p);
+        }
+        closedir(d);
+    }
+    pthread_mutex_unlock(&g_file_mu);
+    sd_write_end();
+    sd_io_end();
+    return 0;
+}

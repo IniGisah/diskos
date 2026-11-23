@@ -70,6 +70,10 @@ int  artcache_cover_candidate(const char *track, char *out, int cap);
  * flow polls this to re-bake placeholder albums the moment their art becomes available. */
 unsigned artcache_gen(void);
 
+int artcache_legacy_stats(uint64_t *total_bytes, int *entry_count);
+int artcache_legacy_clear(void);
+int artcache_clear_all(void);
+
 /* SD-write ownership guard (implemented in main.c). artcache_put brackets its SD writes with
  * begin()/end() so they never race the player's Storage-mode export of /dev/mmcblk0. begin()
  * returns 0 (skip) when the card is host-owned or an export is in progress. */

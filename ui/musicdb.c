@@ -241,6 +241,7 @@ int mdb_song_accent_fresh(const char *path, const char *cover_key){
     }
     return fresh;
 }
+
 /* Copy a library path into a caller buffer only when ALL of it fits. A path cut short can name a
  * different real file, so an overflow reads as "no such path" (out emptied), never a prefix. */
 static int path_fits(char *out, int cap, const char *src){

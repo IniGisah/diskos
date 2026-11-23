@@ -26,4 +26,6 @@ void artstore_snapshot_finish(int complete);
 void artstore_idle(void);
 int artstore_maintain(uint64_t library);
 int artstore_maintain_checked(uint64_t library, int (*current)(void));
+int artstore_stats(uint64_t *file_bytes, int *pic_count, int *source_count);
+int artstore_clear(void);
 #endif

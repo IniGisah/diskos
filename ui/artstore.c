@@ -453,3 +453,51 @@ void artstore_idle(void){
     pthread_mutex_unlock(&gate);
     if(due && store_open(0)){ flush_touches(); sql("PRAGMA incremental_vacuum(32)"); store_close(); }
 }
+
+int artstore_stats(uint64_t *file_bytes, int *pic_count, int *source_count){
+    if(file_bytes) *file_bytes = 0;
+    if(pic_count) *pic_count = 0;
+    if(source_count) *source_count = 0;
+    if(!store_open(0)) return 0;
+    if(file_bytes) *file_bytes = (uint64_t)(quota_sizes[0] + quota_sizes[1]);
+    if(pic_count){
+        sqlite3_stmt *q = stmt("SELECT count(*) FROM picture_index");
+        if(q){
+            if(sqlite3_step(q) == SQLITE_ROW) *pic_count = sqlite3_column_int(q, 0);
+            sqlite3_finalize(q);
+        }
+    }
+    if(source_count){
+        sqlite3_stmt *q = stmt("SELECT count(DISTINCT track) FROM sources WHERE pic IS NOT NULL");
+        if(q){
+            if(sqlite3_step(q) == SQLITE_ROW) *source_count = sqlite3_column_int(q, 0);
+            sqlite3_finalize(q);
+        }
+    }
+    store_close();
+    return 1;
+}
+
+int artstore_clear(void){
+    if(!store_open(1)) return 0;
+    int ok = 1;
+    if(sql("BEGIN IMMEDIATE")){
+        sql("DELETE FROM derivatives;");
+        sql("DELETE FROM sources;");
+        sql("DELETE FROM retirement;");
+        sql("DELETE FROM picture_index;");
+        ok = sql("COMMIT");
+        if(!ok) sql("ROLLBACK");
+    }
+    if(ok){
+        pthread_mutex_lock(&pin_mu);
+        memset(protected_tracks, 0, sizeof protected_tracks);
+        pin_epoch++;
+        pthread_mutex_unlock(&pin_mu);
+        memset(touches, 0, sizeof touches);
+        touch_next = 0;
+        touch_clock = 0;
+    }
+    store_close();
+    return ok;
+}

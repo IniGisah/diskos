@@ -121,6 +121,8 @@ void ui_set_balance(int v);
 
 static void apply_open_colorpick(int v){ (void)v; colorpick_open(); }   /* seed sliders from cfg + open */
 static void apply_debug_mode(int v){ (void)v; debug_open(); }           /* Settings -> Device -> Debug Mode */
+static void apply_artwork_manager(int v){ (void)v; artmgr_open(); }
+static void apply_clear_artcache(int v){ (void)v; artmgr_confirm_clear_dialog(); }
 static void apply_artcache(int v){ ui_set_prewarm_mode(v); }   /* every mode preloads album covers; the mode picks the per-track sweep */
 void ui_sd_quiesce_begin(void); int ui_sd_quiesce_drained(void); void ui_sd_quiesce_end(void);   /* main.c: Restart card drain */
 
@@ -843,6 +845,8 @@ static const setting_t TABLE[] = {
     { "Library", "Browsing", "Track Numbers", ST_TOGGLE, "track_numbers", 0,1,1, NULL, 0, NULL, apply_track_numbers, 0 },
     { "Library", "Browsing", "Track Artwork", ST_TOGGLE, "song_art", 0,1,1, NULL, 0, NULL, apply_song_art, 1 },
     { "Library", "Browsing", "Album View",  ST_CHOICE, "album_view", 0,0,0, OPT_ALBUMVIEW, 2, NULL, NULL, 0 },
+    { "Library", "Artwork and lyrics", "Artwork Management", ST_ACTION, NULL, 0,0,0, NULL, 0, LV_SYMBOL_RIGHT, apply_artwork_manager, 0,
+      "Cache info, generation, clear" },
     { "Library", "Artwork and lyrics", "Online Album Art", ST_TOGGLE, "online_art", 0,1,1, NULL, 0, NULL, apply_online_art, 0 },
     { "Library", "Artwork and lyrics", "Album Art Cache", ST_CHOICE, "artcache", 0,0,0, OPT_ARTCACHE, 3, NULL, apply_artcache, 0,
       "Loads covers in advance" },
@@ -850,6 +854,8 @@ static const setting_t TABLE[] = {
     { "Library", "Maintenance", "Tag Encoding", ST_CHOICE, "old_tags", 0,0,0, OPT_OLDTAGS, 3, NULL, apply_old_tags, OLD_TAGS_AUTO,
       "Text encoding of old tags" },
     { "Library", "Maintenance", "Rescan Library", ST_ACTION, NULL, 0,0,0, NULL,0, "Scan", apply_rescan, 0 },
+    { "Library", "Maintenance", "Clear Art Cache", ST_ACTION, NULL, 0,0,0, NULL,0, "Clear", apply_clear_artcache, 0,
+      "Delete all cached artwork" },
     { "Library", "Maintenance", "Import Playlists", ST_ACTION, NULL, 0,0,0, NULL,0, "Import", apply_import_m3u, 0 },
     /* ---- Controls ---- */
     { "Controls", NULL, "Quick Settings", ST_ACTION, NULL, 0,0,0, NULL,0, LV_SYMBOL_RIGHT, apply_qsconfig, 0 },
@@ -978,7 +984,7 @@ static const char *val_text(const setting_t *s, char *buf, int n){
         case ST_SLIDER:   fmt_slider(s, v, buf, n); break;
         case ST_CYCLER: case ST_CHOICE: return (v>=0&&v<s->nopts)?tr(s->opts[v]):"?";
         case ST_READONLY: return tr(s->ro_val?s->ro_val:"");
-        case ST_ACTION:   return tr((s->apply==apply_rescan && scanner_active()) ? "Stop" : (s->ro_val?s->ro_val:""));
+        case ST_ACTION:   return tr((s->apply==apply_rescan && scanner_active()) ? "Stop" : ((s->apply==apply_artwork_manager && artmgr_gen_active()) ? "Active..." : (s->ro_val?s->ro_val:"")));
     }
     return buf;
 }

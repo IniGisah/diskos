@@ -2875,6 +2875,14 @@ void ui_start_art_prewarm(void)
     if(pthread_create(&th, NULL, art_prewarm_worker, NULL) == 0) pthread_detach(th);
 }
 
+int ui_battery_temp_dc(void){ return pw_temp_dc(); }
+int ui_read_cover_bmp(const char *path, uint8_t *buf){ return read_cover_bmp(path, buf); }
+int ui_accent_from_buf(const uint8_t *cbuf, uint32_t *out_rgb){ return accent_from_buf(cbuf, out_rgb); }
+int ui_art_is_busy(void){
+    int busy; pthread_mutex_lock(&g_art_mu); busy = g_art_inflight; pthread_mutex_unlock(&g_art_mu);
+    return busy;
+}
+
 /* Expose the current decoded cover to other surfaces (e.g. the Home pill).
  * Returns the "A:/tmp/coverN.bmp" path, or NULL when there's no usable art. */
 const char *ui_current_cover_src(void)
