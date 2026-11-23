@@ -27,6 +27,7 @@ harness = r'''
 #include <errno.h>
 #include <signal.h>
 #include <sys/stat.h>
+#include <stdatomic.h>
 static volatile sig_atomic_t g_bounded_pgid = 0;   /* real one lives with run_bounded in main.c */
 static volatile sig_atomic_t g_bounded_pid = 0;    /* ditto: the direct child, killed with or without a group */
 /* Observe the REAL handoff instead of replacing the program. */
@@ -61,6 +62,7 @@ static int run_bounded(char *const argv[], int timeout){
 }
 ''' + source + r'''
 int main(int argc, char **argv){
+    (void)launch_record_invalidate;
     if(argc > 1){
         if(!strcmp(argv[1], "guard")) guard=0;
         else if(!strcmp(argv[1], "host")) exported=1;
@@ -91,24 +93,33 @@ int main(int argc, char **argv){
         if(dead == 0) _exit(0);
         waitpid(dead, NULL, 0);
         f=fopen(LAUNCH_STATUS_PATH,"w"); assert(f); fprintf(f,"guard=1 local=1 pid=%ld\n",(long)getpid()); fclose(f);
+        launch_record_invalidate();
         assert(launch_status_get()==1);
         f=fopen(LAUNCH_STATUS_PATH,"w"); assert(f); fprintf(f,"guard=10 local=10 pid=%ld\n",(long)getpid()); fclose(f);
+        launch_record_invalidate();
         assert(launch_status_get()==-1);            /* a substring match would have accepted this */
         f=fopen(LAUNCH_STATUS_PATH,"w"); assert(f); fprintf(f,"guard=1 local=1 pid=%ld\n",(long)dead); fclose(f);
+        launch_record_invalidate();
         assert(launch_status_get()==-1);            /* the player that earned it is gone */
         f=fopen(LAUNCH_STATUS_PATH,"w"); assert(f); fprintf(f,"nonsense\n"); fclose(f);
+        launch_record_invalidate();
         assert(launch_status_get()==-1);
         f=fopen(LAUNCH_STATUS_PATH,"w"); assert(f); fprintf(f,"guard=1 local=1 pid=%ldjunk\n",(long)getpid()); fclose(f);
+        launch_record_invalidate();
         assert(launch_status_get()==-1);            /* trailing junk must not be silently ignored */
         unlink(LAUNCH_STATUS_PATH);
+        launch_record_invalidate();
         assert(launch_status_get()==-1);            /* absent is never "safe" */
         /* Once a verdict has been accepted, a DIFFERENT player must not inherit it - otherwise a
          * watchdog respawn that never ran our launcher would keep the card open. */
         f=fopen(LAUNCH_STATUS_PATH,"w"); assert(f); fprintf(f,"guard=1 local=1 pid=%ld\n",(long)getpid()); fclose(f);
+        launch_record_invalidate();
         assert(launch_status_get()==1);             /* pins this generation */
         f=fopen(LAUNCH_STATUS_PATH,"w"); assert(f); fprintf(f,"guard=1 local=1 pid=%ld\n",(long)getppid()); fclose(f);
+        launch_record_invalidate();
         assert(launch_status_get()==-1);            /* a different live process cannot adopt it */
         unlink(LAUNCH_STATUS_PATH);
+        launch_record_invalidate();
         puts("PASS stale, malformed, junk-suffixed and foreign-pid verdicts are all rejected");
     }
     return 0;

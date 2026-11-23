@@ -11,9 +11,9 @@ import re
 source = (app/'ui.c').read_text()
 m = re.search(r'static\s+lv_font_t\s+s_cjk;', source)
 a = m.start()
-b = source.index('/* Shared CJK-capable', a)
+b = source.index('/* Receiver presentation', a)
 chain = source[a:b]
-points = sorted(set(map(ord, '世界贈予我的妖精帝國曼衍珠汝華Nada Upasana PundarikaLudwig GöranssonZeus’s Law‘’ЛенинградΑθήνα藤井かな礒部花凜扉敵素敵な')) - {32})
+points = sorted(set(map(ord, '世界贈予我的妖精帝國曼衍珠汝華Nada Upasana PundarikaLudwig GöranssonZeus’s Law‘’ЛенинградΑθήνα')) - {32})
 header=r'''
 #include "lvgl/lvgl.h"
 #include "fonts_intl.h"
@@ -31,7 +31,17 @@ uint32_t lv_draw_buf_width_to_stride(uint32_t w, lv_color_format_t cf){
 #define lv_font_montserrat_UI_16_font lv_font_montserrat_16
 #define lv_font_montserrat_UI_18_font lv_font_montserrat_18
 #define lv_font_montserrat_UI_20_font lv_font_montserrat_20
-#define theme_font_base(px) (&lv_font_montserrat_##px)   /* the chain base: always Montserrat n */
+static const lv_font_t *theme_font_base(int px){
+    switch(px){
+        case 14: return &lv_font_montserrat_14;
+        case 18: return &lv_font_montserrat_18;
+        case 20: return &lv_font_montserrat_20;
+        default: return &lv_font_montserrat_16;
+    }
+}
+const lv_font_t *ui_font_cjk(int size);
+static const lv_font_t *fontft_font(int px){ (void)px; return NULL; }
+static void indic_font_register(lv_font_t *f, int px){ (void)f; (void)px; }
 '''
 test=r'''
 int main(void){

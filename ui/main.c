@@ -3983,10 +3983,13 @@ static int player_config_absent_without_card(void){
 #define LAUNCH_DEADLINE_S  20      /* hard cap on the WHOLE preparation path before we exec stock */
 #endif
 
+static atomic_uint g_launch_record_epoch=1;
+static void launch_record_invalidate(void){atomic_fetch_add(&g_launch_record_epoch,1);}
+
 /* Invalidate any record from an EARLIER player before we start preparing. Without this, player A's
  * success stays readable while player B is still deciding - and a crash, a deadline or a failed publish
  * would leave A's success standing in for B. */
-static void launch_status_invalidate(void){ unlink(LAUNCH_STATUS_PATH); }
+static void launch_status_invalidate(void){ unlink(LAUNCH_STATUS_PATH); launch_record_invalidate(); }
 
 static void launch_status_publish(int guard, int local){
     char buf[96];
@@ -4001,6 +4004,7 @@ static void launch_status_publish(int guard, int local){
     int ok = (pos == len) && (fchmod(fd, 0644) == 0);
     close(fd);
     if(!ok || rename(tmp, LAUNCH_STATUS_PATH) != 0) unlink(tmp);
+    else launch_record_invalidate();
 }
 /* 1 = THIS player's launch was confirmed; 0 = it was reported unprotected/unconfirmed; -1 = not published
  * yet, or published by a player that is no longer the one running.
@@ -4009,8 +4013,6 @@ static void launch_status_publish(int guard, int local){
  * firmware watchdog can respawn the stock player directly, bypassing our launcher entirely, and that
  * player inherits no verdict. So the recorded pid is verified to still be the live mq_player. Parsing is
  * strict - a substring match would accept "guard=10". */
-static atomic_uint g_launch_record_epoch=1;
-static void launch_record_invalidate(void){atomic_fetch_add(&g_launch_record_epoch,1);}
 static int launch_status_get(void){
     static _Thread_local char cached[96];static _Thread_local ssize_t cached_size;
     static _Thread_local unsigned seen;unsigned epoch=atomic_load(&g_launch_record_epoch);
