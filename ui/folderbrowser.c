@@ -412,7 +412,8 @@ static void fb_bind(row_slot_t *s, int fresh){
 
 static void fb_play_folder_mode(int mode){
     if(g_nent <= 0){ ui_toast("No audio files"); return; }
-    if(ui_get_source_mode() == 4){ ui_toast("USB DAC mode: controls on host"); return; }
+    if(ui_get_source_mode() == 1){ ui_toast("USB DAC mode: controls on host"); return; }
+    if(ui_get_source_mode() == 4 && !ui_usb_dac_connected()){ ui_toast("USB DAC not connected"); return; }
     int n_audio = 0;
     for(int i = 0; i < g_nent; i++){
         if(!g_ent[i].is_dir && g_ent[i].kind == FB_K_AUDIO) n_audio++;
@@ -633,7 +634,8 @@ static void fb_ascend(void){
 }
 
 static void fb_play(const char *name){
-    if(ui_get_source_mode() == 4){ ui_toast("USB DAC mode: controls on host"); return; }
+    if(ui_get_source_mode() == 1){ ui_toast("USB DAC mode: controls on host"); return; }
+    if(ui_get_source_mode() == 4 && !ui_usb_dac_connected()){ ui_toast("USB DAC not connected"); return; }
     int n_audio = 0;
     int tap_idx = 0;
     for(int i = 0; i < g_nent; i++){
@@ -672,7 +674,8 @@ static void fb_play(const char *name){
 
 /* Play the CUE/ISO tracks of `paths` (their SONG rows, TRACK order) through the exact queue the album drill uses. */
 static void fb_play_tracks(const char *const *paths, int n){
-    if(ui_get_source_mode() == 4){ ui_toast("USB DAC mode: controls on host"); return; }
+    if(ui_get_source_mode() == 1){ ui_toast("USB DAC mode: controls on host"); return; }
+    if(ui_get_source_mode() == 4 && !ui_usb_dac_connected()){ ui_toast("USB DAC not connected"); return; }
     mdb_plan_t plan;
     if(!mdb_ui_read_begin()){ ui_toast("Library busy - try again"); return; }
     int found=mdb_subtrack_plan(paths,n,&plan);
