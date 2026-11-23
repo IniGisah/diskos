@@ -247,6 +247,12 @@ Library > Books lists indexed .m4b audiobooks separately from music, with author
 
 Library > Folders opens the microSD card as folders and files. Tap a folder to descend, the header Back control to ascend, or a supported file to request playback. Folders support both **Play All** and **Shuffle Play** directly scoped to the current folder queue, as well as an A-Z "Jump to" fast-scroll index. Tapping a .cue sheet or an indexed SACD .iso starts its indexed tracks in track order. A file must already be in the library database: an unindexed selection reports "Not in library".
 
+<table>
+<tr>
+<td align="center" valign="top" width="33%"><img src="tour/folder-browser.png" width="220" alt="Folder Browser"><br><sub>Folder playback and scoped queue</sub></td>
+</tr>
+</table>
+
 ## Make it yours
 
 ### Settings
@@ -384,9 +390,17 @@ Display controls appearance and idle behavior. Changing theme or text size redra
 
 | Row | Action and default |
 |---|---|
+| Artwork Management | Open the Artwork Management hub to inspect cache metrics, run on-demand thumbnail generation, or purge disk caches. |
 | Online Album Art | Off by default; look up a missing album cover over Wi-Fi. |
 | Album Art Cache | Covers only by default; optional background preparation When Idle or Idle & Charging. Covers share one cache on the card of up to 4 GiB that always leaves 1 GiB free; identical pictures are stored once, and older covers not on screen are removed when space is needed. |
 | Online Lyrics | On by default; permit lookup of missing words over Wi-Fi. |
+
+<table>
+<tr>
+<td align="center" valign="top" width="33%"><img src="tour/artwork-manager.png" width="220" alt="Artwork Management"><br><sub>Cache metrics and on-demand generator</sub></td>
+<td align="center" valign="top" width="33%"><img src="tour/settings-library.png" width="220" alt="Library Settings"><br><sub>Track artwork and browsing options</sub></td>
+</tr>
+</table>
 
 #### Maintenance
 
@@ -428,6 +442,12 @@ firmware gets notices without diskOS's empty-battery shutdown.
 | Usage History | Open the 24-hour circular battery and activity usage dial. |
 | Charging Limit | Off by default; V2.57 can request the stock charging optimization, around 80%. |
 | Idle Power-off | Off by default; V2.57 offers 5, 10, 30, 60, 90, or 120 minutes without playback or input. |
+
+<table>
+<tr>
+<td align="center" valign="top" width="33%"><img src="tour/battery-dial.png" width="220" alt="24-Hour Battery Dial"><br><sub>24-hour circular usage dial</sub></td>
+</tr>
+</table>
 
 ### Settings: Device
 
@@ -511,10 +531,11 @@ With Weather on Home enabled, tap the glance to open Weather. "Weather unavailab
 
 <table>
 <tr>
-<td align="center" valign="top" width="25%"><img src="tour/apps.png" width="180" alt="Apps"><br><sub>Built-in and external app tiles</sub></td>
-<td align="center" valign="top" width="25%"><img src="tour/lastfm.png" width="180" alt="Last.fm"><br><sub>Scrobbling setup</sub></td>
-<td align="center" valign="top" width="25%"><img src="tour/webui-player.png" width="180" alt="Web UI Player"><br><sub>Web UI Player</sub></td>
-<td align="center" valign="top" width="25%"><img src="tour/webui-files.png" width="180" alt="Web UI Files"><br><sub>Web UI File Explorer</sub></td>
+<td align="center" valign="top" width="20%"><img src="tour/apps.png" width="160" alt="Apps"><br><sub>Built-in app tiles</sub></td>
+<td align="center" valign="top" width="20%"><img src="tour/webserver-device.png" width="160" alt="Web Server on device"><br><sub>On-device Web Server</sub></td>
+<td align="center" valign="top" width="20%"><img src="tour/battery-dial.png" width="160" alt="Battery Dial"><br><sub>24-hour circular dial</sub></td>
+<td align="center" valign="top" width="20%"><img src="tour/lastfm.png" width="160" alt="Last.fm"><br><sub>Scrobbling setup</sub></td>
+<td align="center" valign="top" width="20%"><img src="tour/webui-player.png" width="160" alt="Web UI Player"><br><sub>Web UI Player</sub></td>
 </tr>
 </table>
 

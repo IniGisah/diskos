@@ -8,7 +8,10 @@
 # (360 * 360 * 4). A capture during a live UI redraw can show mild tearing; re-shoot if needed.
 #
 # Usage:
-#   DISKOS_IP=<device-ip> DISKOS_PW=<debug-mode-password> ./diskos-shot.sh [out.png]
+#   DISKOS_IP=<device-ip> DISKOS_PW=<debug-mode-password> ./diskos-shot.sh [--circle] [out.png]
+#
+# Pass --circle (or set DISKOS_SHOT_CIRCLE=1) to apply an anti-aliased circular alpha mask matching
+# the physical round bezel. Default without flag is square RGB framebuffer.
 #
 # Get the IP and password from Debug Mode (Settings > System).
 # Requires: sshpass, ssh, python3 with Pillow (pip install Pillow). Default output: diskos-shot.png
@@ -16,7 +19,16 @@ set -euo pipefail
 
 IP="${DISKOS_IP:?set DISKOS_IP to the device IP (shown in Debug Mode)}"
 export SSHPASS="${DISKOS_PW:?set DISKOS_PW to the Debug Mode SSH password}"
-OUT="${1:-diskos-shot.png}"
+
+CIRCLE="${DISKOS_SHOT_CIRCLE:-0}"
+OUT="diskos-shot.png"
+for arg in "$@"; do
+  case "$arg" in
+    --circle|-c) CIRCLE=1 ;;
+    --square|-s) CIRCLE=0 ;;
+    *) OUT="$arg" ;;
+  esac
+done
 RAW="$(mktemp)"
 trap 'rm -f "$RAW"' EXIT
 
@@ -36,12 +48,24 @@ fi
 BYTES="$(wc -c < "$RAW" | tr -d ' ')"
 [ "$BYTES" -ge 518400 ] || { echo "ERROR: capture failed (short read: $BYTES bytes, expected 518400)" >&2; exit 1; }
 
-echo ">> Processing frame (BGRA -> RGB, 180° rotation)..."
-python3 - "$RAW" "$OUT" <<'PY'
+echo ">> Processing frame (BGRA -> RGB, 180° rotation, circle=${CIRCLE})..."
+python3 - "$RAW" "$OUT" "$CIRCLE" <<'PY'
 import sys
-from PIL import Image
+from PIL import Image, ImageDraw
+
 raw = open(sys.argv[1], "rb").read()[:518400]
-img = Image.frombuffer("RGBA", (360, 360), raw, "raw", "BGRA").convert("RGB").rotate(180)
-img.save(sys.argv[2])
+img = Image.frombuffer("RGBA", (360, 360), raw, "raw", "BGRA").rotate(180)
+
+if sys.argv[3] == "1":
+    scale = 4
+    mask_large = Image.new("L", (360 * scale, 360 * scale), 0)
+    draw = ImageDraw.Draw(mask_large)
+    draw.ellipse((0, 0, 360 * scale - 1, 360 * scale - 1), fill=255)
+    mask = mask_large.resize((360, 360), Image.Resampling.LANCZOS)
+    img.putalpha(mask)
+else:
+    img = img.convert("RGB")
+
+img.save(sys.argv[2], optimize=True)
 PY
 echo ">> Screenshot saved: $OUT"

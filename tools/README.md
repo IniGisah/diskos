@@ -45,12 +45,18 @@ To make a build permanent, flash it with the installer (`--ui path/to/mq_ui`).
 
 Run these screenshot and touch examples from `tools/`.
 ```sh
+# Raw square 360x360 RGB framebuffer:
 DISKOS_IP=... DISKOS_PW=... ./diskos-shot.sh home.png
+
+# Circular 360x360 RGBA with transparent corners (matching hardware bezel / docs):
+DISKOS_IP=... DISKOS_PW=... ./diskos-shot.sh --circle home.png
 ```
 The panel is 360x360, 32bpp BGRA, mounted rotated 180 degrees. The script reads the
 first page of `/dev/fb0` (518400 bytes), reinterprets it as BGRA,
-rotates 180, and saves a PNG. It does not follow the active framebuffer page or the Screen
-Rotation setting; a capture can show an older page or a different orientation.
+rotates 180, and saves a PNG. Passing `--circle` (or setting `DISKOS_SHOT_CIRCLE=1`) applies an
+anti-aliased circular alpha mask matching the physical round bezel and documentation images.
+It does not follow the active framebuffer page or the Screen Rotation setting; a capture
+can show an older page or a different orientation.
 
 ## Driving the touchscreen (agent navigation)
 This lets an agent navigate the UI: capture a screenshot, read the coordinate of the thing to touch,

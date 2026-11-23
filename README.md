@@ -39,7 +39,11 @@ This fork builds upon upstream [b0hemia/diskos v1.2.3](https://github.com/b0hemi
 ### Track Artwork & Selection Ergonomics (v1.6-custom / v1.7-custom)
 - **Album Art Thumbnails**: Renders 36×36 thumbnail tiles for tracks across Library Songs, Folder Browser, Playlist View, Search results, and Up Next lists. Fully integrated with upstream's `rowpool` virtualization for smooth 60 FPS scrolling without heap allocation.
 - **Fast Zero-Copy Cache**: Retrieves 42px BMP thumbnails cached on the MicroSD card with an in-memory direct cache in `ui/library.c`.
-- **User Toggle**: Enable or disable track artwork thumbnails under **Settings > Library > Browsing > Track Artwork**.
+- **User Toggle & Manager**: Enable or disable track artwork thumbnails under **Settings > Library > Browsing > Track Artwork**, or inspect cache metrics and trigger on-demand generation in **Artwork Management**.
+
+| Track Artwork in Lists | Folder Browser Scoped Queue | Artwork Management Hub |
+|:---:|:---:|:---:|
+| <img src="docs/tour/track-artwork.png" width="220" alt="36x36 track artwork thumbnails in Songs list"><br><sub>36×36 thumbnails & A–Z index</sub> | <img src="docs/tour/folder-browser.png" width="220" alt="Folder browser scoped queue and playback"><br><sub>Folder playback & shuffle</sub> | <img src="docs/tour/artwork-manager.png" width="220" alt="Artwork Management cache and generator"><br><sub>Cache status & on-demand generator</sub> |
 
 ### Bluetooth Receiver Subsystem & Audio Codec Suite
 - **Full 5-Codec Suite**: Adds high-resolution **LDAC** (990/660/330 kbps), **aptX-HD**, **aptX**, **AAC**, and **SBC** support via bundled custom `bluealsa` daemon.
@@ -47,15 +51,27 @@ This fork builds upon upstream [b0hemia/diskos v1.2.3](https://github.com/b0hemi
 - **Live Codec Switcher**: Change Bluetooth receiver codecs on the fly directly from the Mode Lock screen or Now Playing Options hub.
 - **Low-Latency Mode**: Reduces A2DP buffer latency (~80–120ms) for synchronized video and gaming audio.
 
+| BT Receiver Mode | Device Selection | Codec Select |
+|:---:|:---:|:---:|
+| <img src="docs/tour/mode-lockdown-bt.png" width="220" alt="Mode Lockdown Bluetooth Receiver"><br><sub>AVRCP phone controls & LDAC badge</sub> | <img src="docs/tour/bt-devices.png" width="220" alt="Now Playing Options Hub"><br><sub>Select Devices</sub> | <img src="docs/tour/bt-codec.png" width="220" alt="Now Playing Options Hub"><br><sub>Select codec</sub> |
+
 ### External USB DAC Host Audio (Mode 4)
 - **Host Power Sequencing**: Verifies firmware capabilities (`fw_has_usb_audio_out()`), allowing the DWC2 USB controller to enter host mode and supply 5V VBUS power before enumerating the external DAC.
 - **Unblocked Local Playback**: Permits Mode 4 in local playback checks, coldplug mounting, and playlist playback routines.
 - **Dedicated Mode Lockdown**: Full-screen status and transport hub for external USB DAC output with sample-rate badges and safe edge-swipe navigation.
 
+| Mode 4: USB Audio Out | USB DAC PC Sound Card Mode |
+|:---:|:---:|
+| <img src="docs/tour/mode-usb-audio.png" width="220" alt="USB Audio output route in Source"><br><sub>External USB DAC host audio</sub> | <img src="docs/tour/mode-lockdown-usb.png" width="220" alt="Mode Lockdown USB DAC"><br><sub>Bit-perfect PC sound card mode</sub> |
+
 ### Web UI & Wireless Remote Control (`diskos-webd`)
 - **Embedded Lightweight Server**: Standalone C99 daemon running on port 8080 with ~2.5 MB RSS footprint.
 - **Full Remote Management**: Browser-based playback controls, live volume and seek adjustments, queue jumping, MicroSD file browsing, folder creation, and direct drag-and-drop audio uploads over Wi-Fi.
 - **Zero-Reflash Installation**: Can be installed and updated directly on the MicroSD card without flashing rootfs.
+
+| On-Device Web Server Status | Web UI Browser Player |
+|:---:|:---:|
+| <img src="docs/tour/webserver-device.png" width="220" alt="On-Device Web Server control screen"><br><sub>Live server toggle & port address</sub> | <img src="docs/tour/webui-player.png" width="220" alt="Web UI Player remote control"><br><sub>Remote browser control & queue</sub> |
 
 ### Power, Sleep & Display Polish
 - **Physical Power Button Wake**: Synchronizes `mq_player` power state via Linux evdev (`KEY_POWER`) injection, eliminating the false-wake loop and screen-off touch freeze.
@@ -64,6 +80,10 @@ This fork builds upon upstream [b0hemia/diskos v1.2.3](https://github.com/b0hemi
 - **24-Hour Circular Battery Dial**: Interactive dial under **Apps > Battery & Power** tracking charge percentage, runtime estimates, and screen-on vs. playback active segments.
 - **Modal Gesture & Touch Isolation**: Swallows edge back-swipes, rim wheel scrolling, and track scrubbing while modal dialogs or bottom sheets are open, eliminating accidental input bleed-through.
 - **Circular Display Polish**: Header font step-down, tightened vertical descent, dialog minimum widths/padding, and inset quick settings layout to prevent bezel clipping on the 360×360 screen.
+
+| 24-Hour Circular Battery Dial | Quick Settings Drawer | Modal Touch Isolation |
+|:---:|:---:|:---:|
+| <img src="docs/tour/battery-dial.png" width="220" alt="24-hour circular battery dial"><br><sub>Real-time fuel gauge & drain dial</sub> | <img src="docs/tour/quick-settings.png" width="220" alt="Quick Settings drawer"><br><sub>Live time, battery & transport</sub> | <img src="docs/tour/mode-lockdown-modal.png" width="220" alt="Modal touch isolation and scrim"><br><sub>Modal scrim & gesture isolation</sub> |
 
 ## Features
 
@@ -83,13 +103,23 @@ This fork builds upon upstream [b0hemia/diskos v1.2.3](https://github.com/b0hemi
 
 ## Screenshots
 
-| Beam to Cast & AirPlay | Now Playing & Halo Ring | AirPlay Receiving |
-|:---:|:---:|:---:|
-| <img src="docs/tour/beam-picker.png" width="220" alt="Beam picker listing Cast and AirPlay targets"><br><sub>Stream to network speakers</sub> | <img src="docs/tour/beam-now-playing.png" width="220" alt="Now Playing screen"><br><sub>Track controls & progress halo</sub> | <img src="docs/tour/airplay-receiving.png" width="220" alt="AirPlay receiving screen"><br><sub>Wireless Hi-Fi speaker mode</sub> |
+### Core Experience & Round-Screen UI
 
-| Timed Lyrics | Album Cover Flow | Mode Lockdown (BT Sink) |
+| Home Screen | Now Playing & Halo Ring | Track Artwork in Lists |
 |:---:|:---:|:---:|
-| <img src="docs/tour/lyrics-timed.png" width="220" alt="Timed lyrics display"><br><sub>Synchronized LRC lyric view</sub> | <img src="docs/tour/cover-flow.png" width="220" alt="Album cover flow"><br><sub>Visual cover carousel</sub> | <img src="docs/tour/mode-lockdown-bt.png" width="220" alt="Mode Lockdown Bluetooth Receiver"><br><sub>AVRCP phone controls & codec badge</sub> |
+| <img src="docs/tour/home.png" width="220" alt="diskOS Home Screen"><br><sub>Home with live track & clock</sub> | <img src="docs/tour/now-playing.png" width="220" alt="Now Playing screen"><br><sub>Track controls & progress halo</sub> | <img src="docs/tour/all-songs.png" width="220" alt="Song list with artwork thumbnails"><br><sub>36×36 thumbnails & A–Z fast scroll</sub> |
+
+| Album Cover Flow | 24-Hour Battery Dial | Artwork Management |
+|:---:|:---:|:---:|
+| <img src="docs/tour/cover-flow.png" width="220" alt="Album cover flow"><br><sub>Visual cover carousel</sub> | <img src="docs/tour/battery-dial.png" width="220" alt="24-Hour Battery Dial"><br><sub>Circular usage & battery history</sub> | <img src="docs/tour/artwork-manager.png" width="220" alt="Artwork Management"><br><sub>Cache status & on-demand generator</sub> |
+
+| Quick Settings Drawer | Mode Lockdown (BT Sink) | Circular Keyboard |
+|:---:|:---:|:---:|
+| <img src="docs/tour/quick-settings.png" width="220" alt="Quick Settings"><br><sub>Status & control switches</sub> | <img src="docs/tour/mode-lockdown-bt.png" width="220" alt="Mode Lockdown Bluetooth Receiver"><br><sub>AVRCP phone controls & LDAC badge</sub> | <img src="docs/tour/keyboard.png" width="220" alt="Circular Keyboard"><br><sub>Round-screen text entry</sub> |
+
+| Beam to Cast & AirPlay | AirPlay Receiving | Folder Browser |
+|:---:|:---:|:---:|
+| <img src="docs/tour/beam-picker.png" width="220" alt="Beam picker listing Cast and AirPlay targets"><br><sub>Stream to network speakers</sub> | <img src="docs/tour/airplay-receiving.png" width="220" alt="AirPlay receiving screen"><br><sub>Wireless Hi-Fi speaker mode</sub> | <img src="docs/tour/folder-browser.png" width="220" alt="Folder Browser"><br><sub>Folder-scoped playback & queue</sub> |
 
 Explore every screen, theme, and setting in the **[Complete Interface Tour](docs/TOUR.md)**.
 
