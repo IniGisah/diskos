@@ -66,6 +66,7 @@ static lv_obj_t *cover_img;
 static lv_obj_t *cover_note;
 static lv_obj_t *spindle;       /* vinyl-style centre label (hidden in Cover mode) */
 /* Bluetooth Receiving View on SCR_NOWPLAYING */
+static void bt_view_tick(void);
 static lv_obj_t *g_bt_view, *g_bt_arc, *g_bt_disc, *g_bt_tag, *g_bt_tag_lbl;
 static lv_obj_t *g_bt_title, *g_bt_sub, *g_bt_codec_badge, *g_bt_codec_lbl;
 static lv_obj_t *g_bt_ctrl_row, *g_bt_btn_devices, *g_bt_lbl_devices;
@@ -2416,6 +2417,7 @@ void ui_np_enter(void)
     g_art_force = 1;
     ui_np_cover_changed();
     np_sharp_demand();
+    if(ui_get_source_mode() == 2) bt_view_tick();
 }
 
 /* Two independent state pieces: last_path owns local decoding/display; the token,
@@ -3002,7 +3004,7 @@ static int g_bt_visible;
 int ui_receiver_active(void){
     receiver_snapshot r; rx_snapshot(&r);
     return r.target == RECEIVER_SOURCE_AIRPLAY || r.source == RECEIVER_SOURCE_AIRPLAY ||
-        g_rx_visible || g_bt_visible;
+        g_rx_visible || g_bt_visible || (ui_get_source_mode() == 2);
 }
 /* Confirm departure from observed or dispatched AirPlay reception.
  * Pending/failed presentation state does not prove reception has ended. */
@@ -4904,7 +4906,8 @@ void ui_receiver_poll_sync(void){
     if(!g_rx_timer)return;
     receiver_snapshot r;rx_snapshot(&r);
     int active=r.target==RECEIVER_SOURCE_AIRPLAY || r.source==RECEIVER_SOURCE_AIRPLAY ||
-        g_rx_return || g_rx_visible || rx_pending();
+        g_rx_return || g_rx_visible || rx_pending() ||
+        g_bt_visible || (ui_get_source_mode() == 2);
     if(active){
         /* Preserve the former dark 200-ms observation cadence once settled;
          * transitions keep their 100-ms deadline even with the panel off. */

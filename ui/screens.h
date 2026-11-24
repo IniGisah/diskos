@@ -141,6 +141,7 @@ int  ui_transport_playing(void); /* play state for transport glyphs: the receive
 int  ui_receiver_exit_needs_confirm(void);
 void ui_receiver_return(void); /* cancel/reconcile to Local paused, through the source controller */
 void ui_receiver_sleep_expired(void); /* sleep expiry cancels queued receiver re-entry */
+void ui_receiver_poll_sync(void); /* lifecycle timer gating for receivers */
 int  ui_source_switch_pending(void);
 int  ui_source_switch_failed(void);
 int ui_local_playback_allowed(void);
