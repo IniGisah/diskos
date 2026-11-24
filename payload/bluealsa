@@ -92,8 +92,11 @@ if [ "$LL_ENABLED" -eq 1 ]; then
     # Disable high-latency / buffered codecs (AAC, aptX, aptX-HD, LDAC) so Android/iOS/PC
     # negotiates SBC only, keeping audio latency low (~80-120ms).
     exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD --codec=-ldac
-elif [ -n "$RX_CODEC" ] && [ "$RX_CODEC" != "AUTO" ] && [ "$RX_CODEC" != "Auto" ]; then
+elif [ "$HAS_SOURCE" -eq 0 ] && [ -n "$RX_CODEC" ] && [ "$RX_CODEC" != "AUTO" ] && [ "$RX_CODEC" != "Auto" ]; then
     # PREFERRED RECEIVER CODEC MODE:
+    # Only applies when invoked strictly as a receiver sink without a source profile.
+    # When transmitting to headphones (HAS_SOURCE=1), all codecs must remain enabled so
+    # Bluetooth headphones and TWS earbuds can freely negotiate AAC, aptX, or LDAC.
     case "$RX_CODEC" in
         SBC|sbc)
             exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD --codec=-ldac

@@ -156,6 +156,19 @@ class TestBlueAlsaWrapper(unittest.TestCase):
         self.assertIn("--codec=-ldac", stock_out)
         self.assertIn("--codec=-aac", stock_out)
 
+    def test_source_mode_ignores_rx_codec_restriction(self):
+        # When invoked for headphones/source, rx_codec setting MUST NOT disable AAC or LDAC
+        args = [
+            "-S", "--device=hci0", "--profile=a2dp-source",
+            "--codec=sbc", "--codec=aac", "--codec=ldac"
+        ]
+        res, stock_out, _ = self.run_wrapper(args, ll_enabled=False, custom_exists=False, rx_codec="LDAC")
+        self.assertEqual(res.returncode, 0)
+        self.assertIsNotNone(stock_out)
+        self.assertIn("--codec=aac", stock_out)
+        self.assertIn("--codec=ldac", stock_out)
+        self.assertNotIn("--codec=-aac", stock_out)
+
     def test_custom_bluealsa_injects_aptx(self):
         args = ["-S", "--device=hci0", "--profile=a2dp-source", "--codec=sbc"]
         res, _, custom_out = self.run_wrapper(args, ll_enabled=False, custom_exists=True)
@@ -284,6 +297,24 @@ int main(void){
     unsigned m_aptx_only = BTC_APTX;
     assert(bt_codec_pick(6, m_aptx_only, 1) == 5); // aptX-HD falls back to aptX
     assert(bt_codec_pick(4, m_aptx_only, 1) == 0); // LDAC falls back to SBC when no AAC
+
+    // TWS Earbuds fallback: user chooses LDAC, sink only has AAC + SBC
+    unsigned m_aac_tws = BTC_AAC;
+    assert(bt_codec_pick(2, m_aac_tws, 1) == 1); // LDAC Mobile -> AAC fallback
+    assert(bt_codec_pick(3, m_aac_tws, 1) == 1); // LDAC Standard -> AAC fallback
+    assert(bt_codec_pick(4, m_aac_tws, 1) == 1); // LDAC High -> AAC fallback
+
+    // Hi-Res Headphone: user chooses LDAC, sink supports LDAC + AAC
+    unsigned m_ldac_hp = BTC_LDAC | BTC_AAC;
+    assert(bt_codec_pick(3, m_ldac_hp, 1) == 3); // LDAC Standard kept
+    assert(bt_codec_pick(4, m_ldac_hp, 1) == 4); // LDAC High kept
+
+    // Frame generation: verify 06b3 frame formatting for AAC and LDAC
+    char f_aac[48], f_ldac[48];
+    snprintf(f_aac, sizeof f_aac, "06b3%04X%04X%s", 12 + 17, 1, "AA:BB:CC:DD:EE:FF");
+    assert(strcmp(f_aac, "06b3001D0001AA:BB:CC:DD:EE:FF") == 0);
+    snprintf(f_ldac, sizeof f_ldac, "06b3%04X%04X%s", 12 + 17, 3, "AA:BB:CC:DD:EE:FF");
+    assert(strcmp(f_ldac, "06b3001D0003AA:BB:CC:DD:EE:FF") == 0);
 
     printf("PASS\n");
     return 0;

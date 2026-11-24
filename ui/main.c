@@ -41,6 +41,7 @@
 #include "ui_wake.h"
 #include "file_observer.h"
 #include "radio_monitor.h"
+#include "bt_avrcp.h"
 #include "lvgl/src/misc/lv_timer_private.h"
 #include "i18n.h"
 #include "anim.h"
@@ -1084,12 +1085,12 @@ static int route_bt(const char *mac, int automatic){
     modes_output_reset();                               /* no longer on SPDIF / USB audio */
     if(atomic_load(&g_source_mode) == 4) g_source_mode = 0;
     if(route_send("0657000C0008", automatic, gen) != 0 && (automatic || loss_accepted)) return -1;
-    /* V2.57 owns connect-time codec application. Retain the older sequence. */
-    if(fw_os_ver() != 257){
-        char f[48];
-        if(ui_bt_codec_frame(norm, f, sizeof f) != 0) return -1;
-        if(route_send(f, automatic, gen) != 0) return -1;
-    }
+    /* Inform mq_player of the auto-negotiated codec (06b3) across all firmware versions.
+     * When user prefers LDAC but device only supports AAC/SBC, bt_codec_pick falls back cleanly
+     * and sets mq_player's sample rate array to 44.1 kHz instead of leaving it in 96 kHz LDAC mode. */
+    char f[48];
+    if(ui_bt_codec_frame(norm, f, sizeof f) != 0) return -1;
+    if(route_send(f, automatic, gen) != 0) return -1;
     if(st.volume_seq){ char v[16]; snprintf(v, sizeof v, "0715000C%04X", st.volume); if(route_send(v, automatic, gen) != 0 && (automatic || loss_accepted)) return -1; }
     /* Safe minimal resume; deterministic load/play remains a future improvement. */
     if(st.have_track && st.position_ms > 0 && (!automatic || (st.player_confirmed && !st.provisional && st.player_generation == gen))) if(route_seek(st.position_ms, automatic, gen) != 0 && (automatic || loss_accepted)) return -1;  /* resume position, not restart */
@@ -5219,6 +5220,7 @@ int main(int argc, char **argv){
                          * creates the worker - pthread_create is a memory barrier, so the worker reads
                          * the already-initialised cache (no first-init data race between the threads). */
     storage_init();
+    bt_avrcp_init();
     ui_arm_player_settle(10000);
     /* coldplug_start() now runs from sd_features_gate_cb, after the launcher publishes its verdict */
     { unsigned seed=0; FILE *r=fopen("/dev/urandom","rb"); if(r){ if(fread(&seed,1,sizeof seed,r)!=sizeof seed) seed=(unsigned)time(NULL); fclose(r);} else seed=(unsigned)time(NULL); srand(seed); }  /* seed RNG (shuffle start pos) */
@@ -5520,6 +5522,7 @@ int main(int argc, char **argv){
         if(playing) ui_note_transport_sent();   /* playback observed this generation (any start, incl. hardware keys): its one-shot is moot */
         g_playing = playing;   /* publish for ui_route_bt/ui_route_analog (raw st.state is unreliable) */
         st.state = playing ? 2 : 1;
+        bt_avrcp_sync_state(g_playing, st.title, st.artist, st.album);
         static int usb_dac_disconnected_latched = 1;
         static unsigned last_tip_seq = 0;
         static uint32_t last_usb_dac_poll = 0;
@@ -6404,6 +6407,7 @@ int main(int argc, char **argv){
         {void saver_poll_sync(int);saver_poll_sync(bl_state!=2);}
         {void ui_receiver_poll_sync(void);ui_receiver_poll_sync();}
         {void upnext_fill_sync(int);upnext_fill_sync(bl_state!=2);}
+        bt_avrcp_poll();
         if(g_t_book){
             /* A playing orphaned book still needs adoption after UI restart;
              * ordinary music has no audiobook checkpoint work. */
@@ -6421,7 +6425,8 @@ int main(int argc, char **argv){
         int pwr_fd = pwrkey_get_fd();
         int touch_wake_en = cfg_get_int("touch_wake", 0);
         int touch_fd = (bl_state == 2 && (!touch_wake_en || manual_btn_off)) ? -1 : g_touch_raw;
-        int inputs[] = {touch_fd, g_key_fd, file_observer_fd(), pwr_fd};
+        int avrcp_fd = bt_avrcp_fd();
+        int inputs[] = {touch_fd, g_key_fd, file_observer_fd(), pwr_fd, avrcp_fd};
         ui_wake_wait(wait_origin + wait, inputs, sizeof inputs / sizeof inputs[0]);
     }
     usage_save();

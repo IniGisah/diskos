@@ -94,7 +94,7 @@ This fork builds upon upstream [b0hemia/diskos v1.2.3](https://github.com/b0hemi
 - **Complex Text Shaping** — HarfBuzz and SheenBidi text shaping for Gurmukhi, Devanagari, Urdu, and Hebrew text with right-to-left scrolling.
 - **Wireless Streaming with Beam** — Stream audio wirelessly from the Disc's MicroSD card to Google Cast devices and Apple AirPlay speakers or TVs over local Wi-Fi, using the player as a remote control.
 - **AirPlay Receiving** — Turn the Disc into a wireless Hi-Fi AirPlay receiver from iOS, iPadOS, and macOS with synchronized volume and live metadata display (requires stock firmware V2.40 or V2.57).
-- **Comprehensive Bluetooth Stack** — High-resolution bidirectional Bluetooth supporting LDAC, aptX-HD, aptX, AAC, and SBC, smart paired host management, live codec switching, and low-latency mode (~80–120ms).
+- **Comprehensive Bluetooth Stack** — High-resolution bidirectional Bluetooth supporting LDAC, aptX-HD, aptX, AAC, and SBC, smart paired host management, live codec switching, low-latency mode (~80–120ms), and full AVRCP earbud touch playback controls (Play, Pause, Next, Prev) via dedicated `diskos-avrcpd` bridge.
 - **External USB DAC Host Audio** — Bit-perfect digital audio output to external USB DACs over USB-C OTG (Mode 4).
 - **Browser Remote Control & Web UI** — Built-in lightweight HTTP/WebSocket daemon (`diskos-webd`) on port 8080 for wireless playback control, queue jumping, volume management, and direct drag-and-drop MicroSD file uploads over Wi-Fi.
 - **Dedicated Mode Lockdown** — Distraction-free full-screen dashboards for USB DAC Host Mode, Bluetooth Audio Sink (with phone AVRCP controls), and USB Mass Storage.

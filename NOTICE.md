@@ -34,6 +34,7 @@ to the corresponding source that ships alongside the binaries. The full verbatim
 | **mksquashfs / unsquashfs** | build/extract the rootfs image | **GPL-2.0-or-later** | Linux: 4.6.1 in `corresponding-source/linux-squashfs-musl/`; macOS arm64: 4.7.5 in `corresponding-source/macos-arm64/` |
 | **dropbearmulti** (Dropbear SSH **2022.83**) | embedded in the diskOS image; started by the opt-in Debug Mode for SSH-over-WiFi | **MIT-style** ((c) 2002-2020 Matt Johnston; components under MIT/BSD/public-domain) - text in `licenses/LICENSE-dropbear.txt` | https://matt.ucc.asn.au/dropbear/dropbear.html (v2022.83; **predates the CVE-2023-48795 "Terrapin" Strict-KEX mitigation**. Use Debug Mode only for short sessions on a trusted network and turn it off when finished.) |
 | **bluealsa-custom** (BlueALSA **4.0.0**) | Bluetooth audio ALSA/D-Bus daemon supporting aptX, aptX-HD, LDAC, AAC, and SBC | **MIT** ((c) 2016-2022 Arkadiusz Bokowy) - text in `licenses/MIT-bluez-alsa.txt` | https://github.com/arkq/bluez-alsa (v4.0.0). Built to dynamically link against target system libraries |
+| **diskos-avrcpd** | D-Bus MPRIS media player daemon bridging Bluetooth AVRCP earbud touch controls | **GPL-3.0-or-later** ((c) 2026 diskOS contributors) | included: `src/avrcp/` (built from this, dynamically linking against target system `libdbus-1.so.3`) |
 
 `usbboot` and squashfs-tools are **GPL-2.0-or-later**, so anyone redistributing them must make their
 corresponding source available and include the GPL-2.0 license text. (`dropbearmulti` is MIT-style -

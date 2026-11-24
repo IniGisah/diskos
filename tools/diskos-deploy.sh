@@ -64,6 +64,11 @@ BLUEALSA_CUSTOM_BIN=""
 if [ -f "payload/bluealsa-custom" ]; then BLUEALSA_CUSTOM_BIN="payload/bluealsa-custom"
 fi
 
+AVRCPD_BIN=""
+if [ -f "payload/diskos-avrcpd" ]; then AVRCPD_BIN="payload/diskos-avrcpd"
+elif [ -f "src/avrcp/diskos-avrcpd" ]; then AVRCPD_BIN="src/avrcp/diskos-avrcpd"
+fi
+
 # password via SSHPASS (sshpass -e), not the command line, so it is not visible in the process list.
 # -o LogLevel=ERROR suppresses non-fatal warnings (e.g. OpenSSH post-quantum key exchange warnings).
 SSH=(sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 -o LogLevel=ERROR)
@@ -75,6 +80,7 @@ if [ -n "$WEBSH_BIN" ]; then echo ">> Web script:  $WEBSH_BIN"; fi
 if [ -n "$WEB_DIR" ]; then echo ">> Web assets:  $WEB_DIR/"; fi
 if [ -n "$BLUEALSA_BIN" ]; then echo ">> BlueALSA:    $BLUEALSA_BIN"; fi
 if [ -n "$BLUEALSA_CUSTOM_BIN" ]; then echo ">> BlueALSA bin:$BLUEALSA_CUSTOM_BIN"; fi
+if [ -n "$AVRCPD_BIN" ]; then echo ">> AVRCP daemon:$AVRCPD_BIN"; fi
 
 stream_with_progress() {
   local file="$1"
@@ -157,6 +163,10 @@ if [ -n "$BLUEALSA_CUSTOM_BIN" ]; then
   echo ">> [3c/4] Uploading bluealsa-custom binary (/usr/data/bin/bluealsa-custom)..."
   "${SSH[@]}" "root@$IP" 'cat > /usr/data/bin/bluealsa-custom && chmod 755 /usr/data/bin/bluealsa-custom' < "$BLUEALSA_CUSTOM_BIN"
 fi
+if [ -n "$AVRCPD_BIN" ]; then
+  echo ">> [3d/4] Uploading diskos-avrcpd daemon (/usr/data/diskos-avrcpd)..."
+  "${SSH[@]}" "root@$IP" 'killall -9 diskos-avrcpd 2>/dev/null || true; cat > /usr/data/diskos-avrcpd.new && chmod 755 /usr/data/diskos-avrcpd.new && mv -f /usr/data/diskos-avrcpd.new /usr/data/diskos-avrcpd' < "$AVRCPD_BIN"
+fi
 
 # 4. Swap in and hot-reload, in a failure-aware order.
 #    IMPORTANT: only ever touch mq_ui. NEVER kill mq_player - that frees the SD card and the
@@ -172,7 +182,7 @@ echo "   [1/6] Staging binary (/usr/data/mq_ui.new -> /usr/data/mq_ui)..."
 mv -f /usr/data/mq_ui.new /usr/data/mq_ui || { echo "ERROR: could not swap in the new binary" >&2; exit 1; }
 
 echo "   [2/6] Stopping previous mq_ui..."
-killall -9 mq_ui 2>/dev/null
+killall -9 mq_ui diskos-avrcpd 2>/dev/null
 
 echo "   [3/6] Launching /usr/data/mq_ui..."
 setsid /usr/data/mq_ui </dev/null >/usr/data/diskos_boot.log 2>&1 &

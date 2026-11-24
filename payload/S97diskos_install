@@ -607,6 +607,10 @@ if [ "$copied" = 1 ]; then
             cp -f /opt/diskos/bin/diskos-web.sh /usr/data/bin/diskos-web.sh 2>/dev/null
             chmod 755 /usr/data/bin/diskos-web.sh 2>/dev/null
         fi
+        if [ -f /opt/diskos/bin/diskos-avrcpd ] && [ ! -f /usr/data/diskos-avrcpd ]; then
+            cp -f /opt/diskos/bin/diskos-avrcpd /usr/data/diskos-avrcpd 2>/dev/null
+            chmod 755 /usr/data/diskos-avrcpd 2>/dev/null
+        fi
         if [ -f /opt/diskos/web.tar.gz ] && [ ! -f /usr/data/web/index.html ]; then
             mkdir -p /usr/data/web 2>/dev/null
             gunzip -c /opt/diskos/web.tar.gz | tar -x -C /usr/data/web/ 2>/dev/null

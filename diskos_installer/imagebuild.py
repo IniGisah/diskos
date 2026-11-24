@@ -437,10 +437,12 @@ _BOOTPROBE = "/opt/diskos/bin/diskos-bootprobe"
 _ARTDEC = "/opt/diskos/bin/diskos-artdec"
 _BLUEALSA = "/opt/diskos/bin/bluealsa"
 _BLUEALSA_CUSTOM = "/opt/diskos/bin/bluealsa-custom"
+_AVRCPD = "/opt/diskos/bin/diskos-avrcpd"
 _SUPPORT_FILES = (
     (_ARTDEC.lstrip("/"), "diskos-artdec"),
     (_BLUEALSA.lstrip("/"), "bluealsa"),
     (_BLUEALSA_CUSTOM.lstrip("/"), "bluealsa-custom"),
+    (_AVRCPD.lstrip("/"), "diskos-avrcpd"),
 )
 _SELECT_LINE = _SELECTED_HELPER
 # (image path, payload name) of every file the boot's stock/diskOS decision runs through

@@ -22,6 +22,15 @@ Synchronized with upstream diskOS 1.2.3 (commit `30d36f9`) while preserving 100%
 
 ### Fork Custom Features Maintained
 
+- **Bluetooth AVRCP Earbud & Headphone Touch Controls (`diskos-avrcpd`)**:
+  - Built standalone lightweight D-Bus MPRIS player daemon (`src/avrcp/diskos_avrcpd.c`, `payload/diskos-avrcpd`) bridging BlueZ 5.54 AVRCP passthrough commands directly to the diskOS playback engine.
+  - Resolved stock firmware limitation where uninitialized callback tables in `mq_player` caused BlueZ to reject media controls (`org.bluez.Error.NotSupported`) and drop TWS earbud taps (play/pause toggle, double-tap next, triple-tap previous).
+  - Implemented automatic BlueZ process lifecycle recovery (`NameOwnerChanged`) so player registration is preserved across Bluetooth restarts and mode transitions.
+  - Integrated real-time bidirectional status synchronization (`Playing` vs `Paused`) via D-Bus `PropertiesChanged` and UNIX domain socket (`/tmp/.diskos-avrcp.sock`), with zero-latency wakeup in `ui_wake_wait`.
+- **Bluetooth Codec Auto-Negotiation & Resample Desync Protection**:
+  - Fixed sample rate desync where selecting LDAC while connected to AAC/SBC-only TWS earbuds caused high-pitch, sped-up playback upon connection drops.
+  - Added automatic codec fallback (`bt_codec_pick`) matching the active sink's supported codecs and syncing `mq_player` sample rate array (`06b3`).
+  - Hardened `payload/bluealsa` to restrict codec disabling strictly to receiver mode (`HAS_SOURCE=0`), preserving AAC/LDAC negotiation for Bluetooth headphones.
 - **Track Artwork Thumbnails Across Row-Pooled Lists**: 36×36 thumbnails integrated into `rowpool` slots with zero heap allocations during scrolling.
 - **5-Codec Bluetooth Suite**: High-resolution LDAC (990/660/330 kbps), aptX-HD, aptX, AAC, and SBC audio sink/source.
 - **Bluetooth Receiver Paired Devices Sheet & Codec Dialog**: Filtering for transmitting sources, connection toggles, and live codec switching.

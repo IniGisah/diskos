@@ -380,7 +380,6 @@ static int bt_codec_query_cmd(const char *mac, char *out, int cap){
 int ui_bt_codec_frame(const char *mac, char *out, int cap){
     int choice = cfg_get_int("bt_codec", 0);
     if(choice < 0 || choice >= BT_CODEC_N) choice = 0;
-    if(fw_os_ver() != 257) choice = 0;
 
     int best = 0;
     if(choice > 0){
@@ -394,6 +393,19 @@ int ui_bt_codec_frame(const char *mac, char *out, int cap){
             }
         }
     }
+
+    /* Ensure active BlueALSA A2DP source PCM matches negotiated codec */
+    const char *cname = (best == 1) ? "AAC" : (best >= 2 && best <= 4) ? "LDAC" :
+                        (best == 5) ? "aptX" : (best == 6) ? "aptX-HD" : "SBC";
+    char sync_cmd[256];
+    snprintf(sync_cmd, sizeof sync_cmd,
+             "for p in $(bluealsa-cli list-pcms 2>/dev/null); do "
+             "  case \"$p\" in "
+             "    *a2dpsrc*|*a2dp-source*) bluealsa-cli codec \"$p\" %s >/dev/null 2>&1 ;; "
+             "  esac; "
+             "done &", cname);
+    bg_system(sync_cmd);
+
     return bt_codec_frame_value(mac, best, out, cap);
 }
 int ui_bt_codec_set(int value){
@@ -438,7 +450,7 @@ int ui_bt_codec_set(int value){
             snprintf(cmd, sizeof cmd,
                      "( for p in $(bluealsa-cli list-pcms 2>/dev/null); do "
                      "    case \"$p\" in "
-                     "      *dev_*) bluealsa-cli codec \"$p\" %s 2>/dev/null || true ;; "
+                     "      *a2dpsnk*|*a2dp-sink*) bluealsa-cli codec \"$p\" %s 2>/dev/null || true ;; "
                      "    esac; "
                      "  done; "
                      "  bluetoothctl power on 2>/dev/null; "
@@ -452,19 +464,37 @@ int ui_bt_codec_set(int value){
     }
 
     /* BLUETOOTH TRANSMITTING / LOCAL MODE:
-     * Stock V2.57 06b3 selects transmitter codec (0..4). */
-    if(value <= 4 && fw_os_ver() == 257){
-        char frame[16]; snprintf(frame, sizeof frame, "06b3000C%04X", (unsigned)value);
+     * When connected to a sink, adapt to the best codec supported by that sink so
+     * selecting LDAC while connected to AAC TWS earbuds falls back cleanly to AAC
+     * and sets mq_player to 44.1 kHz instead of desyncing into 96 kHz. */
+    int best = value;
+    const char *mac = ui_route_mac();
+    if(mac && mac[0]){
+        char cmd[256], info[1536];
+        if(bt_codec_query_cmd(mac, cmd, sizeof cmd) == 0 &&
+           run_cap_bounded(cmd, info, sizeof info, 350) > 0){
+            int known = 0;
+            unsigned avail = bt_codec_parse_avail(info, &known);
+            if(known){
+                best = bt_codec_pick(value, avail, 1);
+            }
+        }
+    }
+
+    if(best <= 4 && fw_os_ver() == 257){
+        char frame[16]; snprintf(frame, sizeof frame, "06b3000C%04X", (unsigned)best);
         ipc_send_cmd(frame);
     }
-    if(codec_arg){
+    const char *best_arg = (best == 1) ? "AAC" : (best >= 2 && best <= 4) ? "LDAC" :
+                           (best == 5) ? "aptX" : (best == 6) ? "aptX-HD" : "SBC";
+    if(best_arg){
         char cmd[256];
         snprintf(cmd, sizeof cmd,
                  "for p in $(bluealsa-cli list-pcms 2>/dev/null); do "
                  "  case \"$p\" in "
-                 "    *dev_*) bluealsa-cli codec \"$p\" %s >/dev/null 2>&1 ;; "
+                 "    *a2dpsrc*|*a2dp-source*) bluealsa-cli codec \"$p\" %s >/dev/null 2>&1 ;; "
                  "  esac; "
-                 "done &", codec_arg);
+                 "done &", best_arg);
         bg_system(cmd);
     }
     return 0;
@@ -633,7 +663,7 @@ static void bt_enable(void){
      * later bt_disable() `rm` always beats the async subshell - no touch-vs-rm race. */
     sync_system("touch /tmp/bt_enabling 2>/dev/null");
     bg_system(
-        "( killall -9 fiio_bluetoothctl brcm_patchram_plus bluetoothd bluealsa 2>/dev/null; "
+        "( killall -9 diskos-avrcpd fiio_bluetoothctl brcm_patchram_plus bluetoothd bluealsa 2>/dev/null; "
         "  hciconfig hci0 down 2>/dev/null; "
         /* power-cycle the BT core (BT_REG_ON via rfkill) BEFORE patchram, so the chip
          * re-syncs whether this is a fresh boot OR a re-enable after a prior patchram
@@ -660,6 +690,10 @@ static void bt_enable(void){
         "  sleep 1; [ -e /tmp/bt_enabling ] || exit; "
         "  bluetoothctl power on; hciconfig hci0 piscan; hciconfig hci0 class 0x200414; "
         "  bluetoothctl agent on; bluetoothctl default-agent; bluetoothctl pairable on; "
+        "  pidof diskos-avrcpd >/dev/null 2>&1 || ("
+        "    if [ -x /opt/diskos/bin/diskos-avrcpd ]; then /opt/diskos/bin/diskos-avrcpd >/tmp/avrcpd.log 2>&1 & "
+        "    elif [ -x /usr/data/diskos-avrcpd ]; then /usr/data/diskos-avrcpd >/tmp/avrcpd.log 2>&1 & fi"
+        "  ); "
         "  rm -f /tmp/bt_enabling "     /* enable finished: drop the marker */
         ") >/dev/null 2>&1 &");
     /* NB: bluealsa is started INSIDE the subshell above (after hci0 is RUNNING +
@@ -681,7 +715,7 @@ static void bt_disable(void){
      * we KILL the daemons FIRST - direct, fast, no D-Bus round-trip - then drop the interface and
      * rfkill-block. rm the enable marker first so any in-flight bt_enable() subshell aborts. */
     bg_system("( rm -f /tmp/bt_enabling; "
-           "killall -9 bluealsa bluetoothd brcm_patchram_plus fiio_bluetoothctl bt-agent 2>/dev/null; "
+           "killall -9 diskos-avrcpd bluealsa bluetoothd brcm_patchram_plus fiio_bluetoothctl bt-agent 2>/dev/null; "
            "hciconfig hci0 down >/dev/null 2>&1; "
            "rfkill block bluetooth >/dev/null 2>&1 ) >/dev/null 2>&1 &");
 }
