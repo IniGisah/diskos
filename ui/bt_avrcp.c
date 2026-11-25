@@ -2,6 +2,7 @@
 /* Copyright (C) 2026 diskOS contributors */
 #include "bt_avrcp.h"
 #include "screens.h"
+#include "config.h"
 #include "power.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,7 +27,22 @@ static uint64_t get_now_ms(void) {
     return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+static int avrcp_allowed(void) {
+    if (ui_get_source_mode() == 2) return 0;
+    return bt_radio_cached() || cfg_get_int("bt_on", 0);
+}
+
+void bt_avrcp_suspend(void) {
+    if (g_sock_fd >= 0) {
+        close(g_sock_fd);
+        g_sock_fd = -1;
+    }
+    g_last_synced_playing = -1;
+    g_last_synced_title[0] = '\0';
+}
+
 static void spawn_avrcpd(void) {
+    if (!avrcp_allowed()) return;
     system("pidof diskos-avrcpd >/dev/null 2>&1 || ("
            "  if [ -x /opt/diskos/bin/diskos-avrcpd ]; then /opt/diskos/bin/diskos-avrcpd >/tmp/avrcpd.log 2>&1 & "
            "  elif [ -x /usr/data/diskos-avrcpd ]; then /usr/data/diskos-avrcpd >/tmp/avrcpd.log 2>&1 & fi"
@@ -34,6 +50,10 @@ static void spawn_avrcpd(void) {
 }
 
 static void try_connect(void) {
+    if (!avrcp_allowed()) {
+        bt_avrcp_suspend();
+        return;
+    }
     uint64_t now = get_now_ms();
     if (now - g_last_connect_try < 3000) return;
     g_last_connect_try = now;
@@ -64,16 +84,28 @@ static void try_connect(void) {
 }
 
 void bt_avrcp_init(void) {
+    if (!avrcp_allowed()) {
+        bt_avrcp_suspend();
+        return;
+    }
     spawn_avrcpd();
     try_connect();
 }
 
 int bt_avrcp_fd(void) {
+    if (!avrcp_allowed()) {
+        bt_avrcp_suspend();
+        return -1;
+    }
     if (g_sock_fd < 0) try_connect();
     return g_sock_fd;
 }
 
 void bt_avrcp_poll(void) {
+    if (!avrcp_allowed()) {
+        bt_avrcp_suspend();
+        return;
+    }
     if (g_sock_fd < 0) {
         try_connect();
         return;
@@ -115,6 +147,10 @@ void bt_avrcp_poll(void) {
 }
 
 void bt_avrcp_sync_state(int playing, const char *title, const char *artist, const char *album) {
+    if (!avrcp_allowed()) {
+        bt_avrcp_suspend();
+        return;
+    }
     if (g_sock_fd < 0) {
         try_connect();
         if (g_sock_fd < 0) return;

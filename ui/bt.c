@@ -15,6 +15,8 @@ extern int ui_screen_backlight_on(void);
 #include "bt_prepare.h"
 #include "musicdb.h"
 #include "modes.h"
+#include "bt_avrcp.h"
+#include "modelock.h"
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -75,6 +77,8 @@ static void scan_kick(void);              /* fwd - off-thread re-enumerate (no d
 static void bt_autoroute_start(void);      /* fwd */
 static void bt_autoroute_stop(void);       /* fwd */
 static void bootrestore_cancel(void);      /* fwd - every explicit enable/disable supersedes boot observation */
+static void rx_resume_cancel(void);        /* fwd - exit-from-RX restoration timer */
+static char s_rx_resume_out_mac[20];       /* BT output MAC routed prior to entering RX mode */
 
 /* The refresh glyph INSIDE the "Scanning" message spins while a scan runs. It lives
  * in g_list, so it must be stopped before g_list is cleaned (else the anim references
@@ -270,7 +274,8 @@ static int sync_system(const char *cmd){
  * quality plays clean STEREO with headroom (on-device: ~86% idle). bluetoothctl's own agent
  * (set up in bt_enable) handles just-works pairing, so no separate bt-agent. */
 static void bt_ensure_services(void){
-    bg_system("pidof bluealsa >/dev/null 2>&1 || bluealsa -S --device=hci0 --profile=a2dp-source "
+    if(ui_get_source_mode() == 2) return;
+    bg_system("pidof bluealsa bluealsa-custom >/dev/null 2>&1 || bluealsa -S --device=hci0 --profile=a2dp-source "
            "--sbc-quality=medium --ldac-abr --ldac-quality=standard "
            "--codec=sbc --initial-volume=48 >/tmp/bluealsa.log 2>&1 &");
 }
@@ -551,11 +556,20 @@ void bt_rx_low_latency_apply(int enable){
         fprintf(f, "%d\n", enable ? 1 : 0);
         fclose(f);
     }
-    bg_system("if pidof bluealsa bluealsa-custom >/dev/null 2>&1; then "
-              "  killall -9 bluealsa bluealsa-custom 2>/dev/null; "
-              "  sleep 0.2; "
-              "  /opt/diskos/bin/bluealsa -S --device=hci0 >/tmp/bluealsa.log 2>&1 & "
-              "fi &");
+    if(ui_get_source_mode() == 2){
+        bg_system("if pidof bluealsa bluealsa-custom >/dev/null 2>&1; then "
+                  "  killall -9 bluealsa bluealsa-custom 2>/dev/null; "
+                  "  sleep 0.2; "
+                  "  /opt/diskos/bin/bluealsa -S --device=hci0 --profile=a2dp-sink -p hfp-ag >/tmp/bluealsa.log 2>&1 & "
+                  "fi &");
+    } else {
+        bg_system("if pidof bluealsa bluealsa-custom >/dev/null 2>&1; then "
+                  "  killall -9 bluealsa bluealsa-custom 2>/dev/null; "
+                  "  sleep 0.2; "
+                  "  bluealsa -S --device=hci0 --profile=a2dp-source --sbc-quality=medium "
+                  "    --ldac-abr --ldac-quality=standard --codec=sbc --initial-volume=48 >/tmp/bluealsa.log 2>&1 & "
+                  "fi &");
+    }
 }
 #ifdef DISKOS_TEST_BT_PREPARE
 static int64_t bt_probe_now(void){
@@ -685,6 +699,7 @@ int bt_prepare_codec_frame(const char *mac, int choice, char *out, int capacity)
  * working hci0 - the step our old bluez-only path lacked), then bluetoothd + agent. */
 static void bt_enable(void){
     bootrestore_cancel();   /* an explicit enable has its own radio poll */
+    rx_resume_cancel();
     /* Guard against a SECOND concurrent bring-up: if the marker is already present a bring-up is
      * in flight, and starting another detached subshell would have the two kill each other's
      * patchram/daemons (e.g. boot-restore + a user toggle firing close together) -> BT left broken.
@@ -695,7 +710,7 @@ static void bt_enable(void){
      * later bt_disable() `rm` always beats the async subshell - no touch-vs-rm race. */
     sync_system("touch /tmp/bt_enabling 2>/dev/null");
     bg_system(
-        "( killall -9 diskos-avrcpd fiio_bluetoothctl brcm_patchram_plus bluetoothd bluealsa 2>/dev/null; "
+        "( killall -9 diskos-avrcpd fiio_bluetoothctl brcm_patchram_plus bluetoothd bluealsa bluealsa-custom bt-agent 2>/dev/null; "
         "  hciconfig hci0 down 2>/dev/null; "
         /* power-cycle the BT core (BT_REG_ON via rfkill) BEFORE patchram, so the chip
          * re-syncs whether this is a fresh boot OR a re-enable after a prior patchram
@@ -733,6 +748,8 @@ static void bt_enable(void){
 }
 static void bt_disable(void){
     bootrestore_cancel();   /* Off must also cancel the independent boot observer */
+    rx_resume_cancel();
+    s_rx_resume_out_mac[0] = 0;
 #ifdef DISKOS_TEST_BT_PREPARE
     ui_bt_route_prepare_cancel();
 #endif
@@ -747,7 +764,7 @@ static void bt_disable(void){
      * we KILL the daemons FIRST - direct, fast, no D-Bus round-trip - then drop the interface and
      * rfkill-block. rm the enable marker first so any in-flight bt_enable() subshell aborts. */
     bg_system("( rm -f /tmp/bt_enabling; "
-           "killall -9 diskos-avrcpd bluealsa bluetoothd brcm_patchram_plus fiio_bluetoothctl bt-agent 2>/dev/null; "
+           "killall -9 diskos-avrcpd bluealsa bluealsa-custom bluetoothd brcm_patchram_plus fiio_bluetoothctl bt-agent 2>/dev/null; "
            "hciconfig hci0 down >/dev/null 2>&1; "
            "rfkill block bluetooth >/dev/null 2>&1 ) >/dev/null 2>&1 &");
 }
@@ -937,6 +954,7 @@ void bt_notify_player_restart(void){
     ui_bt_route_prepare_cancel();
 #endif
     g_bt_autorouted[0] = 0;
+    if(ui_get_source_mode() == 2){ bt_autoroute_stop(); return; }
     if(g_bt_autoroute_timer){lv_timer_resume(g_bt_autoroute_timer);lv_timer_ready(g_bt_autoroute_timer);}
     else if(bt_on())bt_autoroute_start();
 }
@@ -1178,6 +1196,7 @@ static void bt_ops_ensure(void){ if(!g_ops_timer) g_ops_timer = lv_timer_create(
 
 /* A new attempt (or a cancel) supersedes the old one; pairing can be slow, so each stage has its own budget. */
 static void bt_connect(const char *mac){
+    if(ui_get_source_mode() == 2) return;
     if(!bt_mac_valid(mac)){ ui_toast("Bad device address"); return; }
     bt_attempt_cancel(strcmp(g_at.mac, mac) != 0);   /* a re-tap of the same device needs no disconnect */
     bt_route_own(NULL);                               /* before submission: nothing is authorized while this is pending */
@@ -1211,6 +1230,7 @@ static void bt_forget(const char *mac){
 /* Tapping a connected sink is an explicit choice: it replaces any earlier ownership, ends an older attempt and
  * authorizes this MAC. */
 static void bt_route_select(const char *mac){
+    if(ui_get_source_mode() == 2) return;
     if(bt_job_pending(mac)){
         bt_connect(mac);
         return;
@@ -1600,7 +1620,7 @@ static lv_timer_t *g_radio_timer;
 static uint32_t    g_radio_start;
 static void radio_on_poll_cb(lv_timer_t *t){
     if(t != g_radio_timer) return;
-    if(cfg_get_int("bt_on", 0) != 1){ lv_timer_del(t); g_radio_timer = NULL; return; }
+    if(ui_get_source_mode() == 2 || cfg_get_int("bt_on", 0) != 1){ lv_timer_del(t); g_radio_timer = NULL; return; }
     if(bt_on()){
         lv_timer_del(g_radio_timer); g_radio_timer = NULL;
         bt_ensure_services();
@@ -1630,6 +1650,14 @@ static int bt_power_off_ready(void){
     return 0;
 }
 void bt_power_set(int on){
+    if(ui_get_source_mode() == 2){
+        ui_toast(tr("Exit Bluetooth Receiver first"));
+        if(g_sw){
+            if(bt_control_on()) lv_obj_add_state(g_sw, LV_STATE_CHECKED);
+            else                lv_obj_clear_state(g_sw, LV_STATE_CHECKED);
+        }
+        return;
+    }
     if(!on && !bt_power_off_ready()) return;
     if(on){
         cfg_set_int("bt_on", 1);atomic_store(&g_bt_radio_observed,1);   /* persist intent so boot restores it (mirror WiFi) */
@@ -1658,6 +1686,10 @@ static void sw_cb(lv_event_t *e){
 /* Quick Settings tile short-press: flip BT + persist intent, no screen-specific UI.
  * Mirrors sw_cb's actions (bt_boot_restore/keepalive enforce the intent). Returns new state, -1 if refused. */
 int bt_toggle(void){
+    if(ui_get_source_mode() == 2){
+        ui_toast(tr("Exit Bluetooth Receiver first"));
+        return -1;
+    }
     int on = !bt_radio_on();   /* flip the ACTUAL radio state, not the (possibly stale) persisted intent */
     if(!on && !bt_power_off_ready()) return -1;
     cfg_set_int("bt_on", on);atomic_store(&g_bt_radio_observed,!!on);
@@ -1695,16 +1727,38 @@ void bt_init_intent(void){
 static lv_timer_t *g_bootrestore_timer;
 static uint32_t    g_bootrestore_start;
 static int         g_bootrestore_observe;
+static lv_timer_t *g_rx_resume_timer;
+static int         g_rx_resume_allow;
+static int         g_rx_reconnect_sent;
 static void bootrestore_cancel(void){
     if(g_bootrestore_timer){ lv_timer_del(g_bootrestore_timer); g_bootrestore_timer = NULL; }
 }
+static void rx_resume_cancel(void){
+    if(g_rx_resume_timer){ lv_timer_del(g_rx_resume_timer); g_rx_resume_timer = NULL; }
+}
 static void bootrestore_poll_cb(lv_timer_t *t){
     if(t != g_bootrestore_timer) return;
-    if(cfg_get_int("bt_on", 0) != 1){ bootrestore_cancel(); return; }
+    if(ui_get_source_mode() == 2 || cfg_get_int("bt_on", 0) != 1){ bootrestore_cancel(); return; }
     if(bt_on()){
         bootrestore_cancel();
         bt_ensure_services();
         bt_autoroute_start();          /* speaker auto-reconnects -> auto-route routes it */
+        ui_status_refresh();
+        if(s_rx_resume_out_mac[0] && !g_rx_reconnect_sent && bt_mac_valid(s_rx_resume_out_mac)){
+            char target[20];
+            snprintf(target, sizeof target, "%s", s_rx_resume_out_mac);
+            s_rx_resume_out_mac[0] = 0;
+            g_rx_reconnect_sent = 1;
+            char cmd[384];
+            snprintf(cmd, sizeof cmd,
+                "( sleep 1; "
+                "  dm=$(echo \"%s\" | tr ':' '_'); "
+                "  dbus-send --system --dest=org.bluez \"/org/bluez/hci0/dev_${dm}\" org.bluez.Device1.Connect 2>/dev/null; "
+                "  sleep 1; "
+                "  bluetoothctl connect %s >/dev/null 2>&1 ) >/dev/null 2>&1 &",
+                target, target);
+            bg_system(cmd);
+        }
         return;
     }
     if(g_bootrestore_observe && !g_bt_probe_pending){
@@ -1721,6 +1775,7 @@ static void bootrestore_poll_cb(lv_timer_t *t){
 void bt_boot_restore(void){
     bootrestore_cancel();   /* replacement/off/already-up paths must not leave an old observer */
     bt_init_intent();
+    if(ui_get_source_mode() == 2) return;                 /* receiver owns the BT controller in mode 2 */
     if(cfg_get_int("bt_on", 0) != 1) return;              /* was off -> stay off */
     if(bt_on()){ bt_ensure_services(); bt_autoroute_start(); return; }   /* already up (UI restart) */
     g_bootrestore_observe=g_bt_probe_pending;
@@ -1728,6 +1783,70 @@ void bt_boot_restore(void){
     g_bootrestore_start = lv_tick_get();
     if(g_bootrestore_timer) lv_timer_del(g_bootrestore_timer);
     g_bootrestore_timer = lv_timer_create(bootrestore_poll_cb, 1000, NULL);
+}
+
+void bt_output_suspend_for_rx(const char *active_route_mac){
+    if(active_route_mac && bt_mac_valid(active_route_mac))
+        snprintf(s_rx_resume_out_mac, sizeof s_rx_resume_out_mac, "%s", active_route_mac);
+    else
+        s_rx_resume_out_mac[0] = 0;
+    g_rx_reconnect_sent = 0;
+
+    rx_resume_cancel();
+    bootrestore_cancel();
+    if(g_radio_timer){ lv_timer_del(g_radio_timer); g_radio_timer = NULL; }
+#ifdef DISKOS_TEST_BT_PREPARE
+    ui_bt_route_prepare_cancel();
+#endif
+    bt_attempt_cancel(0);
+    scan_abort();
+    bt_autoroute_stop();
+    g_route_owned = 0;
+    g_route_auth[0] = 0;
+    g_bt_autorouted[0] = 0;
+    bt_avrcp_suspend();
+
+    /* Keep brcm_patchram_plus and rfkill unblocked so mq_player's 0657 6 reuses
+     * the live UART transport instead of risking a Broadcom re-patchram hang. */
+    sync_system(
+        "rm -f /tmp/bt_enabling; "
+        "for m in $(hcitool con 2>/dev/null | awk '/ACL/{print $3}'); do "
+        "  dm=$(echo \"$m\" | tr ':' '_'); "
+        "  dbus-send --system --dest=org.bluez \"/org/bluez/hci0/dev_${dm}\" org.bluez.Device1.Disconnect 2>/dev/null; "
+        "done; "
+        "killall -9 diskos-avrcpd bt-agent bluealsa bluealsa-custom bluetoothd 2>/dev/null; "
+        "true");
+}
+
+static void rx_resume_timer_cb(lv_timer_t *t){
+    if(t == g_rx_resume_timer) g_rx_resume_timer = NULL;
+    lv_timer_del(t);
+    if(ui_get_source_mode() == 2) return;
+
+    if(g_rx_resume_allow && cfg_get_int("bt_on", 0) == 1){
+        g_bt_autorouted[0] = 0;
+        g_route_owned = 0;
+        g_route_auth[0] = 0;
+        g_rx_reconnect_sent = 0;
+        if(s_rx_resume_out_mac[0]) ui_toast(tr("Restoring Bluetooth output..."));
+        bt_enable();
+        g_bootrestore_observe = 0;
+        g_bootrestore_start = lv_tick_get();
+        bootrestore_cancel();
+        g_bootrestore_timer = lv_timer_create(bootrestore_poll_cb, 1000, NULL);
+    } else {
+        s_rx_resume_out_mac[0] = 0;
+        g_rx_reconnect_sent = 0;
+        bt_disable();
+        atomic_store(&g_bt_radio_observed, 0);
+        ui_status_refresh();
+    }
+}
+
+void bt_output_resume_after_rx(int allow_bt_output){
+    rx_resume_cancel();
+    g_rx_resume_allow = allow_bt_output ? 1 : 0;
+    g_rx_resume_timer = lv_timer_create(rx_resume_timer_cb, 1200, NULL);
 }
 
 static void rescan_cb(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) start_scan(); }
@@ -1802,7 +1921,7 @@ void bt_create(lv_obj_t *root){
  * powers BT off on a timeout - it just stops trying, so a flaky bt_on() probe can't kill a live radio. */
 static void scanwait_poll_cb(lv_timer_t *t){
     (void)t;
-    if(screen_current() != SCR_BT){                 /* user left the BT screen -> stop waiting */
+    if(ui_get_source_mode() == 2 || screen_current() != SCR_BT){ /* left BT screen or entered RX -> stop waiting */
         lv_timer_del(g_scanwait_timer); g_scanwait_timer = NULL; return;
     }
     if(bt_on()){
@@ -1817,6 +1936,10 @@ static void scanwait_poll_cb(lv_timer_t *t){
 }
 
 void bt_open(void){
+    if(ui_get_source_mode() == 2){
+        bt_show_paired_devices_dialog();
+        return;
+    }
     /* "should BT be on" = the intent OR the live radio. Intent is the reliable signal right after a QS
      * toggle, because bt_enable() rfkill-blocks-then-unblocks, so bt_radio_on() reads 0 for a moment. */
     int want = bt_control_on();
@@ -1848,6 +1971,7 @@ void bt_open(void){
 }
 
 static int bt_monitor_wanted(void){
+    if(ui_get_source_mode() == 2) return 0;
     return cfg_get_int("bt_on",0) || bt_radio_cached() || g_radio_timer ||
         g_bootrestore_timer || g_scanwait_timer || g_bt_autoroute_timer;
 }

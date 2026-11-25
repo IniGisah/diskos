@@ -181,8 +181,8 @@ static void tile_short_cb(lv_event_t *e){
     switch(id){
         case QT_WIFI:      { int on = wifi_toggle(); tile_recolor(QT_WIFI, on); ui_toast(on ? "Turning on Wi-Fi..." : "Wi-Fi off"); } break;
         case QT_BT: {
-            if(modelock_is_active() && modelock_get_mode() == 2){
-                ui_toast("Exit Bluetooth Receiver first");
+            if(ui_get_source_mode() == 2 || (modelock_is_active() && modelock_get_mode() == 2)){
+                ui_toast(tr("Exit Bluetooth Receiver first"));
                 break;
             }
             int on = bt_toggle();
@@ -259,11 +259,15 @@ static void tile_short_cb(lv_event_t *e){
     }
 }
 static void tile_long_cb(lv_event_t *e){
+    int id = (int)(intptr_t)lv_event_get_user_data(e);
+    if(ui_get_source_mode() == 2 && id == QT_BT){
+        bt_show_paired_devices_dialog();
+        return;
+    }
     if(modelock_is_active()){
         ui_toast("Exit current mode first");
         return;
     }
-    int id = (int)(intptr_t)lv_event_get_user_data(e);
     if(tile_local_blocked(id)) return;
     switch(id){
         case QT_WIFI: wifi_open(); break;

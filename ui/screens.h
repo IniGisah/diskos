@@ -197,6 +197,8 @@ void bt_rx_low_latency_apply(int enable);
 int  bt_rx_low_latency_enabled(void);
 const char *ui_route_mac(void);                  /* main.c: MAC the player is routed to, "" when local */
 void bt_boot_restore(void);   /* at startup: re-enable BT + arm auto-route if it was on */
+void bt_output_suspend_for_rx(const char *active_route_mac);
+void bt_output_resume_after_rx(int allow_bt_output);
 void bt_notify_player_restart(void);   /* player restarted: forget stale auto-route so the poll re-routes */
 int  ui_player_settling(void);         /* 1 while the player is still in its post-restart late-init settle window */
 void library_open_album(const char *name);

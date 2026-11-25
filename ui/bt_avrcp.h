@@ -15,4 +15,7 @@ void bt_avrcp_poll(void);
 /* Publish playback state and track metadata to AVRCP daemon */
 void bt_avrcp_sync_state(int playing, const char *title, const char *artist, const char *album);
 
+/* Close AVRCP IPC while BT Receiving mode owns Bluetooth */
+void bt_avrcp_suspend(void);
+
 #endif /* DISKOS_BT_AVRCP_H */

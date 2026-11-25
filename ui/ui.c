@@ -3778,6 +3778,10 @@ static void bt_view_create(lv_obj_t *root){
 }
 
 static void bt_view_tick(void){
+    static char s_bt_last_title[128] = {0};
+    static char s_bt_last_artist[128] = {0};
+    static int s_bt_last_playing = -1;
+    static int s_bt_last_connected = -1;
     int is_bt = (ui_get_source_mode() == 2);
     if(is_bt != g_bt_visible){
         g_bt_visible = is_bt;
@@ -3793,6 +3797,13 @@ static void bt_view_tick(void){
             if(screen_current() == SCR_WORKMODE) screen_show(SCR_NOWPLAYING);
         } else {
             bt_disc_spin_set(0);
+            if(s_bt_tag_dlg){ lv_obj_delete_async(s_bt_tag_dlg); s_bt_tag_dlg = NULL; }
+            if(s_bt_dev_dlg){ lv_obj_delete_async(s_bt_dev_dlg); s_bt_dev_dlg = NULL; }
+            if(s_bt_codec_dlg){ lv_obj_delete_async(s_bt_codec_dlg); s_bt_codec_dlg = NULL; }
+            s_bt_last_connected = -1;
+            s_bt_last_playing = -1;
+            s_bt_last_title[0] = 0;
+            s_bt_last_artist[0] = 0;
             home_release_receiver();
             if(!ui_receiver_active()) receiver_show(g_local_view, 1);
             return;
@@ -3929,10 +3940,6 @@ static void bt_view_tick(void){
     /* Sync Home capsule & Quick Settings only when state/track changed */
     const char *htitle = (st.connected && st.title[0]) ? st.title : "Bluetooth";
     const char *hartist = (st.connected && st.artist[0]) ? st.artist : (st.connected ? st.dev_name : "Ready to Connect");
-    static char s_bt_last_title[128] = {0};
-    static char s_bt_last_artist[128] = {0};
-    static int s_bt_last_playing = -1;
-    static int s_bt_last_connected = -1;
     if(st.connected != s_bt_last_connected || st.is_playing != s_bt_last_playing ||
        strcmp(s_bt_last_title, htitle) != 0 || strcmp(s_bt_last_artist, hartist) != 0){
         s_bt_last_connected = st.connected;

@@ -1265,7 +1265,7 @@ static const char *receiver_blocked(receiver_source target){
     if(power_shutdown_phase() != PW_OFF) return "Shutting down";
     if(modes_output_busy() || play_recent()) return "Player is busy - try again";
     int actual = ui_detect_source_mode(); /* USB can survive a UI-only restart. */
-    if(g_source_mode == 1 || g_source_mode == 3 || actual == 1 || actual == 3) return "Return to Local first";
+    if(g_source_mode == 1 || g_source_mode == 2 || g_source_mode == 3 || actual == 1 || actual == 3) return "Return to Local first";
     if(g_route_mac[0] || modes_output_route() != OUT_INTERNAL) return "Switch to Internal DAC first";
     if(target == RECEIVER_SOURCE_AIRPLAY && wifi_connectivity() != 1) return "Connect to Wi-Fi first (Settings > Network)";
     return NULL;
@@ -1460,6 +1460,15 @@ int ui_usb_dac_connected(void){
     return found;
 }
 
+static void route_clear_for_source_switch(void){
+    route_loss_reset();
+    route_loss_invalidate_seek();
+    g_route_mac[0] = 0;
+    route_state_remove();
+#ifdef DISKOS_TEST_BT_PREPARE
+    ui_bt_route_prepare_cancel();
+#endif
+}
 static int source_send(int mode){
     int v = fw_os_ver();
     if(v != 209 && v != 228 && v != 240 && v != 257) return -1;
@@ -1477,13 +1486,17 @@ static int source_send(int mode){
             if(ipc_send_cmd("0642000C0000") < 0) return -1;
             return ipc_send_cmd("0657000C0008");           /* LOCALPLAYER */
         case 1:
+            route_clear_for_source_switch();
             usleep(100000);                              /* V209/V228/V240/V257 stock sequence */
             if(ipc_send_cmd("0642000C0002") < 0) return -1;
             return ipc_send_cmd("0657000C0001");           /* UAC */
         case 2:
+            bt_output_suspend_for_rx(g_route_mac);
+            route_clear_for_source_switch();
             if(ipc_send_cmd("0818000C0000") < 0 || ipc_send_cmd("0642000C0000") < 0) return -1;
             return ipc_send_cmd("0657000C0006");
         case 3:
+            route_clear_for_source_switch();
             if(ipc_send_cmd("0642000C0001") < 0) return -1;
             return ipc_send_cmd("0657000C0008");
     }
@@ -1513,6 +1526,7 @@ int ui_set_source_mode(int mode){
     if(atomic_load(&g_launch_verdict) != 1){ ui_toast("SD access is not ready yet"); return -1; }
     if(mode == 4 && !fw_has_usb_audio_out()){ ui_toast("USB Audio not supported on this firmware"); return -1; }
     if(!ipc_player_ready()){ ui_toast("Player is starting up - try again"); return -1; }
+    int prev_mode = atomic_load(&g_source_mode);
     if(mode == 3){
         if(g_sd_phase == SD_HOST) return 0;
         if(ipc_rx_frames() == 0){ ui_toast("Player is starting up - try again"); return -1; }
@@ -1524,6 +1538,10 @@ int ui_set_source_mode(int mode){
         ts.tv_nsec += 200000000L; if(ts.tv_nsec >= 1000000000L){ ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
         if(pthread_mutex_timedlock(&g_sd_mode_mu, &ts) != 0){ ui_toast("SD card is busy - try again"); return -1; }
         if(!storage_mark('D', 3)){ pthread_mutex_unlock(&g_sd_mode_mu); ui_toast("Couldn't prepare USB storage"); return -1; }
+        if(prev_mode == 2){
+            bt_rx_prepare_exit();
+            bt_output_resume_after_rx(0);
+        }
         sd_io_hold(); atomic_store(&g_sd_writable, 0); g_source_mode = 3;
         g_sd_phase = SD_DRAIN; g_sd_deadline = lv_tick_get() + 20000;
         art_cancel();
@@ -1539,27 +1557,40 @@ int ui_set_source_mode(int mode){
         if(mode == 0 || mode == 4) modelock_close();
         else if(mode == 2){
             modelock_close();
-            bt_rx_worker_ensure();
+            bt_rx_enter();
             screen_show(SCR_NOWPLAYING);
+            ui_status_refresh();
         }
         else modelock_open(mode);
         return 0;
     }
-    int was_playing = g_playing;
+    int was_playing = (prev_mode != 2) && g_playing;
+    if(prev_mode == 2 && mode != 2) bt_rx_prepare_exit();
     if(was_playing && ipc_send_cmd("0201000C0000") < 0){ ui_toast("Player is busy - try again"); return -1; }
-    if(source_send(mode) < 0){ ui_toast("Couldn't switch mode"); return -1; }
+    if(was_playing && g_route_mac[0] && mode == 2) usleep(80000);
+    if(source_send(mode) < 0){
+        if(prev_mode != 2 && mode == 2 && cfg_get_int("bt_on", 0) == 1)
+            bt_output_resume_after_rx(1);
+        ui_toast("Couldn't switch mode");
+        return -1;
+    }
     g_source_mode = mode;
     if(mode == 1) modelock_open(mode);
     else if(mode == 2){
         modelock_close();
-        bt_rx_worker_ensure();
+        bt_rx_enter();
         screen_show(SCR_NOWPLAYING);
+        ui_status_refresh();
     }
     else if(mode == 0 || mode == 4){
         modelock_close();
         if(screen_current() == SCR_WORKMODE) screen_show(SCR_NOWPLAYING);
     }
-    if(mode == 0 && was_playing) ipc_send_cmd("0201000C0000");
+    if(prev_mode == 2 && mode != 2){
+        bt_output_resume_after_rx(mode == 0 || mode == 4);
+        ui_status_refresh();
+    }
+    if(mode == 0 && prev_mode != 2 && was_playing) ipc_send_cmd("0201000C0000");
     return 0;
 }
 static void storage_resume_local(void){
@@ -2097,7 +2128,7 @@ static int startup_saved_bt_route(void){
 static int startup_connected_sink(const char *mac){
     if(cfg_get_int("bt_on", 0) != 1) return 0;   /* Bluetooth is off by user intent: no auto-route */
     char buf[2048] = {0};
-    ui_run_cap_bounded("if ! pidof bluealsa >/dev/null 2>&1; then echo DISKOS_NO_BLUEALSA; "
+    ui_run_cap_bounded("if ! pidof bluealsa bluealsa-custom >/dev/null 2>&1; then echo DISKOS_NO_BLUEALSA; "
                        "else bluealsa-cli list-pcms 2>/dev/null && printf '\\nDISKOS_LIST_DONE\\n'; fi",
                        buf, sizeof buf, 250);
     if(strstr(buf, "DISKOS_NO_BLUEALSA\n")) return 0;
@@ -5272,7 +5303,7 @@ int main(int argc, char **argv){
     g_t_status = lv_timer_create(status_poll_cb, 3000, NULL); /* charging/battery/wifi every 3s (BT every ~12s inside); runs at screen-off */
     status_poll_cb(NULL);                        /* populate immediately */
     dnui_init();
-    bt_boot_restore();                           /* re-enable BT + arm auto-route if it was on (persist like WiFi) */
+    if(g_source_mode != 2) bt_boot_restore();    /* re-enable BT + arm auto-route if it was on (persist like WiFi) */
     g_t_wx  = lv_timer_create(weather_poll, 1000, NULL);  /* apply weather + retry/refresh */
     if(cfg_get_int("weather_on", 1)) weather_fetch_async();   /* first fetch - only with Weather on (Settings off = no network use) */
     g_t_lyr = lv_timer_create(lyrics_poll, 500, NULL);    /* apply finished lyrics fetch */

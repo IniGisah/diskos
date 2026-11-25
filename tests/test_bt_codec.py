@@ -545,6 +545,215 @@ int main(void){
             self.assertEqual(run_res.returncode, 0)
             self.assertIn("RX_CAP_FILTER_PASS", run_res.stdout)
 
+    def test_rx_bt_addr_remove_and_renumber(self):
+        c_code = r"""
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <assert.h>
+#include <unistd.h>
+
+static void rx_bt_addr_remove(const char *path, const char *mac){
+    if(!path || !mac || !mac[0]) return;
+    FILE *f = fopen(path, "r");
+    if(!f) return;
+
+    char kept[16][64];
+    int nkept = 0;
+    char line[256];
+    while(fgets(line, sizeof line, f)){
+        char *nl = strpbrk(line, "\r\n");
+        if(nl) *nl = 0;
+        if(strcasestr(line, mac)) continue;
+        const char *p = line;
+        if(!strncmp(p, "Device ", 7)){
+            const char *colon = strchr(p + 7, ':');
+            if(colon && colon > p + 7 && (colon - (p + 7)) <= 3){
+                p = colon + 1;
+                while(*p == ' ' || *p == '\t') p++;
+            }
+        }
+        if(*p && nkept < 16){
+            snprintf(kept[nkept], sizeof kept[nkept], "%.63s", p);
+            nkept++;
+        }
+    }
+    fclose(f);
+
+    char tmp[256];
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *wf = fopen(tmp, "w");
+    if(!wf) return;
+    for(int i = 0; i < nkept; i++){
+        fprintf(wf, "Device %d: %s\n", i + 1, kept[i]);
+    }
+    if(fclose(wf) == 0){
+        rename(tmp, path);
+    } else {
+        unlink(tmp);
+    }
+}
+
+int main(int argc, char **argv){
+    const char *p = argv[1];
+    const char *missing = argv[2];
+
+    /* Missing file must be a safe no-op */
+    rx_bt_addr_remove(missing, "AA:BB:CC:DD:EE:FF");
+
+    FILE *f = fopen(p, "w");
+    assert(f != NULL);
+    fprintf(f,
+        "Device 1: 14:99:3E:05:93:81 - 0\n"
+        "Device 2: 3C:AF:B7:1D:CE:35 - 0\n"
+        "Device 3: 0C:CD:B4:F9:12:DC - 0\n");
+    fclose(f);
+
+    /* Remove middle entry case-insensitively and renumber */
+    rx_bt_addr_remove(p, "3c:af:b7:1d:ce:35");
+    char buf[512] = {0};
+    f = fopen(p, "r");
+    assert(f != NULL);
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    assert(strcmp(buf,
+        "Device 1: 14:99:3E:05:93:81 - 0\n"
+        "Device 2: 0C:CD:B4:F9:12:DC - 0\n") == 0);
+
+    /* Remove remaining entries -> empty file */
+    rx_bt_addr_remove(p, "14:99:3E:05:93:81");
+    rx_bt_addr_remove(p, "0C:CD:B4:F9:12:DC");
+    f = fopen(p, "r");
+    assert(f != NULL);
+    n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    assert(n == 0);
+
+    printf("BT_ADDR_REMOVE_PASS\n");
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "test_addr.c"
+            bin_out = Path(td) / "test_addr_bin"
+            addr_file = Path(td) / "bt_addr"
+            missing_file = Path(td) / "does_not_exist"
+            src.write_text(c_code)
+            compile_res = subprocess.run(["cc", "-Wall", "-Werror", str(src), "-o", str(bin_out)])
+            self.assertEqual(compile_res.returncode, 0, "C bt_addr test compilation failed")
+            run_res = subprocess.run([str(bin_out), str(addr_file), str(missing_file)], capture_output=True, text=True)
+            self.assertEqual(run_res.returncode, 0, run_res.stderr)
+            self.assertIn("BT_ADDR_REMOVE_PASS", run_res.stdout)
+
+    def test_bluealsa_process_checks_include_custom(self):
+        repo_ui = Path(__file__).resolve().parents[1] / "ui"
+        for fname in ("bt.c", "main.c"):
+            txt = (repo_ui / fname).read_text()
+            for token in ("pidof bluealsa", "killall -9 bluealsa", "killall -9 diskos-avrcpd bluealsa", "killall -9 diskos-avrcpd fiio_bluetoothctl brcm_patchram_plus bluetoothd bluealsa"):
+                idx = 0
+                while True:
+                    pos = txt.find(token, idx)
+                    if pos < 0:
+                        break
+                    snippet = txt[pos : pos + len(token) + 24]
+                    self.assertIn(
+                        "bluealsa-custom",
+                        snippet,
+                        f"{fname} missing bluealsa-custom in '{snippet}'",
+                    )
+                    idx = pos + len(token)
+
+    def test_rx_sink_pcm_filter_rejects_source_pcm(self):
+        c_code = r"""
+#include <stdio.h>
+#include <string.h>
+#include <assert.h>
+
+static int rx_mac_valid(const char *mac){
+    if(!mac || strlen(mac) != 17) return 0;
+    for(int i = 0; i < 17; i++){
+        char c = mac[i];
+        if((i % 3) == 2){ if(c != ':') return 0; }
+        else if(!((c>='0'&&c<='9')||(c>='A'&&c<='F')||(c>='a'&&c<='f'))) return 0;
+    }
+    return 1;
+}
+
+static int parse_rx_sink_pcm(const char *list_out, char *pcm_path, size_t pcm_cap, char *mac, size_t mac_cap){
+    char buf[2048];
+    snprintf(buf, sizeof buf, "%s", list_out);
+    char *line = buf;
+    while(line && *line){
+        char *nl = strpbrk(line, "\r\n");
+        if(nl) *nl = 0;
+        char *p = strstr(line, "/org/bluealsa/hci0/dev_");
+        if(p && (strstr(p, "/a2dpsnk/") || strstr(p, "/a2dp-sink/"))){
+            char *pend = p; while(*pend && *pend != ' ' && *pend != '\t') pend++;
+            size_t plen = (size_t)(pend - p);
+            if(plen > 0 && plen < pcm_cap){
+                memcpy(pcm_path, p, plen);
+                pcm_path[plen] = 0;
+            }
+            p += 23;
+            if(strlen(p) >= 17){
+                char tmp_mac[20];
+                memcpy(tmp_mac, p, 17);
+                tmp_mac[17] = 0;
+                for(int i = 0; i < 17; i++) if(tmp_mac[i] == '_') tmp_mac[i] = ':';
+                if(rx_mac_valid(tmp_mac)){
+                    snprintf(mac, mac_cap, "%s", tmp_mac);
+                    return 1;
+                }
+            }
+        }
+        line = nl ? nl + 1 : NULL;
+        while(line && (*line == '\r' || *line == '\n')) line++;
+    }
+    return 0;
+}
+
+int main(void){
+    char pcm[128] = {0}, mac[20] = {0};
+    /* Strictly ignore A2DP source PCMs */
+    assert(parse_rx_sink_pcm("/org/bluealsa/hci0/dev_11_22_33_44_55_66/a2dpsrc/sink\n", pcm, sizeof pcm, mac, sizeof mac) == 0);
+    /* Pick A2DP sink PCM even when a source PCM appears first */
+    assert(parse_rx_sink_pcm(
+        "/org/bluealsa/hci0/dev_11_22_33_44_55_66/a2dpsrc/sink\n"
+        "/org/bluealsa/hci0/dev_AA_BB_CC_DD_EE_FF/a2dpsnk/source\n",
+        pcm, sizeof pcm, mac, sizeof mac) == 1);
+    assert(strcmp(mac, "AA:BB:CC:DD:EE:FF") == 0);
+    assert(strcmp(pcm, "/org/bluealsa/hci0/dev_AA_BB_CC_DD_EE_FF/a2dpsnk/source") == 0);
+    printf("RX_SINK_PCM_FILTER_PASS\n");
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "test_pcm.c"
+            bin_out = Path(td) / "test_pcm_bin"
+            src.write_text(c_code)
+            compile_res = subprocess.run(["cc", "-Wall", "-Werror", str(src), "-o", str(bin_out)])
+            self.assertEqual(compile_res.returncode, 0)
+            run_res = subprocess.run([str(bin_out)], capture_output=True, text=True)
+            self.assertEqual(run_res.returncode, 0, run_res.stderr)
+            self.assertIn("RX_SINK_PCM_FILTER_PASS", run_res.stdout)
+
+    def test_mode2_handoff_and_guards_wired(self):
+        repo_ui = Path(__file__).resolve().parents[1] / "ui"
+        main_txt = (repo_ui / "main.c").read_text()
+        bt_txt = (repo_ui / "bt.c").read_text()
+        qs_txt = (repo_ui / "quicksettings.c").read_text()
+        avrcp_txt = (repo_ui / "bt_avrcp.c").read_text()
+
+        self.assertIn("bt_output_suspend_for_rx(g_route_mac);", main_txt)
+        self.assertIn("bt_rx_enter();", main_txt)
+        self.assertIn("bt_rx_prepare_exit();", main_txt)
+        self.assertIn("bt_output_resume_after_rx(", main_txt)
+        self.assertIn("bt_avrcp_suspend();", bt_txt)
+        self.assertIn("ui_get_source_mode() == 2", qs_txt)
+        self.assertIn("ui_get_source_mode() == 2", avrcp_txt)
+
     def test_codec_persistence_and_sync_probe(self):
         repo_ui = Path(__file__).resolve().parents[1] / "ui"
         settings_txt = (repo_ui / "settings.c").read_text()

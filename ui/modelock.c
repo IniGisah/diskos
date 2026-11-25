@@ -76,7 +76,33 @@ static pthread_mutex_t g_bt_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t g_worker_th;
 static _Atomic int g_worker_run = 0;
 static _Atomic uint32_t s_bt_pairing_until = 0;
+static _Atomic int s_bt_force_drop = 0;
+static _Atomic uint32_t s_bt_drop_until = 0;
 static lv_timer_t *g_poll_timer = NULL;
+
+/* Fast interlaced inquiry/page scan tuning for BCM43438 in receiver mode */
+#define BT_RX_FAST_INQ_SH \
+    "hciconfig hci0 class 0x200414 2>/dev/null; " \
+    "hciconfig hci0 inqtype 1 2>/dev/null; " \
+    "hciconfig hci0 inqparms 36:512 2>/dev/null; " \
+    "hciconfig hci0 pageparms 36:512 2>/dev/null; " \
+    "hciconfig hci0 piscan 2>/dev/null"
+
+/* Full D-Bus + HCI + agent bring-up for reliable phone discovery and pairing */
+#define BT_RX_ENABLE_DISCOVERY_SH \
+    "rfkill unblock bluetooth 2>/dev/null; " \
+    "hciconfig hci0 up 2>/dev/null; " \
+    "( pidof fiio_bluetoothctl >/dev/null 2>&1 || pidof bt-agent >/dev/null 2>&1 || bt-agent -c NoInputNoOutput -d >/dev/null 2>&1 & ); " \
+    "dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0 org.freedesktop.DBus.Properties.Set string:org.bluez.Adapter1 string:Powered variant:boolean:true 2>/dev/null; " \
+    "dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0 org.freedesktop.DBus.Properties.Set string:org.bluez.Adapter1 string:DiscoverableTimeout variant:uint32:0 2>/dev/null; " \
+    "dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0 org.freedesktop.DBus.Properties.Set string:org.bluez.Adapter1 string:PairableTimeout variant:uint32:0 2>/dev/null; " \
+    "dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0 org.freedesktop.DBus.Properties.Set string:org.bluez.Adapter1 string:Pairable variant:boolean:true 2>/dev/null; " \
+    "dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0 org.freedesktop.DBus.Properties.Set string:org.bluez.Adapter1 string:Discoverable variant:boolean:false 2>/dev/null; " \
+    "dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0 org.freedesktop.DBus.Properties.Set string:org.bluez.Adapter1 string:Discoverable variant:boolean:true 2>/dev/null; " \
+    "bluetoothctl discoverable-timeout 0 2>/dev/null; " \
+    "bluetoothctl pairable on 2>/dev/null; " \
+    "bluetoothctl discoverable on 2>/dev/null; " \
+    BT_RX_FAST_INQ_SH
 static void bt_disc_spin(int want){
     (void)want;
 }
@@ -162,6 +188,56 @@ static int dbus_parse_variant_u32(const char *buf, uint32_t *out){
 }
 
 static void *bt_rx_worker(void *arg);
+static void rx_state_clear_locked(void);
+static void rx_mac_to_dbus(const char *mac, char *out, size_t cap);
+static int  rx_mac_valid(const char *mac);
+
+void bt_rx_enter(void){
+    pthread_mutex_lock(&g_bt_mu);
+    rx_state_clear_locked();
+    dn_bt_name_copy(g_bt_state.local_name, sizeof g_bt_state.local_name);
+    pthread_mutex_unlock(&g_bt_mu);
+    atomic_store(&s_bt_pairing_until, 0);
+    atomic_store(&s_bt_force_drop, 1);
+    atomic_store(&s_bt_drop_until, 0);
+    bt_rx_worker_ensure();
+}
+
+void bt_rx_prepare_exit(void){
+    char mac[20] = {0};
+    char dbus_mac[32] = {0};
+    pthread_mutex_lock(&g_bt_mu);
+    if(g_bt_state.connected && g_bt_state.mac[0]){
+        snprintf(mac, sizeof mac, "%s", g_bt_state.mac);
+        if(g_bt_state.dbus_mac[0]) snprintf(dbus_mac, sizeof dbus_mac, "%s", g_bt_state.dbus_mac);
+        else rx_mac_to_dbus(mac, dbus_mac, sizeof dbus_mac);
+    }
+    rx_state_clear_locked();
+    pthread_mutex_unlock(&g_bt_mu);
+
+    atomic_store(&s_bt_pairing_until, 0);
+    atomic_store(&s_bt_force_drop, 1);
+    atomic_store(&s_bt_drop_until, 0);
+
+    char cmd[1024];
+    snprintf(cmd, sizeof cmd,
+        "( %s%s%s"
+        "  for m in $(hcitool con 2>/dev/null | awk '/ACL/{print $3}'); do "
+        "    dm=$(echo \"$m\" | tr ':' '_'); "
+        "    dbus-send --system --dest=org.bluez \"/org/bluez/hci0/dev_${dm}\" org.bluez.Device1.Disconnect 2>/dev/null; "
+        "    bluetoothctl disconnect \"$m\" 2>/dev/null; "
+        "  done; "
+        "  dbus-send --system --dest=org.bluez /org/bluez/hci0 org.freedesktop.DBus.Properties.Set string:org.bluez.Adapter1 string:Discoverable variant:boolean:false 2>/dev/null; "
+        "  dbus-send --system --dest=org.bluez /org/bluez/hci0 org.freedesktop.DBus.Properties.Set string:org.bluez.Adapter1 string:Pairable variant:boolean:false 2>/dev/null; "
+        "  bluetoothctl discoverable off 2>/dev/null; "
+        "  bluetoothctl pairable off 2>/dev/null; "
+        "  killall -9 bt-agent 2>/dev/null ) >/dev/null 2>&1 &",
+        dbus_mac[0] ? "dbus-send --system --dest=org.bluez /org/bluez/hci0/dev_" : "",
+        dbus_mac[0] ? dbus_mac : "",
+        dbus_mac[0] ? " org.bluez.Device1.Disconnect 2>/dev/null; " : "");
+    diskos_trace("bt_rx_prepare_exit: mac=%s", mac);
+    system(cmd);
+}
 
 void bt_rx_worker_ensure(void){
     if(!g_bt_state.local_name[0]){
@@ -216,29 +292,24 @@ void bt_rx_get_progress(uint32_t *out_elapsed_ms, uint32_t *out_dur_ms, int *out
 
 /* Ensure Bluetooth Receiver daemons & HCI interface are running and healthy */
 static void bt_rx_stack_heal(void){
-    char chk[64] = {0};
-    int btd_up = (exec_cmd_capture("pidof bluetoothd 2>/dev/null", chk, sizeof chk, 150) > 0 && chk[0]);
+    char chk[128] = {0};
+    int btd_sink = (exec_cmd_capture("ps w 2>/dev/null | grep '[b]luetoothd.*--mode=sink'", chk, sizeof chk, 500) > 0 && chk[0]);
     chk[0] = 0;
-    int hci_up = (exec_cmd_capture("hciconfig hci0 2>/dev/null | grep RUNNING", chk, sizeof chk, 200) > 0 && chk[0]);
+    int hci_up = (exec_cmd_capture("hciconfig hci0 2>/dev/null | grep RUNNING", chk, sizeof chk, 500) > 0 && chk[0]);
     chk[0] = 0;
-    int ba_up = (exec_cmd_capture("pidof bluealsa bluealsa-custom 2>/dev/null", chk, sizeof chk, 150) > 0 && chk[0]);
+    int ba_up = (exec_cmd_capture("pidof bluealsa bluealsa-custom 2>/dev/null", chk, sizeof chk, 500) > 0 && chk[0]);
 
-    if(!btd_up || !hci_up || !ba_up){
-        diskos_trace("bt_rx_stack_heal: auto-healing BT receiver stack (btd=%d hci=%d ba=%d)", btd_up, hci_up, ba_up);
-        system(
-            "( hciconfig hci0 up 2>/dev/null || ( rfkill unblock bluetooth 2>/dev/null; sleep 0.5; hciconfig hci0 up 2>/dev/null ); "
-            "  pidof bluetoothd >/dev/null 2>&1 || /usr/project/bluetoothd --noplugin=sap --plugin=a2dp,avrcp >/tmp/btd.log 2>&1 & "
-            "  pidof bluealsa >/dev/null 2>&1 || pidof bluealsa-custom >/dev/null 2>&1 || /opt/diskos/bin/bluealsa -S --device=hci0 >/tmp/bluealsa.log 2>&1 & "
-            "  sleep 0.5; "
-            "  bluetoothctl power on 2>/dev/null; "
-            "  hciconfig hci0 piscan 2>/dev/null; "
-            "  hciconfig hci0 class 0x200414 2>/dev/null; "
-            "  bluetoothctl agent on 2>/dev/null; "
-            "  bluetoothctl default-agent 2>/dev/null; "
-            "  bluetoothctl discoverable on 2>/dev/null; "
-            "  bluetoothctl pairable on 2>/dev/null ) >/dev/null 2>&1 &"
-        );
+    if(!btd_sink || !hci_up){
+        diskos_trace("bt_rx_stack_heal: requesting mq_player sink bring-up (btd_sink=%d hci=%d ba=%d)", btd_sink, hci_up, ba_up);
+        system("killall -9 bluealsa bluealsa-custom bluetoothd 2>/dev/null");
         ipc_send_cmd("0657000C0006");
+    } else if(!ba_up){
+        diskos_trace("bt_rx_stack_heal: restarting bluealsa sink without interrupting bluetoothd");
+        system(
+            "( /opt/diskos/bin/bluealsa -S --device=hci0 --profile=a2dp-sink -p hfp-ag >/tmp/bluealsa.log 2>&1 & "
+            "  sleep 0.5; "
+            "  " BT_RX_ENABLE_DISCOVERY_SH " ) >/dev/null 2>&1 &"
+        );
     }
 }
 
@@ -253,6 +324,8 @@ static void *bt_rx_worker(void *arg){
     char local_name[64] = {0};
     int found = 0;
     int heal_counter = 0;
+    int inq_tuned = 0;
+    int disc_cooldown = 0;
 
     dn_bt_name_copy(local_name, sizeof local_name);
 
@@ -260,20 +333,48 @@ static void *bt_rx_worker(void *arg){
 
     while(g_worker_run){
         if(g_lock_mode != 2 && ui_get_source_mode() != 2){
+            inq_tuned = 0;
+            disc_cooldown = 0;
             usleep(500000);
             continue;
         }
 
-        /* 1. Fast connection check: verify bt_state */
+        if(atomic_exchange(&s_bt_force_drop, 0)){
+            found = 0;
+            pcm_path[0] = 0;
+            mac[0] = 0;
+            dbus_mac[0] = 0;
+            inq_tuned = 0;
+            disc_cooldown = 0;
+        }
+
+        /* While an explicit disconnect/pairing transition is settling, skip discovery
+         * so stale bt_state/bluealsa entries don't immediately re-mark connected=1. */
+        uint32_t drop_until = atomic_load(&s_bt_drop_until);
+        if(drop_until != 0){
+            if((int32_t)(lv_tick_get() - drop_until) < 0){
+                found = 0;
+                usleep(300000);
+                continue;
+            }
+            atomic_store(&s_bt_drop_until, 0);
+        }
+
+        /* 1. Fast connection check: verify bt_state, falling back to hcitool ACL before dropping */
         if(found){
+            int still_up = 0;
             FILE *f = fopen("/usr/data/fiio/bt_state", "r");
             if(f){
                 char ch = (char)fgetc(f);
                 fclose(f);
-                if(ch != '1') found = 0;
-            } else {
-                found = 0;
+                if(ch == '1') still_up = 1;
             }
+            if(!still_up && mac[0]){
+                if(exec_cmd_capture("hcitool con 2>/dev/null", buf, sizeof buf, 300) > 0 &&
+                   strcasestr(buf, mac))
+                    still_up = 1;
+            }
+            if(!still_up) found = 0;
         }
 
         /* 2. Discover connected device only when not already cached */
@@ -282,27 +383,39 @@ static void *bt_rx_worker(void *arg){
             dbus_mac[0] = 0;
             name[0] = 0;
 
-            /* Check bluealsa-cli list-pcms for an active A2DP sink PCM */
+            /* Check bluealsa-cli list-pcms strictly for an active A2DP sink PCM (/a2dpsnk/ or /a2dp-sink/) */
             int n = exec_cmd_capture("bluealsa-cli list-pcms 2>/dev/null", buf, sizeof buf, 300);
             if(n > 0){
-                char *p = strstr(buf, "/org/bluealsa/hci0/dev_");
-                if(p){
-                    char *pend = p; while(*pend && *pend != '\r' && *pend != '\n' && *pend != ' ') pend++;
-                    int plen = (int)(pend - p);
-                    if(plen > 0 && plen < (int)sizeof(pcm_path)){
-                        memcpy(pcm_path, p, plen);
-                        pcm_path[plen] = 0;
+                char *line = buf;
+                while(line && *line){
+                    char *nl = strpbrk(line, "\r\n");
+                    if(nl) *nl = 0;
+                    char *p = strstr(line, "/org/bluealsa/hci0/dev_");
+                    if(p && (strstr(p, "/a2dpsnk/") || strstr(p, "/a2dp-sink/"))){
+                        char *pend = p; while(*pend && *pend != ' ' && *pend != '\t') pend++;
+                        int plen = (int)(pend - p);
+                        if(plen > 0 && plen < (int)sizeof(pcm_path)){
+                            memcpy(pcm_path, p, plen);
+                            pcm_path[plen] = 0;
+                        }
+                        p += 23;
+                        if(strlen(p) >= 17){
+                            memcpy(dbus_mac, p, 17);
+                            dbus_mac[17] = 0;
+                            for(int i = 0; i < 17; i++)
+                                mac[i] = (dbus_mac[i] == '_') ? ':' : dbus_mac[i];
+                            mac[17] = 0;
+                            if(rx_mac_valid(mac)){
+                                found = 1;
+                                atomic_store(&s_bt_pairing_until, 0);
+                                break;
+                            }
+                            mac[0] = 0;
+                            dbus_mac[0] = 0;
+                        }
                     }
-                    p += 23;
-                    if(strlen(p) >= 17){
-                        memcpy(dbus_mac, p, 17);
-                        dbus_mac[17] = 0;
-                        for(int i = 0; i < 17; i++)
-                            mac[i] = (dbus_mac[i] == '_') ? ':' : dbus_mac[i];
-                        mac[17] = 0;
-                        found = 1;
-                        atomic_store(&s_bt_pairing_until, 0);
-                    }
+                    line = nl ? nl + 1 : NULL;
+                    while(line && (*line == '\r' || *line == '\n')) line++;
                 }
             }
 
@@ -324,7 +437,7 @@ static void *bt_rx_worker(void *arg){
                                         dbus_mac[i] = (mac[i] == ':') ? '_' : mac[i];
                                     dbus_mac[17] = 0;
                                     found = 1;
-                        atomic_store(&s_bt_pairing_until, 0);
+                                    atomic_store(&s_bt_pairing_until, 0);
                                 }
                             }
                         }
@@ -355,7 +468,24 @@ static void *bt_rx_worker(void *arg){
                 g_bt_state.pos_anchor_ms = 0;
                 pthread_mutex_unlock(&g_bt_mu);
 
-                if(++heal_counter >= 3){
+                if(disc_cooldown > 0) disc_cooldown--;
+                if(!inq_tuned || disc_cooldown == 0){
+                    char hci_chk[256] = {0};
+                    if(exec_cmd_capture("hciconfig hci0 2>/dev/null | grep RUNNING", hci_chk, sizeof hci_chk, 300) > 0 && hci_chk[0]){
+                        if(!strstr(hci_chk, "ISCAN")){
+                            diskos_trace("bt_worker: hci0 missing ISCAN while idle; re-enabling discovery");
+                            system("( hcitool con 2>/dev/null | grep -q ACL || { " BT_RX_ENABLE_DISCOVERY_SH "; } ) >/dev/null 2>&1 &");
+                            inq_tuned = 1;
+                            disc_cooldown = 3;
+                        } else if(!inq_tuned){
+                            system("( " BT_RX_FAST_INQ_SH " ) >/dev/null 2>&1 &");
+                            inq_tuned = 1;
+                            disc_cooldown = 2;
+                        }
+                    }
+                }
+
+                if(++heal_counter >= 8){
                     heal_counter = 0;
                     bt_rx_stack_heal();
                 }
@@ -365,6 +495,8 @@ static void *bt_rx_worker(void *arg){
             }
 
             heal_counter = 0;
+            inq_tuned = 0;
+            disc_cooldown = 0;
 
             /* Connected! Query device name once */
             snprintf(name, sizeof name, "Connected Device");
@@ -911,26 +1043,129 @@ void bt_rx_connect_to(const char *mac, const char *name){
             return;
         }
         snprintf(old_mac, sizeof old_mac, "%s", g_bt_state.mac);
+        rx_state_clear_locked();
     }
     pthread_mutex_unlock(&g_bt_mu);
+
+    atomic_store(&s_bt_pairing_until, 0);
+    if(old_mac[0]){
+        atomic_store(&s_bt_force_drop, 1);
+        atomic_store(&s_bt_drop_until, lv_tick_get() + 2000);
+    }
+
+    char dbus_mac[32] = {0}, old_dbus[32] = {0};
+    rx_mac_to_dbus(mac, dbus_mac, sizeof dbus_mac);
+    if(old_mac[0]) rx_mac_to_dbus(old_mac, old_dbus, sizeof old_dbus);
 
     char toast_buf[96];
     snprintf(toast_buf, sizeof toast_buf, "%s %s...", tr("Connecting to"), (name && name[0]) ? name : mac);
     ui_toast(toast_buf);
 
-    char cmd[512];
+    char cmd[2048];
     if(old_mac[0]){
         snprintf(cmd, sizeof cmd,
-            "( bluetoothctl disconnect %s 2>/dev/null; sleep 0.2; "
-            "  bluetoothctl connect %s 2>/dev/null ) >/dev/null 2>&1 &",
-            old_mac, mac);
+            "( dbus-send --system --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.Device1.Disconnect 2>/dev/null; "
+            "  bluetoothctl disconnect %s 2>/dev/null; "
+            "  for m in $(hcitool con 2>/dev/null | awk '/ACL/{print $3}'); do "
+            "    [ \"$m\" = \"%s\" ] && continue; "
+            "    dm=$(echo \"$m\" | tr ':' '_'); "
+            "    dbus-send --system --dest=org.bluez \"/org/bluez/hci0/dev_${dm}\" org.bluez.Device1.Disconnect 2>/dev/null; "
+            "    bluetoothctl disconnect \"$m\" 2>/dev/null; "
+            "  done; "
+            "  sleep 0.4; "
+            "  dbus-send --system --dest=org.bluez /org/bluez/hci0 org.freedesktop.DBus.Properties.Set string:org.bluez.Adapter1 string:Powered variant:boolean:true 2>/dev/null; "
+            "  ( pidof fiio_bluetoothctl >/dev/null 2>&1 || pidof bt-agent >/dev/null 2>&1 || bt-agent -c NoInputNoOutput -d >/dev/null 2>&1 & ); "
+            "  dbus-send --system --print-reply --reply-timeout=4000 --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.Device1.Connect >/dev/null 2>&1 || "
+            "  ( sleep 0.5; "
+            "    dbus-send --system --print-reply --reply-timeout=4000 --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.Device1.ConnectProfile string:0000110a-0000-1000-8000-00805f9b34fb >/dev/null 2>&1 || "
+            "    bluetoothctl connect %s >/dev/null 2>&1 ) ) >/dev/null 2>&1 &",
+            old_dbus, old_mac, mac, dbus_mac, dbus_mac, mac);
     } else {
         snprintf(cmd, sizeof cmd,
-            "( bluetoothctl connect %s 2>/dev/null ) >/dev/null 2>&1 &",
-            mac);
+            "( for m in $(hcitool con 2>/dev/null | awk '/ACL/{print $3}'); do "
+            "    [ \"$m\" = \"%s\" ] && continue; "
+            "    dm=$(echo \"$m\" | tr ':' '_'); "
+            "    dbus-send --system --dest=org.bluez \"/org/bluez/hci0/dev_${dm}\" org.bluez.Device1.Disconnect 2>/dev/null; "
+            "    bluetoothctl disconnect \"$m\" 2>/dev/null; "
+            "  done; "
+            "  dbus-send --system --dest=org.bluez /org/bluez/hci0 org.freedesktop.DBus.Properties.Set string:org.bluez.Adapter1 string:Powered variant:boolean:true 2>/dev/null; "
+            "  ( pidof fiio_bluetoothctl >/dev/null 2>&1 || pidof bt-agent >/dev/null 2>&1 || bt-agent -c NoInputNoOutput -d >/dev/null 2>&1 & ); "
+            "  dbus-send --system --print-reply --reply-timeout=4000 --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.Device1.Connect >/dev/null 2>&1 || "
+            "  ( sleep 0.5; "
+            "    dbus-send --system --print-reply --reply-timeout=4000 --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.Device1.ConnectProfile string:0000110a-0000-1000-8000-00805f9b34fb >/dev/null 2>&1 || "
+            "    bluetoothctl connect %s >/dev/null 2>&1 ) ) >/dev/null 2>&1 &",
+            mac, dbus_mac, dbus_mac, mac);
     }
     diskos_trace("bt_rx_connect_to: target=%s (old=%s)", mac, old_mac);
     system(cmd);
+}
+
+static void rx_state_clear_locked(void){
+    g_bt_state.connected = 0;
+    g_bt_state.is_playing = 0;
+    g_bt_state.mac[0] = 0;
+    g_bt_state.dbus_mac[0] = 0;
+    g_bt_state.dev_name[0] = 0;
+    g_bt_state.title[0] = 0;
+    g_bt_state.artist[0] = 0;
+    g_bt_state.album[0] = 0;
+    g_bt_state.codec[0] = 0;
+    g_bt_state.duration_ms = 0;
+    g_bt_state.position_ms = 0;
+    g_bt_state.pos_anchor_ms = 0;
+}
+
+static void rx_mac_to_dbus(const char *mac, char *out, size_t cap){
+    if(!out || cap == 0) return;
+    size_t i = 0;
+    for(; mac && mac[i] && i + 1 < cap; i++){
+        char c = mac[i];
+        if(c == ':') c = '_';
+        else if(c >= 'a' && c <= 'f') c -= ('a' - 'A');
+        out[i] = c;
+    }
+    out[i] = 0;
+}
+
+static void rx_bt_addr_remove(const char *path, const char *mac){
+    if(!path || !mac || !mac[0]) return;
+    FILE *f = fopen(path, "r");
+    if(!f) return;
+
+    char kept[16][64];
+    int nkept = 0;
+    char line[256];
+    while(fgets(line, sizeof line, f)){
+        char *nl = strpbrk(line, "\r\n");
+        if(nl) *nl = 0;
+        if(strcasestr(line, mac)) continue;
+        const char *p = line;
+        if(!strncmp(p, "Device ", 7)){
+            const char *colon = strchr(p + 7, ':');
+            if(colon && colon > p + 7 && (colon - (p + 7)) <= 3){
+                p = colon + 1;
+                while(*p == ' ' || *p == '\t') p++;
+            }
+        }
+        if(*p && nkept < 16){
+            snprintf(kept[nkept], sizeof kept[nkept], "%.63s", p);
+            nkept++;
+        }
+    }
+    fclose(f);
+
+    char tmp[256];
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *wf = fopen(tmp, "w");
+    if(!wf) return;
+    for(int i = 0; i < nkept; i++){
+        fprintf(wf, "Device %d: %s\n", i + 1, kept[i]);
+    }
+    if(fclose(wf) == 0){
+        rename(tmp, path);
+    } else {
+        unlink(tmp);
+    }
 }
 
 void bt_rx_disconnect(void){
@@ -939,29 +1174,21 @@ void bt_rx_disconnect(void){
     pthread_mutex_lock(&g_bt_mu);
     if(g_bt_state.connected && g_bt_state.mac[0]){
         snprintf(mac, sizeof mac, "%s", g_bt_state.mac);
-        snprintf(dbus_mac, sizeof dbus_mac, "%s", g_bt_state.dbus_mac);
-        g_bt_state.connected = 0;
-        g_bt_state.is_playing = 0;
-        g_bt_state.mac[0] = 0;
-        g_bt_state.dbus_mac[0] = 0;
-        g_bt_state.dev_name[0] = 0;
-        g_bt_state.title[0] = 0;
-        g_bt_state.artist[0] = 0;
-        g_bt_state.album[0] = 0;
-        g_bt_state.codec[0] = 0;
-        g_bt_state.duration_ms = 0;
-        g_bt_state.position_ms = 0;
-        g_bt_state.pos_anchor_ms = 0;
+        if(g_bt_state.dbus_mac[0]) snprintf(dbus_mac, sizeof dbus_mac, "%s", g_bt_state.dbus_mac);
+        else rx_mac_to_dbus(mac, dbus_mac, sizeof dbus_mac);
+        rx_state_clear_locked();
     }
     pthread_mutex_unlock(&g_bt_mu);
 
     if(mac[0]){
-        char cmd[512];
+        atomic_store(&s_bt_force_drop, 1);
+        atomic_store(&s_bt_drop_until, lv_tick_get() + 2500);
+        char cmd[4096];
         snprintf(cmd, sizeof cmd,
             "( dbus-send --system --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.Device1.Disconnect 2>/dev/null; "
             "  bluetoothctl disconnect %s 2>/dev/null; "
-            "  bluetoothctl discoverable on 2>/dev/null; "
-            "  hciconfig hci0 piscan 2>/dev/null ) >/dev/null 2>&1 &",
+            "  sleep 0.6; "
+            "  " BT_RX_ENABLE_DISCOVERY_SH " ) >/dev/null 2>&1 &",
             dbus_mac, mac);
         diskos_trace("bt_rx_disconnect: mac=%s", mac);
         system(cmd);
@@ -974,32 +1201,45 @@ void bt_rx_disconnect(void){
 void bt_rx_forget(const char *mac){
     if(!rx_mac_valid(mac)) return;
     int is_cur = 0;
+    int still_connected = 0;
     pthread_mutex_lock(&g_bt_mu);
     if(g_bt_state.connected && !strcasecmp(g_bt_state.mac, mac)){
         is_cur = 1;
-        g_bt_state.connected = 0;
-        g_bt_state.is_playing = 0;
-        g_bt_state.mac[0] = 0;
-        g_bt_state.dbus_mac[0] = 0;
-        g_bt_state.dev_name[0] = 0;
-        g_bt_state.title[0] = 0;
-        g_bt_state.artist[0] = 0;
-        g_bt_state.album[0] = 0;
-        g_bt_state.codec[0] = 0;
+        rx_state_clear_locked();
+    } else if(g_bt_state.connected){
+        still_connected = 1;
     }
     pthread_mutex_unlock(&g_bt_mu);
 
-    char cmd[256];
     if(is_cur){
+        atomic_store(&s_bt_force_drop, 1);
+        atomic_store(&s_bt_drop_until, lv_tick_get() + 2500);
+    }
+
+    rx_bt_addr_remove("/usr/data/fiio/bt_addr", mac);
+
+    char dbus_mac[32] = {0};
+    rx_mac_to_dbus(mac, dbus_mac, sizeof dbus_mac);
+
+    char cmd[4096];
+    if(!still_connected){
         snprintf(cmd, sizeof cmd,
-            "( bluetoothctl disconnect %s 2>/dev/null; "
+            "( dbus-send --system --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.Device1.Disconnect 2>/dev/null; "
+            "  bluetoothctl disconnect %s 2>/dev/null; "
+            "  dbus-send --system --dest=org.bluez /org/bluez/hci0 org.bluez.Adapter1.RemoveDevice objpath:/org/bluez/hci0/dev_%s 2>/dev/null; "
             "  bluetoothctl remove %s 2>/dev/null; "
-            "  bluetoothctl discoverable on 2>/dev/null ) >/dev/null 2>&1 &",
-            mac, mac);
+            "  hciconfig hci0 delkey %s 2>/dev/null; "
+            "  sleep 0.5; "
+            "  " BT_RX_ENABLE_DISCOVERY_SH " ) >/dev/null 2>&1 &",
+            dbus_mac, mac, dbus_mac, mac, mac);
     } else {
         snprintf(cmd, sizeof cmd,
-            "( bluetoothctl remove %s 2>/dev/null ) >/dev/null 2>&1 &",
-            mac);
+            "( dbus-send --system --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.Device1.Disconnect 2>/dev/null; "
+            "  bluetoothctl disconnect %s 2>/dev/null; "
+            "  dbus-send --system --dest=org.bluez /org/bluez/hci0 org.bluez.Adapter1.RemoveDevice objpath:/org/bluez/hci0/dev_%s 2>/dev/null; "
+            "  bluetoothctl remove %s 2>/dev/null; "
+            "  hciconfig hci0 delkey %s 2>/dev/null ) >/dev/null 2>&1 &",
+            dbus_mac, mac, dbus_mac, mac, mac);
     }
     diskos_trace("bt_rx_forget: mac=%s", mac);
     system(cmd);
@@ -1008,35 +1248,42 @@ void bt_rx_forget(const char *mac){
 
 void bt_rx_force_pairing(void){
     atomic_store(&s_bt_pairing_until, lv_tick_get() + 60000);
+    atomic_store(&s_bt_force_drop, 1);
+    atomic_store(&s_bt_drop_until, lv_tick_get() + 2500);
+
     char mac[20] = {0};
+    char dbus_mac[32] = {0};
     pthread_mutex_lock(&g_bt_mu);
     if(g_bt_state.connected && g_bt_state.mac[0]){
         snprintf(mac, sizeof mac, "%s", g_bt_state.mac);
-        g_bt_state.connected = 0;
-        g_bt_state.is_playing = 0;
-        g_bt_state.mac[0] = 0;
-        g_bt_state.dbus_mac[0] = 0;
-        g_bt_state.dev_name[0] = 0;
-        g_bt_state.title[0] = 0;
-        g_bt_state.artist[0] = 0;
-        g_bt_state.album[0] = 0;
-        g_bt_state.codec[0] = 0;
+        if(g_bt_state.dbus_mac[0]) snprintf(dbus_mac, sizeof dbus_mac, "%s", g_bt_state.dbus_mac);
+        else rx_mac_to_dbus(mac, dbus_mac, sizeof dbus_mac);
+        rx_state_clear_locked();
     }
     pthread_mutex_unlock(&g_bt_mu);
 
-    char cmd[512];
+    char cmd[4096];
     if(mac[0]){
         snprintf(cmd, sizeof cmd,
-            "( bluetoothctl disconnect %s 2>/dev/null; "
-            "  bluetoothctl discoverable on 2>/dev/null; "
-            "  bluetoothctl pairable on 2>/dev/null; "
-            "  hciconfig hci0 piscan 2>/dev/null ) >/dev/null 2>&1 &",
-            mac);
+            "( dbus-send --system --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.Device1.Disconnect 2>/dev/null; "
+            "  bluetoothctl disconnect %s 2>/dev/null; "
+            "  for m in $(hcitool con 2>/dev/null | awk '/ACL/{print $3}'); do "
+            "    dm=$(echo \"$m\" | tr ':' '_'); "
+            "    dbus-send --system --dest=org.bluez \"/org/bluez/hci0/dev_${dm}\" org.bluez.Device1.Disconnect 2>/dev/null; "
+            "    bluetoothctl disconnect \"$m\" 2>/dev/null; "
+            "  done; "
+            "  sleep 0.6; "
+            "  " BT_RX_ENABLE_DISCOVERY_SH " ) >/dev/null 2>&1 &",
+            dbus_mac, mac);
     } else {
         snprintf(cmd, sizeof cmd,
-            "( bluetoothctl discoverable on 2>/dev/null; "
-            "  bluetoothctl pairable on 2>/dev/null; "
-            "  hciconfig hci0 piscan 2>/dev/null ) >/dev/null 2>&1 &");
+            "( for m in $(hcitool con 2>/dev/null | awk '/ACL/{print $3}'); do "
+            "    dm=$(echo \"$m\" | tr ':' '_'); "
+            "    dbus-send --system --dest=org.bluez \"/org/bluez/hci0/dev_${dm}\" org.bluez.Device1.Disconnect 2>/dev/null; "
+            "    bluetoothctl disconnect \"$m\" 2>/dev/null; "
+            "  done; "
+            "  sleep 0.6; "
+            "  " BT_RX_ENABLE_DISCOVERY_SH " ) >/dev/null 2>&1 &");
     }
     diskos_trace("bt_rx_force_pairing: active");
     system(cmd);
@@ -1753,39 +2000,8 @@ void modelock_close(void){
     }
 
     if(prev_mode == 2){
-        char mac[20] = {0};
-        char dbus_mac[32] = {0};
-        pthread_mutex_lock(&g_bt_mu);
-        if(g_bt_state.connected && g_bt_state.mac[0]){
-            snprintf(mac, sizeof mac, "%s", g_bt_state.mac);
-            snprintf(dbus_mac, sizeof dbus_mac, "%s", g_bt_state.dbus_mac);
-        }
-        memset(&g_bt_state, 0, sizeof(g_bt_state));
-        pthread_mutex_unlock(&g_bt_mu);
-
-        char tear_down_cmd[512];
-        if(mac[0]){
-            snprintf(tear_down_cmd, sizeof tear_down_cmd,
-                "( dbus-send --system --dest=org.bluez /org/bluez/hci0/dev_%s org.bluez.Device1.Disconnect 2>/dev/null; "
-                "  bluetoothctl disconnect %s 2>/dev/null; "
-                "  bluetoothctl discoverable off 2>/dev/null; "
-                "  bluetoothctl pairable off 2>/dev/null; "
-                "  %s ) >/dev/null 2>&1 &",
-                dbus_mac, mac,
-                (cfg_get_int("bt_on", 0) == 1) ? "true" : "hciconfig hci0 down 2>/dev/null; rfkill block bluetooth 2>/dev/null");
-        } else {
-            snprintf(tear_down_cmd, sizeof tear_down_cmd,
-                "( bluetoothctl disconnect 2>/dev/null; "
-                "  bluetoothctl discoverable off 2>/dev/null; "
-                "  bluetoothctl pairable off 2>/dev/null; "
-                "  %s ) >/dev/null 2>&1 &",
-                (cfg_get_int("bt_on", 0) == 1) ? "true" : "hciconfig hci0 down 2>/dev/null; rfkill block bluetooth 2>/dev/null");
-        }
-        system(tear_down_cmd);
-
-        if(cfg_get_int("bt_on", 0) == 1){
-            bt_boot_restore();
-        }
+        bt_rx_prepare_exit();
+        bt_output_resume_after_rx(cfg_get_int("bt_on", 0) == 1);
     }
 }
 

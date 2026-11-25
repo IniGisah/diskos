@@ -41,6 +41,8 @@ void bt_rx_sync_volume(int vol);
 void modelock_prompt_exit(void);
 
 /* Bluetooth Receiver State & Progress API */
+void bt_rx_enter(void);
+void bt_rx_prepare_exit(void);
 void bt_rx_worker_ensure(void);
 void bt_rx_get_state(bt_rx_state_t *out);
 void bt_rx_get_progress(uint32_t *out_elapsed_ms, uint32_t *out_dur_ms, int *out_fraction);
