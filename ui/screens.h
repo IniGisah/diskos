@@ -488,6 +488,7 @@ lv_obj_t *setting_detail_scroller(void);
 lv_obj_t *plpick_scroller(void);
 lv_obj_t *nphub_scroller(void);
 lv_obj_t *wifi_scroller(void);
+lv_obj_t *wifi_info_scroller(void);
 lv_obj_t *bt_scroller(void);
 lv_obj_t *qsconfig_scroller(void);
 lv_obj_t *songinfo_scroller(void);

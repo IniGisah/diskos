@@ -15,11 +15,16 @@ config_test: ../config.c config_test.c ../config.h
 playstate_test: ../playstate.c playstate_test.c ../playstate.h
 	$(CC) $(CFLAGS) -I.. ../playstate.c playstate_test.c -o $@
 
+wifi_test: wifi_test.c ../wifi_logic.h
+	$(CC) $(CFLAGS) -I.. wifi_test.c -o $@
+
 .PHONY: run clean
-run: config_test playstate_test
+run: config_test playstate_test wifi_test
 	./config_test
 	@echo "--- playstate ---"
 	./playstate_test
+	@echo "--- wifi ---"
+	./wifi_test
 
 clean:
-	rm -f config_test playstate_test
+	rm -f config_test playstate_test wifi_test

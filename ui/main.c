@@ -126,8 +126,6 @@ static void hardware_screen_sleep(int is_auto_sleep) {
     /* Disable UI touch processing in LVGL so dark screen never registers blind clicks */
     if(g_touch)
         lv_indev_enable(g_touch, false);
-    /* Ensure Wi-Fi radio enters 802.11 power save mode during sleep */
-    system("wl PM 2 >/dev/null 2>&1");
 }
 
 /* Real hardware screen turn-on matching stock firmware (0x4dde48):
@@ -3436,6 +3434,7 @@ static lv_obj_t *ui_active_scroller(void){
         case SCR_PLPICK:         return plpick_scroller();
         case SCR_NPHUB:          return nphub_scroller();
         case SCR_WIFI:           return wifi_scroller();
+        case SCR_WIFI_INFO:      return wifi_info_scroller();
         case SCR_BT:             return bt_scroller();
         case SCR_QSCONFIG:       return qsconfig_scroller();
         case SCR_SONGINFO:       return songinfo_scroller();
