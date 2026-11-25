@@ -213,14 +213,12 @@ static void apply_bt_codec(int v){
     g_bt_codec_pending = v;
     g_bt_codec_pending_ticks = 0;
 }
-/* Drop the old diskOS-only preference without touching stock or playback.
- * Idempotent: after a durable removal there is nothing to migrate again. */
-static int legacy_bt_codec_key(const char *key){
-    if(strcmp(key, "bt_codec")) return 0;
-    int v = cfg_get_int("bt_codec", -1);
-    return (v >= 0 && v < 5);
+/* Seed diskos.conf bt_codec once from stock SYSCONFIG if unset, never deleting 0..4. */
+static void settings_bt_codec_seed(void){
+    if(cfg_get_int("bt_codec", -1) >= 0) return;
+    int v = mdb_sysconfig_bt_codec();
+    if(v >= 0 && v < BT_CODEC_N) cfg_set_int("bt_codec", v);
 }
-static void settings_bt_codec_migrate(void){ cfg_remove_if(legacy_bt_codec_key); }
 static void apply_auto_time(int v){
     if(mdb_sysconfig_set_auto_time(v) != 0){           /* the player may hold its database: put the switch back */
         cfg_set_int("auto_time", g_set_prev);
@@ -679,7 +677,7 @@ void settings_apply_startup(int restore_brightness){
         apply_brightness(ui_effective_brightness());
         sync_sysconfig_light_level(ui_effective_brightness());
     }
-    settings_bt_codec_migrate();
+    settings_bt_codec_seed();
     { int at = mdb_sysconfig_auto_time();              /* mirror the player's switch (it owns the value) */
       if(at >= 0 && at != cfg_get_int("auto_time", 1)) cfg_set_int("auto_time", at); }
     { int ac = mdb_artist_class_type();                 /* the player's Artist / Album Artist grouping (it owns it) */
@@ -889,15 +887,10 @@ static const setting_t TABLE[] = {
 static int get_val(const setting_t *s){
     if(s->cfg_key && !strcmp(s->cfg_key, "bt_codec")){
         int cfg_v = cfg_get_int("bt_codec", -1);
-        if(ui_get_source_mode() == 2)
-            return (cfg_v >= 0 && cfg_v < BT_CODEC_N) ? cfg_v : 0;
-        if(cfg_v >= 5 && cfg_v < BT_CODEC_N) return cfg_v;
+        if(cfg_v >= 0 && cfg_v < BT_CODEC_N) return cfg_v;
+        if(ui_get_source_mode() == 2) return 0;
         int v = mdb_sysconfig_bt_codec();
-        if(g_bt_codec_pending >= 0){
-            if(v == g_bt_codec_pending) g_bt_codec_pending = -1;
-            else return g_bt_codec_pending;
-        }
-        return v >= 0 ? v : (cfg_v >= 0 ? cfg_v : 0);
+        return (v >= 0 && v < BT_CODEC_N) ? v : 0;
     }
     if(s->cfg_key && !strcmp(s->cfg_key, "ota_auto"))
         return !strcmp(cfg_get_str(s->cfg_key, "0"), "1");
@@ -1083,20 +1076,8 @@ static void detail_slider_release_cb(lv_event_t *e){
 static void bt_codec_saved_tick(lv_timer_t *t){
     (void)t;
     if(screen_current() != SCR_SETTING_DETAIL || !g_active || !g_active->cfg_key || strcmp(g_active->cfg_key, "bt_codec")) return;
-    if(ui_get_source_mode() == 2){
-        if(g_bt_codec_pending >= 0){
-            g_bt_codec_pending = -1;
-            setting_detail_refresh();
-        }
-        return;
-    }
-    int v = (cfg_get_int("bt_codec", -1) >= 5) ? cfg_get_int("bt_codec", -1) : mdb_sysconfig_bt_codec();
     if(g_bt_codec_pending >= 0){
-        if(v == g_bt_codec_pending || ++g_bt_codec_pending_ticks > 3){
-            g_bt_codec_pending = -1;
-            setting_detail_refresh();
-        }
-    } else if(v >= 0 && v < BT_CODEC_N && v != get_val(g_active)){
+        g_bt_codec_pending = -1;
         setting_detail_refresh();
     }
 }

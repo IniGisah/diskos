@@ -305,17 +305,19 @@ int bt_codec_pick(int choice, unsigned avail, int avail_known){
     if(!avail_known) return 0;   /* sink capabilities not yet known: keep SBC */
 
     /* If user chose aptX-HD (6):
-     * Prefer aptX-HD if available; fall back to aptX if available; otherwise SBC. */
+     * Prefer aptX-HD if available; fall back to aptX -> AAC -> SBC. */
     if(choice == 6){
         if(avail & BTC_APTX_HD) return 6;
         if(avail & BTC_APTX)    return 5;
+        if(avail & BTC_AAC)     return 1;
         return 0;
     }
 
     /* If user chose aptX (5):
-     * Prefer aptX if available; otherwise SBC. */
+     * Prefer aptX if available; fall back to AAC -> SBC. */
     if(choice == 5){
         if(avail & BTC_APTX)    return 5;
+        if(avail & BTC_AAC)     return 1;
         return 0;
     }
 
@@ -371,40 +373,59 @@ static int bt_codec_query_cmd(const char *mac, char *out, int cap){
     for(int i = 0; i < 17; i++) d[n++] = mac[i] == ':' ? '_' : mac[i];
     d[n] = 0;
     int r = snprintf(out, cap, "p=$(bluealsa-cli list-pcms 2>/dev/null) || exit 1; "
-                               "p=$(printf '%%s\\n' \"$p\" | grep -i 'dev_%s/a2dp' | head -n 1); "
+                               "p=$(printf '%%s\\n' \"$p\" | grep -iE 'dev_%s/(a2dpsrc|a2dp-source)' | head -n 1); "
                                "[ -n \"$p\" ] && { echo \"PCM=$p\"; bluealsa-cli info \"$p\" 2>/dev/null; }", d);
     return (r > 0 && r < cap) ? 0 : -1;
 }
-/* Direct codec selection: select the highest supported codec matching user choice on initial handshake.
- * If sink capabilities are not yet queried or V2.57 is not running, falls back to SBC. */
+/* Direct codec selection: synchronously probe the sink's supported SEPs and select the highest
+ * codec <= user preference. If capabilities cannot be read yet, keep SBC frame without forcing
+ * a downgrade in BlueALSA. */
 int ui_bt_codec_frame(const char *mac, char *out, int cap){
-    int choice = cfg_get_int("bt_codec", 0);
+    int choice = cfg_get_int("bt_codec", -1);
+    if(choice < 0) choice = mdb_sysconfig_bt_codec();
     if(choice < 0 || choice >= BT_CODEC_N) choice = 0;
 
-    int best = 0;
+    if(choice >= 2 && choice <= 4){
+        FILE *fq = fopen("/usr/data/bt_ldac_quality", "w");
+        if(fq){
+            fprintf(fq, "%s\n", (choice == 2) ? "mobile" : (choice == 4) ? "high" : "standard");
+            fclose(fq);
+        }
+    }
+
+    int best = 0, known = 0;
     if(choice > 0){
         char cmd[256], info[1536];
-        if(bt_codec_query_cmd(mac, cmd, sizeof cmd) == 0 &&
-           run_cap_bounded(cmd, info, sizeof info, 350) > 0){
-            int known = 0;
-            unsigned avail = bt_codec_parse_avail(info, &known);
-            if(known){
-                best = bt_codec_pick(choice, avail, 1);
+        if(bt_codec_query_cmd(mac, cmd, sizeof cmd) == 0){
+            if(bt_capture_wait(cmd, info, sizeof info, 800) > 0){
+                unsigned avail = bt_codec_parse_avail(info, &known);
+                if(known) best = bt_codec_pick(choice, avail, 1);
+            }
+            if(!known){
+                usleep(150000);
+                if(bt_capture_wait(cmd, info, sizeof info, 800) > 0){
+                    unsigned avail = bt_codec_parse_avail(info, &known);
+                    if(known) best = bt_codec_pick(choice, avail, 1);
+                }
             }
         }
     }
 
-    /* Ensure active BlueALSA A2DP source PCM matches negotiated codec */
-    const char *cname = (best == 1) ? "AAC" : (best >= 2 && best <= 4) ? "LDAC" :
-                        (best == 5) ? "aptX" : (best == 6) ? "aptX-HD" : "SBC";
-    char sync_cmd[256];
-    snprintf(sync_cmd, sizeof sync_cmd,
-             "for p in $(bluealsa-cli list-pcms 2>/dev/null); do "
-             "  case \"$p\" in "
-             "    *a2dpsrc*|*a2dp-source*) bluealsa-cli codec \"$p\" %s >/dev/null 2>&1 ;; "
-             "  esac; "
-             "done &", cname);
-    bg_system(sync_cmd);
+    if(known){
+        const char *cname = (best == 1) ? "AAC" : (best >= 2 && best <= 4) ? "LDAC" :
+                            (best == 5) ? "aptX" : (best == 6) ? "aptX-HD" : "SBC";
+        char sync_cmd[512];
+        snprintf(sync_cmd, sizeof sync_cmd,
+                 "( sleep 0.6; "
+                 "  for p in $(bluealsa-cli list-pcms 2>/dev/null); do "
+                 "    case \"$p\" in "
+                 "      *a2dpsrc*|*a2dp-source*) "
+                 "        bluealsa-cli info \"$p\" 2>/dev/null | grep -q \"Selected codec: %s\" || "
+                 "        bluealsa-cli codec \"$p\" %s >/dev/null 2>&1 ;; "
+                 "    esac; "
+                 "  done ) >/dev/null 2>&1 &", cname, cname);
+        bg_system(sync_cmd);
+    }
 
     return bt_codec_frame_value(mac, best, out, cap);
 }
@@ -423,6 +444,14 @@ int ui_bt_codec_set(int value){
         case 6: codec_arg = "aptX-HD"; break;
     }
 
+    if(value >= 2 && value <= 4){
+        FILE *fq = fopen("/usr/data/bt_ldac_quality", "w");
+        if(fq){
+            fprintf(fq, "%s\n", (value == 2) ? "mobile" : (value == 4) ? "high" : "standard");
+            fclose(fq);
+        }
+    }
+
     if(ui_get_source_mode() == 2){
         /* BLUETOOTH RECEIVING MODE (Mode 2 / A2DP Sink):
          * NEVER send 06b3 to mq_player here: 06b3 is transmitter-only and invokes
@@ -435,28 +464,23 @@ int ui_bt_codec_set(int value){
                 fprintf(f, "%s\n", codec_arg);
                 fclose(f);
             }
-            if(value >= 2 && value <= 4){
-                FILE *fq = fopen("/usr/data/bt_ldac_quality", "w");
-                if(fq){
-                    fprintf(fq, "%s\n", (value == 2) ? "mobile" : (value == 4) ? "high" : "standard");
-                    fclose(fq);
-                }
-            }
         }
-        /* Dynamic live switch on any active PCM in BlueALSA.
-         * Matches both a2dpsnk/source and a2dp-sink/source. */
+        /* Dynamic live switch on any active Sink PCM in BlueALSA, or restart idle sink bluealsa
+         * so /usr/data/bt_rx_codec takes effect for the next incoming phone connection. */
         if(codec_arg){
-            char cmd[512];
+            char cmd[640];
             snprintf(cmd, sizeof cmd,
-                     "( for p in $(bluealsa-cli list-pcms 2>/dev/null); do "
+                     "( active=0; "
+                     "  for p in $(bluealsa-cli list-pcms 2>/dev/null); do "
                      "    case \"$p\" in "
-                     "      *a2dpsnk*|*a2dp-sink*) bluealsa-cli codec \"$p\" %s 2>/dev/null || true ;; "
+                     "      *a2dpsnk*|*a2dp-sink*) active=1; bluealsa-cli codec \"$p\" %s 2>/dev/null || true ;; "
                      "    esac; "
                      "  done; "
-                     "  bluetoothctl power on 2>/dev/null; "
-                     "  hciconfig hci0 piscan 2>/dev/null; "
-                     "  bluetoothctl discoverable on 2>/dev/null; "
-                     "  bluetoothctl pairable on 2>/dev/null ) >/dev/null 2>&1 &",
+                     "  if [ \"$active\" -eq 0 ] && pidof bluetoothd >/dev/null 2>&1; then "
+                     "    killall -9 bluealsa bluealsa-custom 2>/dev/null; "
+                     "    sleep 0.2; "
+                     "    /opt/diskos/bin/bluealsa -S --device=hci0 --profile=a2dp-sink -p hfp-ag >/tmp/bluealsa.log 2>&1 & "
+                     "  fi ) >/dev/null 2>&1 &",
                      codec_arg);
             bg_system(cmd);
         }
@@ -466,17 +490,22 @@ int ui_bt_codec_set(int value){
     /* BLUETOOTH TRANSMITTING / LOCAL MODE:
      * When connected to a sink, adapt to the best codec supported by that sink so
      * selecting LDAC while connected to AAC TWS earbuds falls back cleanly to AAC
-     * and sets mq_player to 44.1 kHz instead of desyncing into 96 kHz. */
+     * without overwriting the user's saved bt_codec preference in diskos.conf. */
     int best = value;
     const char *mac = ui_route_mac();
     if(mac && mac[0]){
         char cmd[256], info[1536];
         if(bt_codec_query_cmd(mac, cmd, sizeof cmd) == 0 &&
-           run_cap_bounded(cmd, info, sizeof info, 350) > 0){
+           bt_capture_wait(cmd, info, sizeof info, 800) > 0){
             int known = 0;
             unsigned avail = bt_codec_parse_avail(info, &known);
             if(known){
                 best = bt_codec_pick(value, avail, 1);
+                if(best != value){
+                    char msg[64];
+                    snprintf(msg, sizeof msg, "Using %s (device limit)", BT_CODEC_LABEL[best]);
+                    ui_toast(msg);
+                }
             }
         }
     }
@@ -488,13 +517,16 @@ int ui_bt_codec_set(int value){
     const char *best_arg = (best == 1) ? "AAC" : (best >= 2 && best <= 4) ? "LDAC" :
                            (best == 5) ? "aptX" : (best == 6) ? "aptX-HD" : "SBC";
     if(best_arg){
-        char cmd[256];
+        char cmd[512];
         snprintf(cmd, sizeof cmd,
-                 "for p in $(bluealsa-cli list-pcms 2>/dev/null); do "
-                 "  case \"$p\" in "
-                 "    *a2dpsrc*|*a2dp-source*) bluealsa-cli codec \"$p\" %s >/dev/null 2>&1 ;; "
-                 "  esac; "
-                 "done &", best_arg);
+                 "( sleep 0.5; "
+                 "  for p in $(bluealsa-cli list-pcms 2>/dev/null); do "
+                 "    case \"$p\" in "
+                 "      *a2dpsrc*|*a2dp-source*) "
+                 "        bluealsa-cli info \"$p\" 2>/dev/null | grep -q \"Selected codec: %s\" || "
+                 "        bluealsa-cli codec \"$p\" %s >/dev/null 2>&1 ;; "
+                 "    esac; "
+                 "  done ) >/dev/null 2>&1 &", best_arg, best_arg);
         bg_system(cmd);
     }
     return 0;

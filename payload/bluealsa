@@ -87,10 +87,11 @@ for arg do
     esac
 done
 
-if [ "$LL_ENABLED" -eq 1 ]; then
-    # LOW LATENCY MODE:
+if [ "$LL_ENABLED" -eq 1 ] && [ "$HAS_SOURCE" -eq 0 ]; then
+    # LOW LATENCY MODE (BT Receiving only):
     # Disable high-latency / buffered codecs (AAC, aptX, aptX-HD, LDAC) so Android/iOS/PC
     # negotiates SBC only, keeping audio latency low (~80-120ms).
+    # Never restrict codecs when a2dp-source is requested for headphones/TWS.
     exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD --codec=-ldac
 elif [ "$HAS_SOURCE" -eq 0 ] && [ -n "$RX_CODEC" ] && [ "$RX_CODEC" != "AUTO" ] && [ "$RX_CODEC" != "Auto" ]; then
     # PREFERRED RECEIVER CODEC MODE:

@@ -156,6 +156,18 @@ class TestBlueAlsaWrapper(unittest.TestCase):
         self.assertIn("--codec=-ldac", stock_out)
         self.assertIn("--codec=-aac", stock_out)
 
+    def test_low_latency_does_not_force_sbc_in_source_mode(self):
+        args = [
+            "-S", "--device=hci0", "--profile=a2dp-source",
+            "--codec=sbc", "--codec=aac", "--codec=ldac"
+        ]
+        res, stock_out, _ = self.run_wrapper(args, ll_enabled=True, custom_exists=False, rx_codec="SBC")
+        self.assertEqual(res.returncode, 0)
+        self.assertIsNotNone(stock_out)
+        self.assertIn("--codec=aac", stock_out)
+        self.assertIn("--codec=ldac", stock_out)
+        self.assertNotIn("--codec=-aac", stock_out)
+
     def test_source_mode_ignores_rx_codec_restriction(self):
         # When invoked for headphones/source, rx_codec setting MUST NOT disable AAC or LDAC
         args = [
@@ -222,13 +234,19 @@ const char *const BT_CODEC_LABEL[BT_CODEC_N] = {
 int bt_codec_pick(int choice, unsigned avail, int avail_known){
     if(choice < 0 || choice >= BT_CODEC_N) return 0;
     if(!avail_known) return 0;
+    /* If user chose aptX-HD (6):
+     * Prefer aptX-HD if available; fall back to aptX -> AAC -> SBC. */
     if(choice == 6){
         if(avail & BTC_APTX_HD) return 6;
         if(avail & BTC_APTX)    return 5;
+        if(avail & BTC_AAC)     return 1;
         return 0;
     }
+    /* If user chose aptX (5):
+     * Prefer aptX if available; fall back to AAC -> SBC. */
     if(choice == 5){
         if(avail & BTC_APTX)    return 5;
+        if(avail & BTC_AAC)     return 1;
         return 0;
     }
     if(choice >= 2 && choice <= 4){
@@ -298,11 +316,13 @@ int main(void){
     assert(bt_codec_pick(6, m_aptx_only, 1) == 5); // aptX-HD falls back to aptX
     assert(bt_codec_pick(4, m_aptx_only, 1) == 0); // LDAC falls back to SBC when no AAC
 
-    // TWS Earbuds fallback: user chooses LDAC, sink only has AAC + SBC
+    // TWS Earbuds fallback: user chooses LDAC/aptX/aptX-HD, sink only has AAC + SBC
     unsigned m_aac_tws = BTC_AAC;
     assert(bt_codec_pick(2, m_aac_tws, 1) == 1); // LDAC Mobile -> AAC fallback
     assert(bt_codec_pick(3, m_aac_tws, 1) == 1); // LDAC Standard -> AAC fallback
     assert(bt_codec_pick(4, m_aac_tws, 1) == 1); // LDAC High -> AAC fallback
+    assert(bt_codec_pick(5, m_aac_tws, 1) == 1); // aptX -> AAC fallback
+    assert(bt_codec_pick(6, m_aac_tws, 1) == 1); // aptX-HD -> AAC fallback
 
     // Hi-Res Headphone: user chooses LDAC, sink supports LDAC + AAC
     unsigned m_ldac_hp = BTC_LDAC | BTC_AAC;
@@ -524,6 +544,24 @@ int main(void){
             run_res = subprocess.run([str(bin_out)], capture_output=True, text=True)
             self.assertEqual(run_res.returncode, 0)
             self.assertIn("RX_CAP_FILTER_PASS", run_res.stdout)
+
+    def test_codec_persistence_and_sync_probe(self):
+        repo_ui = Path(__file__).resolve().parents[1] / "ui"
+        settings_txt = (repo_ui / "settings.c").read_text()
+        bt_txt = (repo_ui / "bt.c").read_text()
+
+        # Must not delete bt_codec 0..4 on startup
+        self.assertNotIn("legacy_bt_codec_key", settings_txt)
+        self.assertNotIn("settings_bt_codec_migrate", settings_txt)
+        self.assertIn("settings_bt_codec_seed", settings_txt)
+
+        # ui_bt_codec_frame and ui_bt_codec_set must synchronously probe capabilities
+        frame_fn = bt_txt.split("int ui_bt_codec_frame(", 1)[1].split("int ui_bt_codec_set(", 1)[0]
+        set_fn = bt_txt.split("int ui_bt_codec_set(", 1)[1].split("static atomic_int s_bt_rx_ll", 1)[0]
+        self.assertIn("bt_capture_wait(", frame_fn)
+        self.assertNotIn("run_cap_bounded(", frame_fn)
+        self.assertIn("bt_capture_wait(", set_fn)
+        self.assertNotIn("run_cap_bounded(", set_fn)
 
 
 if __name__ == "__main__":
