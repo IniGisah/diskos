@@ -175,10 +175,11 @@ static lv_obj_t *skb_create(lv_obj_t *parent, lv_obj_t *ta, void (*submit)(void)
 static lv_obj_t *g_modal, *g_ta;
 static kbinput_done_cb_t g_done;
 static kbinput_validator_t g_validate;
-static lv_obj_t *g_reason;
+static lv_obj_t *g_reason, *g_eye_lbl;
 static size_t g_max_bytes = 159;
 void kbinput_set_byte_limit(size_t bytes){ g_max_bytes=bytes; }
 static int g_keep_spaces;   /* password entry: trailing spaces are part of the secret, never stripped */
+static int g_pw_masked;
 
 int kbinput_active(void){ return g_modal != NULL; }
 
@@ -187,6 +188,7 @@ static void finish(const char *result){
     if(g_modal){ lv_obj_delete_async(g_modal); g_modal = NULL; g_ta = NULL; }
     g_validate = NULL;
     g_reason = NULL;
+    g_eye_lbl = NULL;
     if(cb) cb(result);
 }
 static void do_save(void){
@@ -217,27 +219,43 @@ static void validated_save(void){
 }
 static void save_btn(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) validated_save(); }
 static void cancel_btn(lv_event_t *e){ if(lv_event_get_code(e)==LV_EVENT_CLICKED) finish(NULL); }
+static void eye_btn(lv_event_t *e){
+    if(lv_event_get_code(e)!=LV_EVENT_CLICKED || !g_ta) return;
+    g_pw_masked = !g_pw_masked;
+    lv_textarea_set_password_mode(g_ta, g_pw_masked);
+    if(g_eye_lbl){
+        lv_label_set_text(g_eye_lbl, g_pw_masked ? LV_SYMBOL_EYE_OPEN : LV_SYMBOL_EYE_CLOSE);
+        lv_obj_set_style_text_color(g_eye_lbl, g_pw_masked ? TC(TEXT_SECONDARY) : TC(ACCENT_PRIMARY), 0);
+    }
+}
 
 static void clear_reason(lv_event_t *e){
     if(lv_event_get_target(e) == g_ta && g_reason)
         lv_label_set_text(g_reason, "");
 }
 
-static void pill(lv_obj_t *parent, int x, int y, const char *sym, lv_color_t col, lv_event_cb_t cb){
+static lv_obj_t *pill_w(lv_obj_t *parent, int x, int y, int w, const char *sym, lv_color_t col,
+                       lv_event_cb_t cb, const char *action, lv_obj_t **out_lbl){
     lv_obj_t *b = lv_button_create(parent);
     lv_obj_remove_style_all(b);
-    lv_obj_set_size(b, 60, 36);
+    lv_obj_set_size(b, w, 36);
     lv_obj_align(b, LV_ALIGN_TOP_MID, x, y);
     lv_obj_set_ext_click_area(b, 8);   /* Save/Cancel sit in open space - generous hit area */
     lv_obj_set_style_radius(b, 18, 0);
     lv_obj_set_style_bg_color(b, TC(SURFACE_RAISED), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(b, TC(RAISED_PRESSED), LV_STATE_PRESSED);
-    ui_on(b, cb, LV_EVENT_CLICKED, NULL, "kbinput.cb", UI_CORE);
+    ui_on(b, cb, LV_EVENT_CLICKED, NULL, action, UI_CORE);
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, sym);
     lv_obj_set_style_text_color(l, col, 0);
     lv_obj_center(l);
+    if(out_lbl) *out_lbl = l;
+    return b;
+}
+
+static void pill(lv_obj_t *parent, int x, int y, const char *sym, lv_color_t col, lv_event_cb_t cb){
+    pill_w(parent, x, y, 60, sym, col, cb, "kbinput.cb", NULL);
 }
 
 /* set by kbinput_open_password() for the next open only, then consumed/reset. */
@@ -267,7 +285,13 @@ void kbinput_open(const char *title, const char *initial, kbinput_done_cb_t cb){
     if(title && title[0]) lv_textarea_set_placeholder_text(g_ta, title);
     if(initial && initial[0]) lv_textarea_set_text(g_ta, initial);
     g_keep_spaces = g_mask_next;
-    if(g_mask_next){ lv_textarea_set_password_mode(g_ta, true); g_mask_next = 0; }  /* masked secret entry */
+    int is_pw = g_mask_next;
+    g_pw_masked = is_pw;
+    if(g_mask_next){
+        lv_textarea_set_password_mode(g_ta, true);
+        lv_textarea_set_password_show_time(g_ta, 1200);
+        g_mask_next = 0;
+    }  /* masked secret entry */
     lv_obj_set_size(g_ta, 240, 40);
     lv_obj_align(g_ta, LV_ALIGN_TOP_MID, 0, 52);
     lv_obj_set_style_bg_color(g_ta, TC(SURFACE), 0);
@@ -283,8 +307,9 @@ void kbinput_open(const char *title, const char *initial, kbinput_done_cb_t cb){
     { lv_obj_t *ta_lbl = lv_textarea_get_label(g_ta);   /* pin to the FONT's 24px line height so the text can't clip and centring can't drift */
       if(ta_lbl){ lv_obj_set_style_min_height(ta_lbl, 24, 0); lv_obj_set_style_max_height(ta_lbl, 24, 0); } }
 
-    /* Cancel / Save in the wide mid-band, above the keyboard */
+    /* Cancel / (optional Eye toggle) / Save in the wide mid-band, above the keyboard */
     pill(g_modal, -66, 108, LV_SYMBOL_CLOSE, TC(TEXT_SECONDARY), cancel_btn);
+    if(is_pw) pill_w(g_modal, 0, 108, 44, LV_SYMBOL_EYE_OPEN, TC(TEXT_SECONDARY), eye_btn, "kbinput.eye", &g_eye_lbl);
     pill(g_modal,  66, 108, LV_SYMBOL_OK,    theme_def() ? TC(ACCENT_PRIMARY) : TC(STATUS_SUCCESS), save_btn);   /* confirm: go colour */
 
     g_reason = lv_label_create(g_modal);
