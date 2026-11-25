@@ -1,0 +1,269 @@
+name: Build and Release diskOS Installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: 'Create GitHub Release as draft (tag runs only)'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows x64 installer ZIP
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up native Windows x64 Python 3.12.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.10'
+          architecture: 'x64'
+
+      - name: Set up MSYS2
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: false
+          install: >-
+            gcc gcc-libs zlib-devel make patch tar gzip bzip2 diffutils binutils coreutils
+            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-pkgconf
+
+      - name: Pin msys2-runtime 3.6.10-6
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msysRoot = '${{ steps.msys2.outputs.msys2-location }}'
+          Write-Host "MSYS2 location: $msysRoot"
+          $pacman = Join-Path $msysRoot 'usr\bin\pacman.exe'
+          $cur = (& $pacman -Q msys2-runtime 2>$null | Out-String).Trim()
+          if ($cur -ne 'msys2-runtime 3.6.10-6') {
+            Write-Host "Installing pinned msys2-runtime + msys2-runtime-devel 3.6.10-6 (current: $cur)"
+            $baseUrl = 'https://repo.msys2.org/msys/x86_64'
+            $pkgs = @(
+              'msys2-runtime-3.6.10-6-x86_64.pkg.tar.zst',
+              'msys2-runtime-devel-3.6.10-6-x86_64.pkg.tar.zst'
+            )
+            $tmpDir = Join-Path $msysRoot 'tmp'
+            New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+            $msysArgs = @()
+            $downloaded = @()
+            foreach ($pkg in $pkgs) {
+              $pkgOut = Join-Path $tmpDir $pkg
+              $sigOut = Join-Path $tmpDir "$pkg.sig"
+              Invoke-WebRequest -Uri "$baseUrl/$pkg" -OutFile $pkgOut
+              Invoke-WebRequest -Uri "$baseUrl/$pkg.sig" -OutFile $sigOut
+              $downloaded += $pkgOut, $sigOut
+              $msysArgs += "/tmp/$pkg"
+            }
+            & $pacman -U --noconfirm @msysArgs
+            if ($LASTEXITCODE -ne 0) {
+              throw "pacman -U failed with exit code $LASTEXITCODE"
+            }
+            Remove-Item -LiteralPath $downloaded -Force -ErrorAction SilentlyContinue
+          }
+          if ($msysRoot -ne 'C:\msys64') {
+            if (Test-Path -LiteralPath 'C:\msys64') {
+              Remove-Item -LiteralPath 'C:\msys64' -Recurse -Force
+            }
+            cmd /c mklink /J C:\msys64 "$msysRoot"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to link C:\msys64 -> $msysRoot"
+            }
+          }
+
+      - name: Build Windows native tools and verify runtime sources
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          pacman -Q msys2-runtime msys2-runtime-devel
+
+          # Build vendor/windows-x86_64/{mksquashfs,unsquashfs,usbboot,bind_winusb}.exe + msys-2.0.dll
+          bash build/build-windows-tools.sh
+
+          manifest_sha=$(sha256sum vendor/windows-x86_64/MANIFEST.txt | cut -d' ' -f1)
+          echo "NATIVE_MANIFEST_SHA256=$manifest_sha" >> "$GITHUB_ENV"
+          echo "Native MANIFEST.txt SHA256: $manifest_sha"
+
+          # Fetch and GPG-verify pinned MSYS2 runtime corresponding source
+          export MSYS2_GNUPGHOME=/etc/pacman.d/gnupg
+          mkdir -p /c/diskos-release-sources corresponding-source/windows
+          bash build/fetch-windows-sources.sh /c/diskos-release-sources
+          bash build/fetch-windows-sources.sh --verify /c/diskos-release-sources
+          cp -- /c/diskos-release-sources/msys2-runtime-3.6.10-6.src.tar.zst \
+                /c/diskos-release-sources/msys2-runtime-3.6.10-6.src.tar.zst.sig \
+                corresponding-source/windows/
+
+      - name: Download and verify pinned official libusb 1.0.27 DLL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pin = Get-Content -LiteralPath 'build/windows-libusb.json' -Raw | ConvertFrom-Json
+          $deps = 'C:\diskos-deps'
+          New-Item -ItemType Directory -Force -Path $deps | Out-Null
+          $archive = Join-Path $deps 'libusb-1.0.27.7z'
+          Invoke-WebRequest -Uri $pin.asset_url -OutFile $archive
+          $got = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($got -ne $pin.asset_sha256) {
+            throw "libusb archive SHA256 mismatch: $got != $($pin.asset_sha256)"
+          }
+          & 7z e $archive $pin.member "-o$deps" -y | Out-Null
+          $dll = Join-Path $deps 'libusb-1.0.dll'
+          $dllHash = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($dllHash -ne $pin.dll_sha256) {
+            throw "libusb-1.0.dll SHA256 mismatch: $dllHash != $($pin.dll_sha256)"
+          }
+          echo "LIBUSB_DLL=$dll" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Freeze flash-enabled Windows installer ZIP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dirty = & git status --porcelain --untracked-files=all
+          if ($dirty) {
+            throw "Working tree is not clean before Windows freeze:`n$dirty"
+          }
+          powershell -File build/build-windows.ps1 `
+            -EnableWindowsFlash `
+            -LibusbDll "$env:LIBUSB_DLL" `
+            -NativeManifestSha256 "$env:NATIVE_MANIFEST_SHA256"
+
+          $zip = Get-ChildItem -Path 'build/dist/windows' -Recurse -Filter 'diskos-installer-windows-x86_64.zip' | Select-Object -First 1
+          if (-not $zip) {
+            throw 'Expected diskos-installer-windows-x86_64.zip was not produced'
+          }
+          New-Item -ItemType Directory -Force -Path 'release-out' | Out-Null
+          Copy-Item -LiteralPath $zip.FullName -Destination 'release-out/diskos-installer-windows-x86_64.zip'
+          Copy-Item -LiteralPath 'corresponding-source/windows/msys2-runtime-3.6.10-6.src.tar.zst' -Destination 'release-out/msys2-runtime-3.6.10-6.src.tar.zst'
+          Copy-Item -LiteralPath 'corresponding-source/windows/msys2-runtime-3.6.10-6.src.tar.zst.sig' -Destination 'release-out/msys2-runtime-3.6.10-6.src.tar.zst.sig'
+
+      - name: Upload Windows release ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: release-out/diskos-installer-windows-x86_64.zip
+          if-no-files-found: error
+
+      - name: Upload Windows GPL corresponding source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-corresponding-source
+          path: |
+            release-out/msys2-runtime-3.6.10-6.src.tar.zst
+            release-out/msys2-runtime-3.6.10-6.src.tar.zst.sig
+          if-no-files-found: error
+
+  build-linux:
+    name: Build Linux x86-64 installer tarball
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential file curl xz-utils tar python3
+
+      - name: Build static Linux squashfs-tools and usbboot
+        run: |
+          set -euo pipefail
+          bash build/build-squashfs-static.sh /tmp/sqfs-cand
+          cp /tmp/sqfs-cand/mksquashfs /tmp/sqfs-cand/unsquashfs vendor/linux-x86_64/
+          bash build/build-usbboot-static.sh
+
+          for f in usbboot mksquashfs unsquashfs; do
+            kind=$(file -b "vendor/linux-x86_64/$f")
+            echo "$f: $kind"
+            [[ "$kind" == *"statically linked"* ]] || { echo "FAIL: $f is not static"; exit 1; }
+          done
+
+      - name: Stage and verify Linux x86-64 release tarball
+        run: |
+          set -euo pipefail
+          REV=$(git rev-parse --verify HEAD)
+          STAGE=$(mktemp -d)
+          DEST="$STAGE/diskos-installer"
+          mkdir -p "$DEST" release-out
+
+          git -c core.autocrlf=false -c core.eol=lf archive --format=tar "$REV" -- \
+            diskos_installer payload udev licenses install.sh diskos-installer \
+            requirements.txt LICENSE NOTICE.md README.md RECOVERY.txt \
+            docs/INSTALL.md docs/PRIVACY.md vendor/setup-macos.sh | tar -x -C "$DEST"
+          mkdir -p "$DEST/vendor/linux-x86_64"
+          for f in usbboot mksquashfs unsquashfs my_write6_dram.bin disc_spl_lpddr3.bin; do
+            cp -a "vendor/linux-x86_64/$f" "$DEST/vendor/linux-x86_64/$f"
+          done
+
+          # Verify all committed payload and device blobs match HEAD
+          python3 build/verify_git_blobs.py "$PWD" "$DEST" linux-x86_64 --ref "$REV" --frozen
+
+          tar -C "$STAGE" -czf release-out/diskos-installer-linux-x86_64.tar.gz diskos-installer
+          rm -rf "$STAGE"
+
+      - name: Upload Linux release tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: release-out/diskos-installer-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x86_64
+          path: release-assets
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-x86_64
+          path: release-assets
+
+      - name: Download Windows corresponding source artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-corresponding-source
+          path: release-assets
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd release-assets
+          sha256sum \
+            diskos-installer-linux-x86_64.tar.gz \
+            diskos-installer-windows-x86_64.zip \
+            msys2-runtime-3.6.10-6.src.tar.zst \
+            msys2-runtime-3.6.10-6.src.tar.zst.sig > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release (draft)
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            release-assets/diskos-installer-linux-x86_64.tar.gz
+            release-assets/diskos-installer-windows-x86_64.zip
+            release-assets/msys2-runtime-3.6.10-6.src.tar.zst
+            release-assets/msys2-runtime-3.6.10-6.src.tar.zst.sig
+            release-assets/SHA256SUMS

@@ -8,6 +8,7 @@ opens a USB device, or raises on a missing item: it only warns. flasher.prefligh
 stays the authoritative gate right before the flash."""
 
 import os
+import sys
 
 from . import bundle, flasher, platform_probe
 from .errors import PreflightError
@@ -135,8 +136,10 @@ def _firmware_row(mode, firmware, have_stock, fw=None):
 
 def _tools_row(p):
     if p["missing_tools"]:
-        return _row("tools", "Installer tools", False, "Installer tools missing: " + ", ".join(p["missing_tools"]),
-                    "Download the installer again; a file is missing from this copy.")
+        fix = ("Download the installer again; a file is missing from this copy."
+               if getattr(sys, "frozen", False)
+               else "Run ./install.sh (or see docs/INSTALL.md) to install/build missing tools.")
+        return _row("tools", "Installer tools", False, "Installer tools missing: " + ", ".join(p["missing_tools"]), fix)
     return _row("tools", "Installer tools", True, "All bundled tools found")
 
 

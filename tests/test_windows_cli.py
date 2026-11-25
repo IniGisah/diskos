@@ -167,18 +167,15 @@ class WindowsBuildScriptTests(unittest.TestCase):
         self.assertLess(freeze, after)
         self.assertLess(after, self.script.index('$stageCode ='))
 
-    def test_runtime_sources_are_authenticated_before_and_after_freeze(self):
+    def test_runtime_sources_are_authenticated_before_freeze(self):
         verifier = self.script.split('    $verifyRuntimeSources = {\n', 1)[1].split('\n    }\n', 1)[0]
         self.assertIn("& 'C:\\msys64\\usr\\bin\\env.exe' 'PATH=/usr/bin:/bin' /usr/bin/bash --noprofile --norc -p build/fetch-windows-sources.sh --verify", verifier)
         self.assertIn("[Environment]::SetEnvironmentVariable('MSYS2_GNUPGHOME', '/etc/pacman.d/gnupg', 'Process')", verifier)
         self.assertIn("if ($LASTEXITCODE -ne 0) { throw 'Windows runtime source authentication failed' }", verifier)
         self.assertIn("} finally {\n            [Environment]::SetEnvironmentVariable('MSYS2_GNUPGHOME', $savedKeyring, 'Process')", verifier)
         before = self.script.index("& $verifyRuntimeSources 'corresponding-source/windows'")
-        after = self.script.index("& $verifyRuntimeSources (Join-Path $onedir '_internal/corresponding-source/windows')")
         self.assertLess(self.script.index("throw 'Windows flash capability requires a clean installer revision'"), before)
         self.assertLess(before, self.script.index('python -I -m venv'))
-        self.assertLess(self.script.index('-m PyInstaller '), after)
-        self.assertLess(after, self.script.index('$stageCode ='))
 
     def test_build_uses_a_fresh_environment_and_freeze_outputs(self):
         self.assertIn("$run = Join-Path 'build/dist/windows' ([guid]::NewGuid().ToString('N'))", self.script)
@@ -590,7 +587,7 @@ class FirmwareDependencyTests(unittest.TestCase):
         self.assertNotIn('[E105]', text)
         self.assertNotIn('Traceback', text)
 
-    def run_spec(self, work, args=(), version='1.2.3', native=True, git_outputs=None,
+    def run_spec(self, work, args=(), version='1.7-custom', native=True, git_outputs=None,
                  host=('Windows', 'AMD64'), missing=(), libfiles=(),
                  licence_text='upstream licence fixture\n', spec_source=None,
                  dll_bytes=b'pinned DLL fixture', dll_missing=False, analysis_binaries=None,
@@ -1004,9 +1001,7 @@ class FirmwareDependencyTests(unittest.TestCase):
                 if host[0] == 'Windows':
                     sidecars = inputs + notices + ['LICENSE', 'NOTICE.md', 'README.md',
                         'build/windows-libusb.json',
-                        'corresponding-source/libusb-1.0_1.0.27.orig.tar.bz2.asc',
-                        'corresponding-source/windows/msys2-runtime-3.6.10-6.src.tar.zst',
-                        'corresponding-source/windows/msys2-runtime-3.6.10-6.src.tar.zst.sig']
+                        'corresponding-source/libusb-1.0_1.0.27.orig.tar.bz2.asc']
                     expected.update({n: os.path.dirname(n) or '.' for n in sidecars})
                 elif host[0] == 'Linux':
                     expected.update({f'vendor/{tag}/lib/{n}': f'vendor/{tag}/lib'
@@ -1035,7 +1030,6 @@ class FirmwareDependencyTests(unittest.TestCase):
             'vendor/windows-x86_64/bind_winusb.exe',
             'src/windows-driver/bind_winusb.c', 'src/windows-driver/bind_winusb.rc',
             'src/windows-driver/bind_winusb.manifest', 'build/build-windows-driver.sh',
-            'corresponding-source/windows/msys2-runtime-3.6.10-6.src.tar.zst.sig',
             'licenses/windows/msys2-runtime-BSD-NOTICES.txt',
             'licenses/FTL-FreeType.txt', 'licenses/BSL-1.0-dlg.txt')]
         cases += [(('Darwin', 'arm64'), 'vendor/macos-arm64/lib/libusb-1.0.0.dylib')]
@@ -1062,8 +1056,8 @@ class FirmwareDependencyTests(unittest.TestCase):
 
     def test_spec_refuses_invalid_enable_requests(self):
         with tempfile.TemporaryDirectory() as work:
-            for commit, version, native in (('', '1.2.3', True), ('short', '1.2.3', True),
-                    ('g' * 40, '1.2.3', True), ('a' * 40, '1.2.0', True), ('a' * 40, '1.2.3', False)):
+            for commit, version, native in (('', '1.7-custom', True), ('short', '1.7-custom', True),
+                    ('g' * 40, '1.7-custom', True), ('a' * 40, '1.2.0', True), ('a' * 40, '1.7-custom', False)):
                 with self.subTest(commit=commit, version=version, native=native), self.assertRaises(SystemExit):
                     self.run_spec(work, ('--enable-windows-flash', '--source-commit', commit), version, native)
 

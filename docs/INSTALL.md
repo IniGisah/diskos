@@ -39,12 +39,12 @@ macOS release app, follow [macOS](#macos). On Windows, follow [Windows](#windows
 
 Install Python 3.8 or newer and the host packages before running setup. `tkinter` is needed for the graphical installer; the command line works without it. The setup script reports anything missing.
 
-| Host | Python and GUI | USB and firmware tools |
-|---|---|---|
-| Debian / Ubuntu | `sudo apt install python3 python3-venv python3-tk` | `sudo apt install libusb-1.0-0 squashfs-tools` |
-| Arch / CachyOS | `sudo pacman -S python tk` | `sudo pacman -S libusb squashfs-tools` |
-| Fedora | `sudo dnf install python3 python3-tkinter` | `sudo dnf install libusb1 squashfs-tools` |
-| macOS source checkout | Python from python.org with Tk >= 8.6, or Homebrew Python with matching python-tk | See the source steps below. |
+| Host | Python and GUI | USB and firmware tools (prebuilt tarball) | Additional packages (source `git clone`) |
+|---|---|---|---|
+| Debian / Ubuntu | `sudo apt install python3 python3-venv python3-tk` | `sudo apt install libusb-1.0-0 squashfs-tools` | `sudo apt install build-essential libusb-1.0-0-dev pkg-config` |
+| Arch / CachyOS | `sudo pacman -S python tk` | `sudo pacman -S libusb squashfs-tools` | `sudo pacman -S base-devel pkgconf` |
+| Fedora | `sudo dnf install python3 python3-tkinter` | `sudo dnf install libusb1 squashfs-tools` | `sudo dnf install gcc libusb1-devel pkgconf-pkg-config` |
+| macOS source checkout | Python from python.org with Tk >= 8.6, or Homebrew Python with matching python-tk | See the source steps below. | Xcode Command Line Tools + Homebrew (`bash vendor/setup-macos.sh`) |
 
 ## macOS
 
@@ -102,14 +102,12 @@ environment and installs four Python dependencies into it; nothing is installed 
 ./install.sh
 ```
 
-The setup check reports missing components. Release bundles include native tools. A source checkout needs native tools built or installed separately.
+The setup check reports any missing components. Release bundles include prebuilt native tools. On a Linux source checkout, `./install.sh` automatically compiles a local `usbboot` binary when `gcc` and `libusb-1.0` development headers are installed.
 
-After setup, run commands through `./diskos-installer`; it selects the local environment for you.
+After setup, verify everything with `./diskos-installer doctor` and run commands through `./diskos-installer`; it selects the local environment for you.
 
 > [!NOTE]
-> A source checkout does not include the large host-native flash tools. Build them once using the
-> scripts in [native tools](../build/NATIVE_TOOLS.md). A prepared release bundle places them under
-> `vendor/<os>-<arch>/`.
+> A source checkout does not include the large host-native flash tools. On Linux, `./install.sh` builds a local `usbboot` automatically if `gcc` and `libusb-1.0` headers are installed (or build portable static tools with [native tools](../build/NATIVE_TOOLS.md)). On macOS, run `bash vendor/setup-macos.sh`. A prepared release bundle already places them under `vendor/<os>-<arch>/`.
 
 ## Graphical installer
 
@@ -383,7 +381,7 @@ when a new playlist is created. Keep a copy of important playlists before downgr
 
 - **Linux x86-64:** supported.
 - **macOS, Apple Silicon:** use the self-contained release app; no separate runtime or tool installation.
-- **Windows 10/11 x64:** use the complete flash-enabled 1.2.3 release ZIP. It includes the runtime and native tools; only Disc driver setup asks for administrator approval. Source runs require a development opt-in to flash; use the release ZIP for normal installation.
+- **Windows 10/11 x64:** use the complete flash-enabled v1.7-custom release ZIP. It includes the runtime and native tools; only Disc driver setup asks for administrator approval. Source runs require a development opt-in to flash; use the release ZIP for normal installation.
 - **macOS, Intel:** build the native tools with `vendor/setup-macos.sh` (Homebrew build dependencies required).
 
 **Image builds work on the default case-insensitive macOS filesystem.** The installer creates

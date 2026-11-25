@@ -153,6 +153,16 @@ def cmd_doctor(args):
         except OSError:
             return False
 
+    ui.info("python dependencies:")
+    for pkg, mod in (("pyusb", "usb.core"), ("pycryptodome", "Crypto.Cipher.AES"),
+                     ("certifi", "certifi"), ("platformdirs", "platformdirs")):
+        try:
+            __import__(mod)
+            ui.ok(f"  {pkg}: OK")
+        except Exception as e:
+            ui.err(f"  {pkg}: MISSING ({e}) - run ./install.sh to install requirements.txt")
+            all_ok = False
+
     ui.info("native tools and device files:")
     for name in ("usbboot", "mksquashfs", "unsquashfs", "my_write6_dram.bin", "disc_spl_lpddr3.bin"):
         p = bundle.native(name, required=False)
@@ -175,8 +185,12 @@ def cmd_doctor(args):
         except Exception as e:
             ui.err(f"  squashfs LZO pack/extract check: FAILED - {e}")
             all_ok = False
-    for name in ("mq_ui", "S97diskos_install", "S99usbserial", "diskos-debug.sh", "dropbearmulti",
-                 "S97diskos_names", "diskos-names", "diskos-udhcpc", "diskos-network-names-v1"):
+    for name in ("mq_ui", "S96diskos_select", "S97diskos_install", "S99usbserial",
+                 "diskos-debug.sh", "dropbearmulti", "diskos-rmguard", "diskos-selected",
+                 "diskos-bootprobe", "diskos-artdec", "diskos-launch", "diskos-flashstate",
+                 "diskos-verify.sh", "S97diskos_names", "diskos-names", "diskos-udhcpc",
+                 "diskos-network-names-v1", "bluealsa", "bluealsa-custom", "diskos-avrcpd",
+                 "diskos-webd", "diskos-web.sh", "diskos-web-assets.tar.gz"):
         p = bundle.data(name, required=False)
         (ui.ok if p else ui.err)(f"  {name}: {p or 'MISSING'}")
         all_ok = all_ok and bool(p)   # payload files are required to build a flashable image

@@ -80,8 +80,9 @@ echo "==> installing dependencies (pyusb, pycryptodome, certifi, platformdirs)"
 "$VENV_PY" -m pip install --upgrade pip >/dev/null 2>&1 || true
 "$VENV_PY" -m pip install -r "$HERE/requirements.txt"
 
-# ---- capability checks (warn, do not fail) -----------------------------------
-echo "==> checking optional system components"
+# ---- capability checks & local usbboot build ---------------------------------
+echo "==> checking system components"
+MISSING_REQ=""
 
 # Tk (GUI only). A venv inherits the base interpreter's tkinter, so this reflects the system Python.
 if "$VENV_PY" -c 'import tkinter' 2>/dev/null; then
@@ -107,7 +108,8 @@ if [ "$BUNDLED_LIBUSB" -eq 1 ]; then
 elif "$VENV_PY" -c 'import ctypes.util,sys; sys.exit(0 if ctypes.util.find_library("usb-1.0") else 1)' 2>/dev/null; then
     echo "  ok: libusb-1.0 present - device detection will work"
 else
-    echo "  note: libusb-1.0 NOT found - the tool cannot detect the device until you install it:"
+    MISSING_REQ="${MISSING_REQ} libusb-1.0"
+    echo "  MISSING: libusb-1.0 NOT found - the tool cannot detect the device until you install it:"
     echo "          Arch/CachyOS:  sudo pacman -S libusb"
     echo "          Debian/Ubuntu: sudo apt install libusb-1.0-0"
     echo "          Fedora:        sudo dnf install libusb1"
@@ -120,7 +122,8 @@ if [ -n "$TAG" ] && [ -x "$HERE/vendor/$TAG/mksquashfs" ] && [ -x "$HERE/vendor/
 elif command -v mksquashfs >/dev/null 2>&1 && command -v unsquashfs >/dev/null 2>&1; then
     echo "  ok: system squashfs-tools present on PATH"
 else
-    echo "  note: squashfs-tools NOT found - needed to unpack and build firmware images:"
+    MISSING_REQ="${MISSING_REQ} squashfs-tools"
+    echo "  MISSING: squashfs-tools NOT found - needed to unpack and build firmware images:"
     echo "          Arch/CachyOS:  sudo pacman -S squashfs-tools"
     echo "          Debian/Ubuntu: sudo apt install squashfs-tools"
     echo "          Fedora:        sudo dnf install squashfs-tools"
@@ -131,16 +134,64 @@ fi
 if [ -n "$TAG" ] && [ -x "$HERE/vendor/$TAG/usbboot" ]; then
     echo "  ok: bundled usbboot present"
 else
-    echo "  note: usbboot not built yet (needed to flash in mask-ROM mode)."
     case "$TAG" in
-        macos-*) echo "        Build it once with: bash vendor/setup-macos.sh" ;;
-        linux-*) echo "        Build it once with: bash build/build-usbboot-static.sh" ;;
-        *) echo "        See build/NATIVE_TOOLS.md for supported host builds." ;;
+        linux-*)
+            USBBOOT_BUILT=0
+            if [ -f "$HERE/src/usbboot/usbboot.c" ] && command -v gcc >/dev/null 2>&1; then
+                mkdir -p "$HERE/vendor/$TAG"
+                if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libusb-1.0 2>/dev/null; then
+                    echo "==> building local usbboot for $TAG (using system libusb-1.0)"
+                    # shellcheck disable=SC2046
+                    if gcc -O2 -std=c99 "$HERE/src/usbboot/usbboot.c" $(pkg-config --cflags --libs libusb-1.0) -o "$HERE/vendor/$TAG/usbboot" 2>"$ERRTMP"; then
+                        chmod 0755 "$HERE/vendor/$TAG/usbboot"
+                        echo "  ok: built local usbboot at vendor/$TAG/usbboot"
+                        USBBOOT_BUILT=1
+                    else
+                        echo "  warn: local usbboot build failed:" >&2
+                        sed 's/^/        /' "$ERRTMP" >&2 2>/dev/null || true
+                    fi
+                elif [ -f /usr/include/libusb-1.0/libusb.h ]; then
+                    echo "==> building local usbboot for $TAG (using /usr/include/libusb-1.0)"
+                    if gcc -O2 -std=c99 -I/usr/include/libusb-1.0 "$HERE/src/usbboot/usbboot.c" -lusb-1.0 -o "$HERE/vendor/$TAG/usbboot" 2>"$ERRTMP"; then
+                        chmod 0755 "$HERE/vendor/$TAG/usbboot"
+                        echo "  ok: built local usbboot at vendor/$TAG/usbboot"
+                        USBBOOT_BUILT=1
+                    else
+                        echo "  warn: local usbboot build failed:" >&2
+                        sed 's/^/        /' "$ERRTMP" >&2 2>/dev/null || true
+                    fi
+                fi
+            fi
+            if [ "$USBBOOT_BUILT" -ne 1 ]; then
+                MISSING_REQ="${MISSING_REQ} usbboot"
+                echo "  MISSING: usbboot is not built yet (needed to flash in mask-ROM mode)."
+                echo "          Install a C compiler + libusb-1.0 dev headers, then re-run ./install.sh:"
+                echo "            Debian/Ubuntu: sudo apt install build-essential libusb-1.0-0-dev pkg-config"
+                echo "            Arch/CachyOS:  sudo pacman -S base-devel libusb pkgconf"
+                echo "            Fedora:        sudo dnf install gcc libusb1-devel pkgconf-pkg-config"
+                echo "          (Or build a portable static binary with: bash build/build-usbboot-static.sh)"
+            fi
+            ;;
+        macos-*)
+            MISSING_REQ="${MISSING_REQ} usbboot"
+            echo "  MISSING: usbboot not built yet (needed to flash in mask-ROM mode)."
+            echo "          Build native tools once with: bash vendor/setup-macos.sh"
+            ;;
+        *)
+            MISSING_REQ="${MISSING_REQ} usbboot"
+            echo "  MISSING: usbboot not built yet (see build/NATIVE_TOOLS.md)."
+            ;;
     esac
 fi
 
 echo
-echo "Setup complete. Run the installer with:"
-echo "    ./diskos-installer doctor      # check host + tools + device"
-echo "    ./diskos-installer gui         # graphical installer (needs tkinter)"
-echo "    ./diskos-installer --help      # all commands"
+if [ -n "$MISSING_REQ" ]; then
+    echo "Action required before flashing - missing:$MISSING_REQ"
+    echo "Install the missing item(s) listed above, then re-run ./install.sh and check with:"
+    echo "    ./diskos-installer doctor"
+else
+    echo "Setup complete. Run the installer with:"
+    echo "    ./diskos-installer doctor      # check host + tools + device"
+    echo "    ./diskos-installer gui         # graphical installer (needs tkinter)"
+    echo "    ./diskos-installer --help      # all commands"
+fi

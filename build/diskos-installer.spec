@@ -31,10 +31,10 @@ options.add_argument("--enable-windows-flash", action="store_true")
 options.add_argument("--source-commit", default="")
 capability = options.parse_args()
 if capability.enable_windows_flash and (
-        not platform_probe.windows_native_runtime() or __version__ != "1.2.3"
+        not platform_probe.windows_native_runtime() or __version__ != "1.7-custom"
         or not re.fullmatch(r"[0-9a-f]{40}", capability.source_commit)):
     raise SystemExit("REFUSING to enable Windows flash: native x64 Windows CPython, "
-                     "version 1.2.3 and a full source commit SHA are required")
+                     "version 1.7-custom and a full source commit SHA are required")
 
 if capability.enable_windows_flash:
     def repository_git(*args):
@@ -163,8 +163,6 @@ if _os == "windows":
         "corresponding-source/libusb-1.0_1.0.27.orig.tar.bz2",
         "corresponding-source/libusb-1.0_1.0.27.orig.tar.bz2.asc",
         "corresponding-source/msys2-squashfs.patch",
-        "corresponding-source/windows/msys2-runtime-3.6.10-6.src.tar.zst",
-        "corresponding-source/windows/msys2-runtime-3.6.10-6.src.tar.zst.sig",
         "LICENSE", "NOTICE.md", "README.md",
     ]
     # Preserve the landed notice texts byte for byte, including upstream Unicode.

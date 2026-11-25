@@ -170,7 +170,6 @@ for name in ('my_write6_dram.bin', 'disc_spl_lpddr3.bin'):
     if ($LASTEXITCODE -ne 0) { throw 'Frozen Windows native verification failed' }
     & $buildPython -I build/verify_git_blobs.py $sourceRoot (Join-Path $onedir '_internal') windows-x86_64 --ref $guardRevision --frozen
     if ($LASTEXITCODE -ne 0) { throw 'Frozen device inputs differ from committed blobs' }
-    & $verifyRuntimeSources (Join-Path $onedir '_internal/corresponding-source/windows')
     $stage = Join-Path $run 'diskos-installer-windows-x86_64'
     $sourceRevision = 'unrecorded-default-off'
     if ($EnableWindowsFlash) { $sourceRevision = $revision }

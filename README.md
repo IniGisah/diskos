@@ -148,50 +148,97 @@ Read the **[Web UI & Remote Control Guide](docs/WEBUI.md)** for architecture det
 
 ## Installation
 
-### Linux
+Choose **Option A (Prebuilt Release)** if you just want to install diskOS, or **Option B (From Source)** if you cloned this repository on Linux or macOS. For full details, CLI flags, and error codes, see the **[Complete Installation Guide](docs/INSTALL.md)**.
 
-1. Install system prerequisites and configure USB permissions:
+### Option A: Prebuilt Release (Recommended)
+
+#### Windows 10 / 11 (x64)
+> [!IMPORTANT]
+> **Windows users**: Download the prebuilt **Windows release ZIP** from the [Releases](https://github.com/IniGisah/diskos/releases) page. Do **not** `git clone` the repository on Windows (source runs are intentionally blocked from flashing with `E101`).
+
+1. Extract the release ZIP (`diskos-installer-windows-x86_64.zip`) to a normal folder under your user account.
+2. Launch **`diskos-installer.exe`**. If Windows SmartScreen appears, click **More info** > **Run anyway**.
+3. Put the Disc in mask-ROM mode (see [Device Flashing Procedure](#device-flashing-procedure)). If prompted by the Ready checklist, click **Set up USB driver...** to install WinUSB for device `a108:eaef`.
+4. Select the firmware version currently on your Disc, click **Get firmware**, and click **Install diskOS...**.
+   *(For PowerShell / CLI usage, run `.\diskos-installer-cli.exe doctor`.)*
+
+#### macOS (Apple Silicon)
+1. Download `diskos-installer-macos-arm64.tar.gz` from the [Releases](https://github.com/IniGisah/diskos/releases) page.
+2. Double-click the archive to extract it, then drag **diskOS Installer.app** to `/Applications` (or another writable folder). No Python, Tk, Homebrew, or libusb installation is needed.
+3. Open **diskOS Installer.app**. Because it is ad-hoc signed, if Gatekeeper blocks it, open **System Settings > Privacy & Security > Open Anyway** and confirm **Open**.
+4. Select your Disc's current firmware version, click **Get firmware**, connect the Disc in mask-ROM mode, and click **Install diskOS...**.
+
+#### Linux (x86-64)
+1. Download and extract `diskos-installer-linux-x86_64.tar.gz` from the [Releases](https://github.com/IniGisah/diskos/releases) page.
+2. Install Python 3 + Tk + libusb:
    ```bash
    # Debian / Ubuntu:
-   sudo apt install python3 python3-tk libusb-1.0-0-dev
+   sudo apt install python3 python3-venv python3-tk libusb-1.0-0
 
    # Arch / CachyOS:
    sudo pacman -S python tk libusb
+
+   # Fedora:
+   sudo dnf install python3 python3-tkinter libusb1
    ```
-2. Configure udev rules for the Ingenic mask-ROM device:
+3. Install the included udev rule once (do **not** run the installer with `sudo`):
    ```bash
-   echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="a108", ATTRS{idProduct}=="eaef", MODE="0666"' | sudo tee /etc/udev/rules.d/99-ingenic.rules
+   sudo cp udev/70-diskos-maskrom.rules /etc/udev/rules.d/
    sudo udevadm control --reload-rules && sudo udevadm trigger
    ```
-3. Run the installer:
+4. Run one-time setup, verify everything is green, and launch the installer:
    ```bash
+   ./install.sh
+   ./diskos-installer doctor
    ./diskos-installer
    ```
 
-### macOS
+---
 
-1. Download `diskos-installer-macos-arm64.dmg` from the latest release.
-2. Open the DMG and drag **diskOS Installer** to `/Applications`.
-3. Open Terminal and run the one-line setup helper to clear macOS Gatekeeper quarantine:
-   ```bash
-   xattr -cr "/Applications/diskOS Installer.app"
-   ```
-4. Launch the application from Finder or Spotlight.
+### Option B: From Source (`git clone` — Linux & macOS)
 
-### Windows
+A source checkout does **not** include the large host-native `usbboot` binary. On Linux, `./install.sh` creates `.venv`, installs Python dependencies, and automatically compiles a local `usbboot` when `gcc` and `libusb-1.0` headers are installed.
 
-1. Extract the release ZIP.
-2. Launch **diskos-installer.exe**. If Windows SmartScreen displays a warning, select **More info** > **Run anyway**.
-3. If prompted by the Ready checklist, select **Set up USB driver...** to configure WinUSB for device `a108:eaef`.
-4. Select the matching firmware version, click **Get firmware**, review the checklist, and start the flash.
-   *(Command-line workflows use `diskos-installer-cli.exe`)*.
+#### Linux (from source)
+```bash
+# 1. Install system packages (pick your distro):
+# Debian / Ubuntu:
+sudo apt install python3 python3-venv python3-tk libusb-1.0-0 libusb-1.0-0-dev pkg-config squashfs-tools build-essential
+
+# Arch / CachyOS:
+sudo pacman -S python tk libusb pkgconf squashfs-tools base-devel
+
+# Fedora:
+sudo dnf install python3 python3-tkinter libusb1 libusb1-devel pkgconf-pkg-config squashfs-tools gcc
+
+# 2. Install udev rule once (so you never run the installer as root):
+sudo cp udev/70-diskos-maskrom.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# 3. Set up .venv, build local usbboot, verify, and launch:
+./install.sh
+./diskos-installer doctor
+./diskos-installer
+```
+
+#### macOS (from source)
+Requires Xcode Command Line Tools, Homebrew, and Python 3.8+ with Tk >= 8.6 (from [python.org](https://www.python.org/downloads/macos/) or Homebrew `python-tk`):
+```bash
+bash vendor/setup-macos.sh
+./install.sh
+./diskos-installer doctor
+./diskos-installer
+```
+
+---
 
 ### Device Flashing Procedure
 
-1. **Power off the Disc** completely.
-2. **Hold Volume Down** and connect the USB-C cable to your computer. The screen remains black; the device is now in Ingenic mask-ROM mode (`a108:eaef`).
-3. In the installer, select **Install diskOS...**, check the confirmation checkbox, and click **Begin flash (~20 min)**.
-4. Keep the computer awake and the USB cable connected until verification finishes, then power-cycle the Disc.
+1. **Check your Disc's current firmware version** first (in stock UI: **Settings > System Settings > About device**; in diskOS: **Settings > Device > Device Info > Firmware**). In the installer, select that **exact** version and click **Get firmware**.
+2. **Power off the Disc** completely.
+3. **Hold Volume Down** and connect the USB-C cable directly to your computer (avoid unpowered hubs). The screen stays black; the device is now in Ingenic mask-ROM mode (`a108:eaef`).
+4. In the installer, verify the Ready checklist, click **Install diskOS...**, tick the confirmation checkbox, and click **Begin flash (~20 min)**.
+5. Keep the computer awake and the USB cable connected until verification finishes, then power-cycle the Disc. diskOS installs automatically on first boot.
 
 > [!TIP]
 > **Dual-Boot Fallback**: To boot the stock FiiO UI instead of diskOS, hold **Volume Up** while powering on the Disc. You can also configure the default startup system under **Settings > Device > Default UI**.
