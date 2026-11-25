@@ -613,7 +613,7 @@ static void chk_tick(lv_timer_t *t){
     char body[260]; int c = sys_ver_cmp(DISKOS_VERSION, g_chk.tag);
     atomic_store(&g_chk.state, 0);
     if(c == -1 && g_chk.bundle && ota_supported(&OTA_DEV) && !ota_allowed()){    /* reported, never downloaded */
-        snprintf(body, sizeof body, tr("diskOS %s is available (you have %s). Updates are turned off in Settings. Turn on Allow diskOS Updates, or install it with the installer from github.com/b0hemia/diskos."), g_chk.tag, DISKOS_VERSION);
+        snprintf(body, sizeof body, tr("diskOS %s is available (you have %s). Updates are turned off in Settings. Turn on Allow diskOS Updates, or install it with the installer from github.com/IniGisah/diskos."), g_chk.tag, DISKOS_VERSION);
         modal_simple(tr("diskOS updates"), body);
         return;
     }
@@ -631,7 +631,7 @@ static void chk_tick(lv_timer_t *t){
         ui_dialog_finalize(&d);
         return;
     }
-    if(c == -1) snprintf(body, sizeof body, "diskOS %s is available (you have %s), but it has no in-app update. Download it from github.com/b0hemia/diskos and install it with the installer.", g_chk.tag, DISKOS_VERSION);
+    if(c == -1) snprintf(body, sizeof body, "diskOS %s is available (you have %s), but it has no in-app update. Download it from github.com/IniGisah/diskos and install it with the installer.", g_chk.tag, DISKOS_VERSION);
     else if(c == 0) snprintf(body, sizeof body, "You have the latest release (%s).", DISKOS_VERSION);
     else if(c == 1) snprintf(body, sizeof body, "You have %s, newer than the latest release (%s).", DISKOS_VERSION, g_chk.tag);
     else snprintf(body, sizeof body, "Latest release: %s. Couldn't compare it with %s.", g_chk.tag, DISKOS_VERSION);

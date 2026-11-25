@@ -14,7 +14,7 @@ typedef struct {
     const char *epochs;       /* /etc/diskos-ota/epochs         (MIN_KEY_EPOCH / MIN_UI_EPOCH, read-only rootfs) */
     const char *verifier;     /* /etc/diskos-ota/diskos-verify.sh (read-only rootfs; same file boot runs) */
     const char *latest_url;   /* releases/latest API */
-    const char *dl_base;      /* https://github.com/b0hemia/diskos/releases/download (then /<tag>/<asset>) */
+    const char *dl_base;      /* https://github.com/IniGisah/diskos/releases/download (then /<tag>/<asset>) */
     const char *data_root;    /* /usr/data (free-space check) */
     const char *operstate;    /* /sys/class/net/wlan0/operstate */
     const char *run_file;     /* /tmp/.diskos_run (S97: SHA256= SIZE= BUILD=trial|good|flashed EPOCH= VERSION=) */

@@ -15,7 +15,7 @@
  * shipped) may point at a test repo with EXTRA_CFLAGS -DDISKOS_OTA_REPO=\"owner/repo\", or at a GitHub-compatible
  * server (e.g. Forgejo) by overriding both SYS_GITHUB_LATEST and SYS_GITHUB_DOWNLOAD. */
 #ifndef DISKOS_OTA_REPO
-#define DISKOS_OTA_REPO      "b0hemia/diskos"
+#define DISKOS_OTA_REPO      "IniGisah/diskos"
 #endif
 #ifndef SYS_GITHUB_LATEST
 #define SYS_GITHUB_LATEST    "https://api.github.com/repos/" DISKOS_OTA_REPO "/releases/latest"

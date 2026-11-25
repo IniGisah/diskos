@@ -250,7 +250,7 @@ Restart to go back to the previous version.
 Couldn't save your choice. Try again.										
 Allow diskOS Updates										
 Not supported on this install										
-diskOS %s is available (you have %s). Updates are turned off in Settings. Turn on Allow diskOS Updates, or install it with the installer from github.com/b0hemia/diskos.										
+diskOS %s is available (you have %s). Updates are turned off in Settings. Turn on Allow diskOS Updates, or install it with the installer from github.com/IniGisah/diskos.										
 diskOS updates										
 Couldn't discard the update										
 Discard										
