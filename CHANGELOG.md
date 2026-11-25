@@ -4,6 +4,21 @@ All notable changes to diskOS are documented here.
 
 Entries follow the Keep a Changelog format, with Added, Changed, and Fixed categories where applicable.
 
+## [1.7.1] - 2026-11-25
+
+Maintenance release fixing Wi-Fi DHCP lease deadlocks and Broadcom power management, A2DP Bluetooth codec negotiation/persistence, and Bluetooth Receiver (Mode 2) handoff and discovery reliability, plus an expanded Wi-Fi UI and on-screen keyboard password visibility toggle.
+
+### Added
+
+- **On-Screen Keyboard Password Visibility Toggle** (`ui/kbinput.c`): Eye toggle button between Cancel and Save in password mode with a 1200ms character preview window.
+- **Wi-Fi UI Expansion & Host Unit Tests** (`ui/wifi.c`, `ui/wifi_logic.h`, `ui/tests/wifi_test.c`): Hidden-network join, disconnect, saved-network connect, change-password flow, scrollable network details screen (`SCR_WIFI_INFO`), rescan spinner feedback, and deterministic host unit tests for DHCP lease transitions and Broadcom PM policy.
+
+### Fixed
+
+- **Wi-Fi DHCP Lease Deadlocks & Broadcom AP6212 Power Management** (`ui/wifi_logic.h`, `ui/wifi.c`, `ui/main.c`): Extracted deterministic DHCP lease state machine to avoid `udhcpc` `SIGUSR2` deadlocks when `wlan0` has no IP, preserve valid boot IPs, enforce a single `udhcpc` instance, and apply Broadcom PM 2 only when screen is dark, idle, and lease-settled.
+- **Bluetooth A2DP Codec Negotiation & Persistence** (`payload/bluealsa`, `ui/bt.c`, `ui/settings.c`, `tests/test_bt_codec.py`): Scoped low-latency SBC-only restriction to receiver mode (`HAS_SOURCE=0`), added aptX-HD/aptX -> AAC -> SBC fallback, switched sink capability probing to synchronous `bt_capture_wait()` with retry and device-limit fallback toast, persisted LDAC quality to `/usr/data/bt_ldac_quality`, and seeded `bt_codec` once from stock `SYSCONFIG` instead of deleting saved `0..4` values on startup.
+- **Bluetooth Receiver (Mode 2) Handoff, Discovery & Source Isolation** (`ui/modelock.c`, `ui/bt.c`, `ui/bt_avrcp.c`, `ui/main.c`, `ui/quicksettings.c`, `ui/ui.c`): Added explicit `bt_rx_enter`/`bt_rx_prepare_exit` and `bt_output_suspend_for_rx`/`bt_output_resume_after_rx` handoff hooks, interlaced inquiry/page scan tuning and ISCAN self-healing for BCM43438, strict A2DP sink PCM filtering, mode-2 guards on AVRCP/BT ops/Quick Settings (allowing BT long-press for paired devices in RX mode), and dialog cleanup on view exit.
+
 ## [1.7-custom] - 2026-11-19
 
 Synchronized with upstream diskOS 1.2.3 (commit `30d36f9`) while preserving 100% of custom fork features: Web UI (`diskos-webd`), full 5-codec Bluetooth suite with paired devices management and live switching, USB DAC Mode 4 host audio, track artwork thumbnails across row-pooled selection lists, 24-hour battery history, single-press hardware sleep/wake, and CJK supplementary glyphs.

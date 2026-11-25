@@ -31,10 +31,10 @@ options.add_argument("--enable-windows-flash", action="store_true")
 options.add_argument("--source-commit", default="")
 capability = options.parse_args()
 if capability.enable_windows_flash and (
-        not platform_probe.windows_native_runtime() or __version__ != "1.7-custom"
+        not platform_probe.windows_native_runtime() or __version__ != "1.7.1"
         or not re.fullmatch(r"[0-9a-f]{40}", capability.source_commit)):
     raise SystemExit("REFUSING to enable Windows flash: native x64 Windows CPython, "
-                     "version 1.7-custom and a full source commit SHA are required")
+                     "version 1.7.1 and a full source commit SHA are required")
 
 if capability.enable_windows_flash:
     def repository_git(*args):

@@ -1,11 +1,11 @@
-# Install diskOS v1.7-custom (upstream 1.2.3)
+# Install diskOS v1.7.1 (upstream 1.2.3)
 
 [Home](../README.md) | [Tour](TOUR.md) | [Privacy](PRIVACY.md)
 
 > [!CAUTION]
 > Flashing replaces the Disc's system software. Stored data is not wiped, and the SD card is not changed. Back up the card and keep a copy of the saved stock image on separate storage. Use a reliable USB cable, keep it connected, and keep the computer awake until flashing finishes. An interrupted flash may require [mask-ROM recovery](#restore-stock-and-recover).
 
-The installer builds an image locally from an official FiiO firmware archive. Select the version already on your Disc, then use **Get firmware** to download and verify its ZIP, or **Browse...** for a matching local copy. It accepts V2.09, V2.28, V2.40, and V2.57. This release installs diskOS **v1.7-custom** (synchronized with upstream v1.2.3), bundling the custom UI (`mq_ui`), Web UI remote daemon (`diskos-webd`), and custom BlueALSA (`bluealsa-custom`). Upstream 1.2.3 brings HarfBuzz Arabic/Hebrew/Indic complex script shaping, rowpool virtualization, 0% low-battery countdown dialog, and static squashfs fallbacks. See [Upgrading to v1.7-custom](#upgrading-to-v17-custom) for the update scope.
+The installer builds an image locally from an official FiiO firmware archive. Select the version already on your Disc, then use **Get firmware** to download and verify its ZIP, or **Browse...** for a matching local copy. It accepts V2.09, V2.28, V2.40, and V2.57. This release installs diskOS **v1.7.1** (synchronized with upstream v1.2.3), bundling the custom UI (`mq_ui`), Web UI remote daemon (`diskos-webd`), and custom BlueALSA (`bluealsa-custom`). Upstream 1.2.3 brings HarfBuzz Arabic/Hebrew/Indic complex script shaping, rowpool virtualization, 0% low-battery countdown dialog, and static squashfs fallbacks. See [Upgrading to v1.7.1](#upgrading-to-v171) for the update scope.
 
 ## Requirements
 
@@ -323,13 +323,13 @@ guessed block or bypass a refusal. If you cannot establish the matching firmware
 keep the logs and get help. The Linux installer also accepts
 `restore-stock --firmware <zip>` with the same matching firmware.
 
-## Upgrading to v1.7-custom
+## Upgrading to v1.7.1
 
-diskOS v1.7-custom incorporates all upstream 1.2.3 enhancements (HarfBuzz complex script shaping, rowpool list virtualization, 0% low-battery countdown dialog, and boot-script log corrections) while preserving all fork features (Web UI remote control, 5-codec Bluetooth stack, USB DAC Mode 4, track artwork thumbnails, single-press hardware sleep/wake, CST816T touch-to-wake, 24h battery usage telemetry).
+diskOS v1.7.1 incorporates all upstream 1.2.3 enhancements (HarfBuzz complex script shaping, rowpool list virtualization, 0% low-battery countdown dialog, and boot-script log corrections) while preserving all fork features (Web UI remote control, 5-codec Bluetooth stack, USB DAC Mode 4, track artwork thumbnails, single-press hardware sleep/wake, CST816T touch-to-wake, 24h battery usage telemetry).
 
 For a full flash, use the installer and matching flash tools with your official firmware archive. Back up the card and keep your saved stock image first. Follow the installation steps above; the installer checks that the kernel and recovery match the selected firmware. Settings and music are kept, downloaded app updates are cleared, and the included UI starts.
 
-The boot-log correction and newer image minimum introduced in upstream 1.2.3 come with a full flash using the 1.2.3/v1.7-custom installer.
+The boot-log correction and newer image minimum introduced in upstream 1.2.3 come with a full flash using the 1.2.3/v1.7.1 installer.
 
 ## Upgrading to 1.2.2
 
@@ -341,7 +341,7 @@ saved stock image first. The installer accepts only unmodified official V2.09, V
 V2.57 firmware. Before writing, it checks that the Disc's kernel and recovery match the selected
 firmware. The saved stock image remains available for restore.
 
-The v1.7-custom release image includes the diskOS release key by default.
+The v1.7.1 release image includes the diskOS release key by default.
 Settings > Device > Update diskOS checks for a newer signed release and updates only the diskOS app,
 not stock firmware or the whole flashed image. After a trial update, choose Keep or Go back;
 a broken update rolls back automatically. Settings > Device > Allow diskOS Updates can stop
@@ -381,7 +381,7 @@ when a new playlist is created. Keep a copy of important playlists before downgr
 
 - **Linux x86-64:** supported.
 - **macOS, Apple Silicon:** use the self-contained release app; no separate runtime or tool installation.
-- **Windows 10/11 x64:** use the complete flash-enabled v1.7-custom release ZIP. It includes the runtime and native tools; only Disc driver setup asks for administrator approval. Source runs require a development opt-in to flash; use the release ZIP for normal installation.
+- **Windows 10/11 x64:** use the complete flash-enabled v1.7.1 release ZIP. It includes the runtime and native tools; only Disc driver setup asks for administrator approval. Source runs require a development opt-in to flash; use the release ZIP for normal installation.
 - **macOS, Intel:** build the native tools with `vendor/setup-macos.sh` (Homebrew build dependencies required).
 
 **Image builds work on the default case-insensitive macOS filesystem.** The installer creates

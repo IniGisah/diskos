@@ -587,7 +587,7 @@ class FirmwareDependencyTests(unittest.TestCase):
         self.assertNotIn('[E105]', text)
         self.assertNotIn('Traceback', text)
 
-    def run_spec(self, work, args=(), version='1.7-custom', native=True, git_outputs=None,
+    def run_spec(self, work, args=(), version='1.7.1', native=True, git_outputs=None,
                  host=('Windows', 'AMD64'), missing=(), libfiles=(),
                  licence_text='upstream licence fixture\n', spec_source=None,
                  dll_bytes=b'pinned DLL fixture', dll_missing=False, analysis_binaries=None,
@@ -1056,8 +1056,8 @@ class FirmwareDependencyTests(unittest.TestCase):
 
     def test_spec_refuses_invalid_enable_requests(self):
         with tempfile.TemporaryDirectory() as work:
-            for commit, version, native in (('', '1.7-custom', True), ('short', '1.7-custom', True),
-                    ('g' * 40, '1.7-custom', True), ('a' * 40, '1.2.0', True), ('a' * 40, '1.7-custom', False)):
+            for commit, version, native in (('', '1.7.1', True), ('short', '1.7.1', True),
+                    ('g' * 40, '1.7.1', True), ('a' * 40, '1.2.0', True), ('a' * 40, '1.7.1', False)):
                 with self.subTest(commit=commit, version=version, native=native), self.assertRaises(SystemExit):
                     self.run_spec(work, ('--enable-windows-flash', '--source-commit', commit), version, native)
 

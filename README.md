@@ -8,7 +8,7 @@
 ### A custom round-screen interface and firmware for the FiiO Snowsky Disc
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-3D424B?style=flat-square)](docs/INSTALL.md#host-support)
-[![Release](https://img.shields.io/badge/release-v1.7--custom-blue?style=flat-square)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v1.7.1-blue?style=flat-square)](CHANGELOG.md)
 [![Upstream](https://img.shields.io/badge/upstream-diskOS%201.2.3-green?style=flat-square)](https://github.com/b0hemia/diskos)
 [![Device](https://img.shields.io/badge/device-FiiO%20Snowsky%20Disc-E06C75?style=flat-square)](docs/HARDWARE.md)
 [![Firmware](https://img.shields.io/badge/stock%20firmware-V2.09%20%7C%20V2.28%20%7C%20V2.40%20%7C%20V2.57-4E9A06?style=flat-square)](docs/INSTALL.md#requirements)
