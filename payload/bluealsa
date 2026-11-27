@@ -18,8 +18,10 @@
 
 set -e
 
-# Target selection: prioritize custom aptX-enabled binary
-if [ -x "/usr/data/bluealsa-custom" ]; then
+# Target selection: prioritize custom aptX-enabled binary (deployed or flashed)
+if [ -x "/usr/data/bin/bluealsa-custom" ]; then
+    TARGET="/usr/data/bin/bluealsa-custom"
+elif [ -x "/usr/data/bluealsa-custom" ]; then
     TARGET="/usr/data/bluealsa-custom"
 elif [ -x "/opt/diskos/bin/bluealsa-custom" ]; then
     TARGET="/opt/diskos/bin/bluealsa-custom"
@@ -29,6 +31,11 @@ else
     echo "bluealsa: no executable found" >&2
     exit 127
 fi
+
+IS_CUSTOM=0
+case "$TARGET" in
+    *bluealsa-custom*) IS_CUSTOM=1 ;;
+esac
 
 # Check if Low Latency mode is enabled
 LL_ENABLED=0
@@ -48,7 +55,7 @@ if [ -f /usr/data/bt_rx_codec ]; then
     RX_CODEC="$(cat /usr/data/bt_rx_codec 2>/dev/null | tr -d '\r\n ')"
 fi
 
-# Ensure both a2dp-source and a2dp-sink are registered
+# Detect requested profiles before rewriting positional arguments
 HAS_SOURCE=0
 HAS_SINK=0
 for arg in "$@"; do
@@ -58,96 +65,80 @@ for arg in "$@"; do
     esac
 done
 
-PROFILES=""
-if [ "$HAS_SOURCE" -eq 0 ]; then
-    PROFILES="$PROFILES --profile=a2dp-source"
-fi
-if [ "$HAS_SINK" -eq 0 ]; then
-    PROFILES="$PROFILES --profile=a2dp-sink"
-fi
-
-# Filter existing codec arguments to prevent duplicates or conflicts
-CLEAN_ARGS=""
+# Filter existing codec arguments via positional parameters (no unquoted word-splitting)
+orig_count=$#
 SKIP_NEXT=0
-for arg do
+while [ "$orig_count" -gt 0 ]; do
+    arg=$1
+    shift
+    orig_count=$((orig_count - 1))
     if [ "$SKIP_NEXT" -eq 1 ]; then
         SKIP_NEXT=0
         continue
     fi
     case "$arg" in
         --codec=*)
-            # Strip codec args, we will inject the proper configuration below
             ;;
         -c|--codec)
             SKIP_NEXT=1
             ;;
         *)
-            CLEAN_ARGS="$CLEAN_ARGS $arg"
+            set -- "$@" "$arg"
             ;;
     esac
 done
+
+if [ "$HAS_SOURCE" -eq 0 ] && [ "$HAS_SINK" -eq 0 ]; then
+    set -- "$@" "--profile=a2dp-source"
+fi
+if [ "$HAS_SINK" -eq 0 ]; then
+    set -- "$@" "--profile=a2dp-sink"
+fi
 
 if [ "$LL_ENABLED" -eq 1 ] && [ "$HAS_SOURCE" -eq 0 ]; then
     # LOW LATENCY MODE (BT Receiving only):
     # Disable high-latency / buffered codecs (AAC, aptX, aptX-HD, LDAC) so Android/iOS/PC
     # negotiates SBC only, keeping audio latency low (~80-120ms).
-    # Never restrict codecs when a2dp-source is requested for headphones/TWS.
-    exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD --codec=-ldac
+    exec "$TARGET" "$@" --codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD --codec=-ldac
 elif [ "$HAS_SOURCE" -eq 0 ] && [ -n "$RX_CODEC" ] && [ "$RX_CODEC" != "AUTO" ] && [ "$RX_CODEC" != "Auto" ]; then
-    # PREFERRED RECEIVER CODEC MODE:
-    # Only applies when invoked strictly as a receiver sink without a source profile.
-    # When transmitting to headphones (HAS_SOURCE=1), all codecs must remain enabled so
-    # Bluetooth headphones and TWS earbuds can freely negotiate AAC, aptX, or LDAC.
+    # PREFERRED RECEIVER CODEC MODE (sink-only invocation):
     case "$RX_CODEC" in
         SBC|sbc)
-            exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD --codec=-ldac
+            exec "$TARGET" "$@" --codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD --codec=-ldac
             ;;
         AAC|aac)
-            exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=aac --codec=sbc --codec=-aptX --codec=-aptX-HD --codec=-ldac
+            exec "$TARGET" "$@" --codec=aac --codec=sbc --codec=-aptX --codec=-aptX-HD --codec=-ldac
             ;;
         LDAC|ldac)
-            exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=ldac --codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD
+            exec "$TARGET" "$@" --codec=ldac --codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD
             ;;
         aptX|aptx)
-            case "$TARGET" in
-                *bluealsa-custom*)
-                    exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=aptX --codec=sbc --codec=-aac --codec=-aptX-HD --codec=-ldac
-                    ;;
-                *)
-                    exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=aac --codec=ldac
-                    ;;
-            esac
+            if [ "$IS_CUSTOM" -eq 1 ]; then
+                exec "$TARGET" "$@" --codec=aptX --codec=sbc --codec=-aac --codec=-aptX-HD --codec=-ldac
+            else
+                exec "$TARGET" "$@" --codec=sbc --codec=aac --codec=ldac
+            fi
             ;;
         aptX-HD|aptx-hd|aptXHD)
-            case "$TARGET" in
-                *bluealsa-custom*)
-                    exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=aptX-HD --codec=sbc --codec=-aac --codec=-aptX --codec=-ldac
-                    ;;
-                *)
-                    exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=aac --codec=ldac
-                    ;;
-            esac
+            if [ "$IS_CUSTOM" -eq 1 ]; then
+                exec "$TARGET" "$@" --codec=aptX-HD --codec=sbc --codec=-aac --codec=-aptX --codec=-ldac
+            else
+                exec "$TARGET" "$@" --codec=sbc --codec=aac --codec=ldac
+            fi
             ;;
         *)
-            case "$TARGET" in
-                *bluealsa-custom*)
-                    exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=aac --codec=aptX --codec=aptX-HD --codec=ldac
-                    ;;
-                *)
-                    exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=aac --codec=ldac
-                    ;;
-            esac
+            if [ "$IS_CUSTOM" -eq 1 ]; then
+                exec "$TARGET" "$@" --codec=sbc --codec=aac --codec=aptX --codec=aptX-HD --codec=ldac
+            else
+                exec "$TARGET" "$@" --codec=sbc --codec=aac --codec=ldac
+            fi
             ;;
     esac
 else
-    # STANDARD MODE:
-    # Enable all codecs: SBC, AAC, aptX, aptX-HD, LDAC
-    case "$TARGET" in
-        *bluealsa-custom*)
-            exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=aac --codec=aptX --codec=aptX-HD --codec=ldac
-            ;;
-        *)
-            exec "$TARGET" $CLEAN_ARGS $PROFILES --codec=sbc --codec=aac --codec=ldac
-            ;;
-    esac
+    # STANDARD MODE: enable all supported codecs
+    if [ "$IS_CUSTOM" -eq 1 ]; then
+        exec "$TARGET" "$@" --codec=sbc --codec=aac --codec=aptX --codec=aptX-HD --codec=ldac
+    else
+        exec "$TARGET" "$@" --codec=sbc --codec=aac --codec=ldac
+    fi
 fi

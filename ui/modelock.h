@@ -12,6 +12,7 @@
 
 /* Bluetooth AVRCP state cache (thread-safe) */
 typedef struct {
+    int ready;
     int connected;
     int is_playing;
     char dev_name[64];
@@ -67,5 +68,6 @@ void bt_rx_force_pairing(void);
 int  bt_rx_is_pairing(void);
 void bt_show_paired_devices_dialog(void);
 void bt_show_codec_dialog(void);
+void bt_rx_ui_cleanup(void);
 
 

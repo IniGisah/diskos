@@ -22,7 +22,8 @@ class TestBlueAlsaWrapper(unittest.TestCase):
         self.opt_bin = self.root / "opt" / "diskos" / "bin"
         self.opt_bin.mkdir(parents=True)
         self.usr_data = self.root / "usr" / "data"
-        self.usr_data.mkdir(parents=True)
+        self.usr_data_bin = self.usr_data / "bin"
+        self.usr_data_bin.mkdir(parents=True)
 
         # Mock stock /usr/bin/bluealsa
         self.stock_bluealsa = self.usr_bin / "bluealsa"
@@ -40,11 +41,14 @@ class TestBlueAlsaWrapper(unittest.TestCase):
     def tearDown(self):
         self.tmpdir.cleanup()
 
-    def run_wrapper(self, args, ll_enabled=False, custom_exists=False, rx_codec=None):
+    def run_wrapper(self, args, ll_enabled=False, custom_exists=False, rx_codec=None,
+                    custom_loc="opt"):
         env = os.environ.copy()
-        # Custom mock roots
+        # Custom mock roots (replace specific paths before broader prefixes)
         wrapper_script = (
             self.wrapper_copy.read_text()
+            .replace("/usr/data/bin/bluealsa-custom", str(self.usr_data_bin / "bluealsa-custom"))
+            .replace("/usr/data/bluealsa-custom", str(self.usr_data / "bluealsa-custom"))
             .replace("/opt/diskos/bin/bluealsa-custom", str(self.opt_bin / "bluealsa-custom"))
             .replace("/usr/bin/bluealsa", str(self.stock_bluealsa))
             .replace("/usr/data/bt_rx_ll", str(self.usr_data / "bt_rx_ll"))
@@ -67,9 +71,16 @@ class TestBlueAlsaWrapper(unittest.TestCase):
 
         custom_log = self.root / "custom_invoked.log"
         if custom_exists:
-            custom_bin = self.opt_bin / "bluealsa-custom"
+            if custom_loc == "data_bin":
+                custom_bin = self.usr_data_bin / "bluealsa-custom"
+            elif custom_loc == "data":
+                custom_bin = self.usr_data / "bluealsa-custom"
+            else:
+                custom_bin = self.opt_bin / "bluealsa-custom"
             custom_bin.write_text(
-                f"#!/bin/sh\necho \"CUSTOM: $@\" > {custom_log}\n"
+                f"#!/bin/sh\nprintf 'COUNT=%d' \"$#\" > {custom_log}\n"
+                f"for a in \"$@\"; do printf '|%s' \"$a\" >> {custom_log}; done\n"
+                f"printf '\\nCUSTOM: %s\\n' \"$*\" >> {custom_log}\n"
             )
             custom_bin.chmod(0o755)
 
@@ -77,6 +88,21 @@ class TestBlueAlsaWrapper(unittest.TestCase):
         stock_out = self.stock_log.read_text().strip() if self.stock_log.exists() else None
         custom_out = custom_log.read_text().strip() if custom_log.exists() else None
         return res, stock_out, custom_out
+
+    def test_wrapper_finds_usr_data_bin_custom(self):
+        args = ["-S", "--device=hci0", "--profile=a2dp-source"]
+        res, stock_out, custom_out = self.run_wrapper(args, custom_exists=True, custom_loc="data_bin")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIsNone(stock_out)
+        self.assertIsNotNone(custom_out)
+        self.assertIn("--profile=a2dp-source", custom_out)
+
+    def test_wrapper_preserves_quoted_args_and_globs(self):
+        args = ["-S", "--note=hello world", "--glob=*", "--profile=a2dp-source"]
+        res, _, custom_out = self.run_wrapper(args, custom_exists=True, custom_loc="data_bin")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIsNotNone(custom_out)
+        self.assertIn("COUNT=10|-S|--note=hello world|--glob=*|--profile=a2dp-source|--profile=a2dp-sink|", custom_out)
 
     def test_wrapper_is_executable(self):
         self.assertTrue(WRAPPER.is_file(), "payload/bluealsa missing")
@@ -754,23 +780,44 @@ int main(void){
         self.assertIn("ui_get_source_mode() == 2", qs_txt)
         self.assertIn("ui_get_source_mode() == 2", avrcp_txt)
 
-    def test_codec_persistence_and_sync_probe(self):
+    def test_codec_persistence_and_nonblocking_architecture(self):
         repo_ui = Path(__file__).resolve().parents[1] / "ui"
         settings_txt = (repo_ui / "settings.c").read_text()
         bt_txt = (repo_ui / "bt.c").read_text()
+        main_txt = (repo_ui / "main.c").read_text()
+        modelock_txt = (repo_ui / "modelock.c").read_text()
+        avrcp_txt = (repo_ui / "bt_avrcp.c").read_text()
 
         # Must not delete bt_codec 0..4 on startup
         self.assertNotIn("legacy_bt_codec_key", settings_txt)
         self.assertNotIn("settings_bt_codec_migrate", settings_txt)
         self.assertIn("settings_bt_codec_seed", settings_txt)
 
-        # ui_bt_codec_frame and ui_bt_codec_set must synchronously probe capabilities
+        # bt_prepare promoted out of DISKOS_TEST_BT_PREPARE in production code
+        self.assertNotIn("DISKOS_TEST_BT_PREPARE", bt_txt)
+        self.assertNotIn("DISKOS_TEST_BT_PREPARE", main_txt)
+
+        # No synchronous UI-thread waits, sync_system, or legacy 06b3000C discrepancy
         frame_fn = bt_txt.split("int ui_bt_codec_frame(", 1)[1].split("int ui_bt_codec_set(", 1)[0]
         set_fn = bt_txt.split("int ui_bt_codec_set(", 1)[1].split("static atomic_int s_bt_rx_ll", 1)[0]
-        self.assertIn("bt_capture_wait(", frame_fn)
+        self.assertNotIn("bt_capture_wait(", frame_fn)
         self.assertNotIn("run_cap_bounded(", frame_fn)
-        self.assertIn("bt_capture_wait(", set_fn)
+        self.assertNotIn("bt_capture_wait(", set_fn)
         self.assertNotIn("run_cap_bounded(", set_fn)
+        self.assertNotIn("sync_system(", bt_txt)
+        self.assertNotIn("06b3000C", bt_txt)
+
+        # modelock RX mode: no direct system(), no cross-thread lv_tick_get(),
+        # no PROC_SLOTS usage, fixed /usr/data/bt_rx_codec fallback, no duplicate g_cont_bt
+        self.assertNotRegex(modelock_txt, r"(?<![A-Za-z0-9_])system\s*\(")
+        self.assertNotIn("lv_tick_get(", modelock_txt)
+        self.assertNotIn("ui_run_cap_bounded", modelock_txt)
+        self.assertNotIn("/usr/data/bt_codec", modelock_txt)
+        self.assertIn("/usr/data/bt_rx_codec", modelock_txt)
+        self.assertNotIn("g_cont_bt", modelock_txt)
+
+        # AVRCP UI client: no direct system() calls
+        self.assertNotRegex(avrcp_txt, r"(?<![A-Za-z0-9_])system\s*\(")
 
 
 if __name__ == "__main__":

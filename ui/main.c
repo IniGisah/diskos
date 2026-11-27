@@ -980,8 +980,7 @@ static void route_resume_tick(void){
         ipc_send_probe("02020008"); g_route_resume.probe_at = now + 250;
     }
 }
-#ifdef DISKOS_TEST_BT_PREPARE
-/* Experimental Bluetooth preparation: worker observations never issue commands.
+/* Production Bluetooth route & codec preparation: worker observations never issue commands.
  * Strict token cancellation intentionally includes uncorrelated stock stops. */
 static bp_prepare g_bt_prepare;
 static char g_bt_prepare_from[20];
@@ -991,7 +990,7 @@ static bp_input bt_prepare_input(void){
     i.qualified = ipc_prepare_snapshot(&i.report, &i.report_serial, &i.playing_frames);
     ipc_get_state(&i.current); i.transport = ipc_transport_seq();
     ipc_screen_snapshot(&on, &screen, &i.poweroff, &generation);
-    const char *expected = g_bt_prepare.route_step >= 5 ? g_bt_prepare.mac : g_bt_prepare_from;
+    const char *expected = (g_bt_prepare.reconfig_only || g_bt_prepare.route_step >= 5) ? g_bt_prepare.mac : g_bt_prepare_from;
     i.permitted = ui_get_source_mode() == 0 && modes_output_route() == OUT_INTERNAL &&
         !modes_output_busy() && !cfg_get_int("spdif", 0) && ui_local_playback_allowed() &&
         !ui_cast_session_active() && !bt_prepare_sleep_due() &&
@@ -1009,29 +1008,76 @@ static int bt_prepare_read_probe(void *ctx, uint64_t id, bc_snapshot *s, int *kn
     bp_prepare *p = ctx; return bt_prepare_probe_read(id, p->generation, s, known, avail);
 }
 static void bt_prepare_cancel_probe(void *ctx, uint64_t id){ (void)ctx; bt_prepare_probe_cancel(id); }
+static int bt_prepare_start_codec(void *ctx, const char *pcm, const char *cname, uint64_t *id){
+    bp_prepare *p = ctx; return bt_prepare_codec_apply_start(pcm, cname, p->generation, id);
+}
+static int bt_prepare_read_codec(void *ctx, uint64_t id){
+    bp_prepare *p = ctx; return bt_prepare_codec_apply_read(id, p->generation);
+}
+static void bt_prepare_cancel_codec(void *ctx, uint64_t id){ (void)ctx; bt_prepare_codec_apply_cancel(id); }
 static void bt_prepare_routed(void *ctx, const char *mac){
     (void)ctx; snprintf(g_route_mac, sizeof g_route_mac, "%s", mac); modes_output_reset();
 }
-static const bp_sink g_bt_prepare_sink = {&g_bt_prepare, bt_prepare_send, bt_prepare_start_probe,
-    bt_prepare_read_probe, bt_prepare_cancel_probe, bt_prepare_routed};
+static void bt_prepare_toast_fallback(void *ctx, int choice, int selected){
+    (void)ctx; (void)choice;
+    if(selected >= 0 && selected < BT_CODEC_N){
+        char msg[64];
+        snprintf(msg, sizeof msg, "Using %s (device limit)", BT_CODEC_LABEL[selected]);
+        ui_toast(msg);
+    }
+}
+static const bp_sink g_bt_prepare_sink = {
+    &g_bt_prepare, bt_prepare_send,
+    bt_prepare_start_probe, bt_prepare_read_probe, bt_prepare_cancel_probe,
+    bt_prepare_start_codec, bt_prepare_read_codec, bt_prepare_cancel_codec,
+    bt_prepare_routed, bt_prepare_toast_fallback
+};
 void ui_bt_route_prepare_cancel(void){
     if(bp_active(&g_bt_prepare)) fprintf(stderr, "bt prepare %llu cancelled externally phase=%d\n",
         (unsigned long long)g_bt_prepare.attempt, g_bt_prepare.phase);
     bp_cancel(&g_bt_prepare, &g_bt_prepare_sink);
 }
+int ui_bt_route_prepare_busy(void){
+    return bp_active(&g_bt_prepare);
+}
 static void bt_prepare_tick(void){
     if(!bp_active(&g_bt_prepare)) return;
     bp_input i = bt_prepare_input();
     int before = g_bt_prepare.phase;
+    unsigned before_codec = g_bt_prepare.observed_codec;
     bp_tick(&g_bt_prepare, lv_tick_get(), &i, &g_bt_prepare_sink);
+    if(g_bt_prepare.observed_codec > 0 && g_bt_prepare.observed_codec != before_codec &&
+       !strcmp(g_route_mac, g_bt_prepare.mac)){
+        ui_bt_live_codec_observe(g_bt_prepare.mac, (int)g_bt_prepare.observed_codec, 0);
+    }
     if(before != g_bt_prepare.phase) fprintf(stderr,
         "bt prepare %llu phase=%d->%d gen=%u tx=%u token=%llu pos_seq=%u state=%d report=%u playing=%u\n",
         (unsigned long long)g_bt_prepare.attempt, before, g_bt_prepare.phase, i.current.player_generation,
         i.transport, (unsigned long long)i.current.playback_token, i.current.pos_seq,
         i.report.state, i.report_serial, i.playing_frames);
     if(g_bt_prepare.phase == BP_DONE){
+        route_loss_invalidate_seek();
         route_loss_reset(); route_state_save(g_bt_prepare.mac); g_startup_route_checked = 1;
-    } else if(g_bt_prepare.phase == BP_FAILED) ui_toast("Bluetooth setup failed");
+        ui_bt_live_codec_observe(g_bt_prepare.mac, (int)g_bt_prepare.observed_codec, 0);
+        bt_note_routed(g_bt_prepare.mac);
+    } else if(g_bt_prepare.phase == BP_FAILED){
+        fprintf(stderr, "bt prepare %llu failed from=%d was=%d queried=%d sel=%d obs=%u qual=%d perm=%d cur(st=%d tr=%d conf=%d prov=%d gen=%u) rep(st=%d tr=%d conf=%d prov=%d gen=%u ser=%u)\n",
+                (unsigned long long)g_bt_prepare.attempt, before, g_bt_prepare.was_playing,
+                g_bt_prepare.queried, g_bt_prepare.selected, g_bt_prepare.observed_codec,
+                i.qualified, i.permitted, i.current.state, i.current.have_track,
+                i.current.player_confirmed, i.current.provisional, i.current.player_generation,
+                i.report.state, i.report.have_track, i.report.player_confirmed,
+                i.report.provisional, i.report.player_generation, i.report_serial);
+        if(g_bt_prepare.observed_codec > 0 && !strcmp(g_route_mac, g_bt_prepare.mac))
+            ui_bt_live_codec_observe(g_bt_prepare.mac, (int)g_bt_prepare.observed_codec, 0);
+        if(!bt_note_route_failed(g_bt_prepare.mac)) ui_toast("Bluetooth setup failed");
+    }
+}
+static int bt_prepare_want_codec(void){
+    int want = cfg_get_int("bt_codec", -1);
+    if(want < 0) want = mdb_sysconfig_bt_codec();
+    if(want < 0 || want >= BT_CODEC_N) want = 0;
+    return want;
 }
 static int bt_prepare_route(const char *mac, int automatic){
     if(bp_active(&g_bt_prepare)){
@@ -1042,17 +1088,43 @@ static int bt_prepare_route(const char *mac, int automatic){
     ui_bt_route_prepare_cancel();
     snprintf(g_bt_prepare_from, sizeof g_bt_prepare_from, "%s", g_route_mac);
     bp_input i = bt_prepare_input();
-    return bp_begin(&g_bt_prepare, lv_tick_get(), mac, cfg_get_int("bt_codec", 0), g_playing, &i);
+    int want = bt_prepare_want_codec();
+    int rc = bp_begin(&g_bt_prepare, lv_tick_get(), mac, want, g_playing, &i);
+    if(rc != 0){
+        fprintf(stderr, "bt_prepare_route(%s, auto=%d) rc=%d perm=%d qual=%d phase=%d codec=%d cur=(tr=%d conf=%d prov=%d gen=%u st=%d) rep=(tr=%d conf=%d prov=%d gen=%u st=%d)\n",
+                mac, automatic, rc, i.permitted, i.qualified, g_bt_prepare.phase, want,
+                i.current.have_track, i.current.player_confirmed, i.current.provisional, i.current.player_generation, i.current.state,
+                i.report.have_track, i.report.player_confirmed, i.report.provisional, i.report.player_generation, i.report.state);
+    }
+    return rc;
 }
-/* End experimental Bluetooth preparation. */
-#endif
+int ui_bt_reconfigure_codec(int choice){
+    if(ui_get_source_mode() != 0 || !g_route_mac[0]) return -1;
+    ui_bt_route_prepare_cancel();
+    snprintf(g_bt_prepare_from, sizeof g_bt_prepare_from, "%s", g_route_mac);
+    bp_input i = bt_prepare_input();
+    return bp_begin_ex(&g_bt_prepare, lv_tick_get(), g_route_mac, choice, g_playing, 1, &i);
+}
+/* End Bluetooth preparation. */
+static int startup_player_old(void);
 static int route_bt(const char *mac, int automatic){
     if(ui_cast_session_active()) return -1;             /* 16b: PREPARING..STOPPING: no route change, no codec upgrade; Bluetooth and its saved preference stay as they are, the auto-route poll retries after Cast ends */
     int loss_accepted = ui_route_bt_loss_accepted();
     if(!automatic) route_loss_invalidate_seek();
     unsigned gen = ipc_generation();
+    int conf = ipc_confirmed_snapshot(&gen);
+    int ready_idle = !conf && ipc_player_ready() && startup_player_old();
     if(automatic && (ui_get_source_mode() != 0 || modes_output_route() != OUT_INTERNAL ||
-                     !ipc_confirmed_snapshot(&gen) || ui_player_settling())) return -1;
+                     (!conf && !ready_idle) || ui_player_settling())){
+        static uint32_t rlog;
+        if(!rlog || lv_tick_elaps(rlog) >= 5000){
+            rlog = lv_tick_get();
+            fprintf(stderr, "route_bt(%s, auto): skip sm=%d out=%d conf=%d settle=%d\n",
+                    mac ? mac : "", ui_get_source_mode(), modes_output_route(),
+                    conf, ui_player_settling());
+        }
+        return -1;
+    }
     if(modes_output_busy()) return -1;                  /* an output switch is in flight or recovering: the auto-route poll retries */
     if(!ui_local_playback_allowed()) return -1;
     if(!mac) return -1;
@@ -1062,48 +1134,62 @@ static int route_bt(const char *mac, int automatic){
         if((i+1)%3 == 0){ if(norm[i] != ':') return -1; }
         else if(!((norm[i]>='0'&&norm[i]<='9') || (norm[i]>='A'&&norm[i]<='F'))) return -1;
     }
-#ifdef DISKOS_TEST_BT_PREPARE
-    if(!loss_accepted && fw_os_ver() == 257 && cfg_get_int("bt_codec", 0) > 0 && cfg_get_int("bt_codec", 0) < BT_CODEC_N)
-        return bt_prepare_route(norm, automatic);
-#endif
+    int want_codec = cfg_get_int("bt_codec", -1);
+    if(want_codec < 0) want_codec = mdb_sysconfig_bt_codec();
+    if(!loss_accepted && want_codec > 0 && want_codec < BT_CODEC_N){
+        if(conf && bt_prepare_route(norm, automatic) == 0) return 0;
+        if(automatic && conf) return -1; /* retry on next autoroute poll once snapshot settles */
+    }
     if(!loss_accepted && !strcmp(norm, g_route_mac)) return 0;   /* already routed to this device */
     track_state_t st; ipc_get_state(&st);
     if(automatic && g_playing && (!st.player_confirmed || st.provisional || st.player_generation != gen)) return -1;
-    int was_playing = !loss_accepted && g_playing;   /* real play state; raw st.state is unreliable (reports 0 while playing) so
+    int was_playing = (!automatic || conf) && !loss_accepted && g_playing;   /* real play state; raw st.state is unreliable (reports 0 while playing) so
                                     * the old `st.state==1` was false during playback -> pause was SKIPPED */
-    if(was_playing && route_send("0201000C0000", automatic, gen) != 0) return -1;   /* pause; abort route if it can't be sent (don't switch output unpaused) */
-    if(route_send("0666000C0006", automatic, gen) != 0) return -1;     /* stock pre-stop: normalize local output state */
-    if(route_send("0642000C0000", automatic, gen) != 0 && (automatic || loss_accepted)) return -1;                       /* reset network/output mode */
-    if(route_send("0657000C0008", automatic, gen) != 0 && (automatic || loss_accepted)) return -1;                       /* work-mode 8 (required orchestration, not our work_mode) */
-    if(route_send("06c1000C0000", automatic, gen) != 0 && (automatic || loss_accepted)) return -1;                       /* initialize the player's BT subsystem */
+    int send_auto = !automatic ? 0 : conf;
+    if(automatic && !send_auto) ipc_set_quiet(1);
+    int rrc = 0;
+    if(was_playing && route_send("0201000C0000", send_auto, gen) != 0) rrc = -1;   /* pause; abort route if it can't be sent (don't switch output unpaused) */
+    if(!rrc && route_send("0666000C0006", send_auto, gen) != 0) rrc = -1;     /* stock pre-stop: normalize local output state */
+    if(!rrc && route_send("0642000C0000", send_auto, gen) != 0 && (automatic || loss_accepted)) rrc = -1;                       /* reset network/output mode */
+    if(!rrc && route_send("0657000C0008", send_auto, gen) != 0 && (automatic || loss_accepted)) rrc = -1;                       /* work-mode 8 (required orchestration, not our work_mode) */
+    if(!rrc && route_send("06c1000C0000", send_auto, gen) != 0 && (automatic || loss_accepted)) rrc = -1;                       /* initialize the player's BT subsystem */
     /* A partial replacement may overwrite the accepted local output. Retain
      * its tail, but normalize local again before finishing it on failure. */
-    if(loss_accepted) g_route_loss.local_dirty = 1;
-    if(route_send("0666000C0002", automatic, gen) != 0) return -1;     /* out_dev = BT source */
-    modes_output_reset();                               /* no longer on SPDIF / USB audio */
-    if(atomic_load(&g_source_mode) == 4) g_source_mode = 0;
-    if(route_send("0657000C0008", automatic, gen) != 0 && (automatic || loss_accepted)) return -1;
+    if(!rrc && loss_accepted) g_route_loss.local_dirty = 1;
+    if(!rrc && route_send("0666000C0002", send_auto, gen) != 0) rrc = -1;     /* out_dev = BT source */
+    if(!rrc){
+        modes_output_reset();                               /* no longer on SPDIF / USB audio */
+        if(atomic_load(&g_source_mode) == 4) g_source_mode = 0;
+    }
+    if(!rrc && route_send("0657000C0008", send_auto, gen) != 0 && (automatic || loss_accepted)) rrc = -1;
     /* Inform mq_player of the auto-negotiated codec (06b3) across all firmware versions.
      * When user prefers LDAC but device only supports AAC/SBC, bt_codec_pick falls back cleanly
      * and sets mq_player's sample rate array to 44.1 kHz instead of leaving it in 96 kHz LDAC mode. */
     char f[48];
-    if(ui_bt_codec_frame(norm, f, sizeof f) != 0) return -1;
-    if(route_send(f, automatic, gen) != 0) return -1;
-    if(st.volume_seq){ char v[16]; snprintf(v, sizeof v, "0715000C%04X", st.volume); if(route_send(v, automatic, gen) != 0 && (automatic || loss_accepted)) return -1; }
+    if(!rrc && ui_bt_codec_frame(norm, f, sizeof f) != 0) rrc = -1;
+    if(!rrc && route_send(f, send_auto, gen) != 0) rrc = -1;
+    if(!rrc && st.volume_seq){ char v[16]; snprintf(v, sizeof v, "0715000C%04X", st.volume); if(route_send(v, send_auto, gen) != 0 && (automatic || loss_accepted)) rrc = -1; }
     /* Safe minimal resume; deterministic load/play remains a future improvement. */
-    if(st.have_track && st.position_ms > 0 && (!automatic || (st.player_confirmed && !st.provisional && st.player_generation == gen))) if(route_seek(st.position_ms, automatic, gen) != 0 && (automatic || loss_accepted)) return -1;  /* resume position, not restart */
-    if(was_playing && route_send("0201000C0000", automatic, gen) != 0 && (automatic || loss_accepted)) return -1;       /* play */
+    if(!rrc && st.have_track && st.position_ms > 0 && (!automatic || (conf && st.player_confirmed && !st.provisional && st.player_generation == gen))) if(route_seek(st.position_ms, send_auto, gen) != 0 && (automatic || loss_accepted)) rrc = -1;  /* resume position, not restart */
+    if(!rrc && was_playing && route_send("0201000C0000", send_auto, gen) != 0 && (automatic || loss_accepted)) rrc = -1;       /* play */
+    if(automatic && !send_auto) ipc_set_quiet(0);
+    if(rrc != 0) return -1;
     snprintf(g_route_mac, sizeof g_route_mac, "%s", norm);
+    route_loss_invalidate_seek();
     route_loss_reset();
     route_state_save(norm);
     g_startup_route_checked = 1;                       /* an intentional BT route supersedes startup recovery */
+    ui_bt_live_codec_observe(norm, BC_CODEC_SBC, 0);
+    if(want_codec > 0 && want_codec < BT_CODEC_N){
+        ui_bt_codec_sync_after_route(norm, want_codec);
+    }
     fprintf(stderr,"route BT %s (playing=%d pos=%ldms)\n", norm, was_playing, st.position_ms); fflush(stderr);
     return 0;
 }
 int ui_route_bt(const char *mac){ return route_bt(mac, 0); }
 int ui_route_bt_automatic(const char *mac){ return route_bt(mac, 1); }
-static int route_analog(int force){
-    if(force < 2) route_loss_invalidate_seek();
+static int route_analog_impl(int force, int resume_playing){
+    if(force < 2 && resume_playing) route_loss_invalidate_seek();
     if(force == 3 && !ui_route_bt_loss_accepted()) route_loss_reset();
     if(modes_output_busy()) return -1;
     int automatic = force;
@@ -1122,7 +1208,11 @@ static int route_analog(int force){
      * across partial sends: teardown may remove the next report's track. */
     if(lost){
         if(!g_route_loss.pending || g_route_loss.gen != gen || strcmp(g_route_loss.mac, g_route_mac)){
-            if(!st.player_confirmed || st.provisional || st.player_generation != gen) return -1;
+            if(!st.player_confirmed || st.provisional || st.player_generation != gen){
+                fprintf(stderr, "route_analog(lost): skip conf=%d prov=%d sgen=%u gen=%u\n",
+                        st.player_confirmed, st.provisional, st.player_generation, gen);
+                return -1;
+            }
             route_loss_reset();
             g_route_loss.state = st; g_route_loss.gen = gen;
             g_route_loss.transport = ipc_transport_seq();
@@ -1145,9 +1235,9 @@ static int route_analog(int force){
     }
     if(route_send("0657000C0008", automatic, gen) != 0) return -1;
     if(!lost && st.have_track && st.position_ms > 0 && (!automatic || (st.player_confirmed && !st.provisional && st.player_generation == gen))) if(route_seek(st.position_ms, automatic, gen) != 0 && automatic) return -1;
-    if(was_playing && route_send("0201000C0000", automatic, gen) != 0 && automatic) return -1;       /* play */
-    if(lost){
-        if(g_route_loss.seek_valid && st.have_track && st.position_ms > 0){
+    if(was_playing && resume_playing && route_send("0201000C0000", automatic, gen) != 0 && automatic) return -1;       /* play */
+    if(lost || !resume_playing){
+        if((lost ? g_route_loss.seek_valid : 1) && st.have_track && st.position_ms > 0){
             memset(&g_route_resume, 0, sizeof g_route_resume);
             g_route_resume.pending = 1; g_route_resume.gen = gen;
             g_route_resume.transport = ipc_transport_seq();
@@ -1160,23 +1250,27 @@ static int route_analog(int force){
     }
     route_loss_reset();
     g_route_mac[0] = 0;
+    ui_bt_live_codec_observe("", 0, 0);
     if(atomic_load(&g_source_mode) == 4) g_source_mode = 0;
     route_state_remove();
-#ifdef DISKOS_TEST_BT_PREPARE
     ui_bt_route_prepare_cancel();
-#endif
-    fprintf(stderr,"route analog (playing=%d)\n", was_playing); fflush(stderr);
+    fprintf(stderr,"route analog (playing=%d resume=%d)\n", was_playing, resume_playing); fflush(stderr);
     return 0;
 }
 /* Called only after the BT poll confirms loss of the routed sink. */
+static int route_analog(int force){ return route_analog_impl(force, force < 2); }
 int ui_route_bt_lost(int fresh){ return route_analog(fresh ? 3 : 2); }
 int ui_route_analog(void){
-#ifdef DISKOS_TEST_BT_PREPARE
     ui_bt_route_prepare_cancel();
-#endif
     route_loss_invalidate_seek();
     if(modes_output_busy()) return -1;
-    return route_analog(0);
+    return route_analog_impl(0, 1);
+}
+int ui_route_analog_pause(void){
+    ui_bt_route_prepare_cancel();
+    route_loss_invalidate_seek();
+    if(modes_output_busy()) return -1;
+    return route_analog_impl(0, 0);
 }
 
 /* Working-mode (audio SOURCE) switch. Replays the stock V2.28 sequences captured + live-verified
@@ -1465,9 +1559,7 @@ static void route_clear_for_source_switch(void){
     route_loss_invalidate_seek();
     g_route_mac[0] = 0;
     route_state_remove();
-#ifdef DISKOS_TEST_BT_PREPARE
     ui_bt_route_prepare_cancel();
-#endif
 }
 static int source_send(int mode){
     int v = fw_os_ver();
@@ -1565,7 +1657,7 @@ int ui_set_source_mode(int mode){
         return 0;
     }
     int was_playing = (prev_mode != 2) && g_playing;
-    if(prev_mode == 2 && mode != 2) bt_rx_prepare_exit();
+    if(prev_mode == 2 && mode != 2){ bt_rx_ui_cleanup(); bt_rx_prepare_exit(); }
     if(was_playing && ipc_send_cmd("0201000C0000") < 0){ ui_toast("Player is busy - try again"); return -1; }
     if(was_playing && g_route_mac[0] && mode == 2) usleep(80000);
     if(source_send(mode) < 0){
@@ -1587,7 +1679,7 @@ int ui_set_source_mode(int mode){
         if(screen_current() == SCR_WORKMODE) screen_show(SCR_NOWPLAYING);
     }
     if(prev_mode == 2 && mode != 2){
-        bt_output_resume_after_rx(mode == 0 || mode == 4);
+        bt_output_resume_after_rx(0);
         ui_status_refresh();
     }
     if(mode == 0 && prev_mode != 2 && was_playing) ipc_send_cmd("0201000C0000");
@@ -2354,7 +2446,7 @@ int ui_set_volume(int vol){
     char f[16]; snprintf(f, sizeof f, "0715000C%04X", vol);
     int rc = ipc_send_cmd(f);
     fprintf(stderr,"set volume %d -> %s (rc=%d)\n", vol, f, rc); fflush(stderr);
-    if(modelock_is_active() && modelock_get_mode() == 2){
+    if(ui_get_source_mode() == 2){
         bt_rx_sync_volume(vol);
     }
     return rc;   /* 0 = queued OK, -1 = send failed (caller can retry) */
@@ -2883,9 +2975,7 @@ void ui_set_workmode(int mode){
 /* sleep timer: when armed, pause playback once the interval elapses (duration mode) or once the
  * current chapter ends (end-of-chapter mode, for audiobooks). The two modes are mutually exclusive. */
 static uint32_t g_sleep_start=0, g_sleep_ms=0;
-#ifdef DISKOS_TEST_BT_PREPARE
 static int bt_prepare_sleep_due(void){ return g_sleep_ms && lv_tick_elaps(g_sleep_start) >= g_sleep_ms; }
-#endif
 static long     g_sleep_eoc = -1;        /* >=0 = pause when the book position reaches this ms */
 static char     g_sleep_eoc_path[TRACK_PATH_MAX];   /* the book the EOC target belongs to (disarm if the track changes) */
 static long     g_sleep_eoc_lastpos = -1; /* last position seen on the EOC book: if the track rolls over while this was near the target, the chapter completed -> fulfil the sleep instead of just disarming */
@@ -5277,7 +5367,8 @@ int main(int argc, char **argv){
     const char *ml_env = getenv("DISKOS_MODELOCK");
     if(ml_env){
         int m = atoi(ml_env);
-        if(m >= 1 && m <= 3){ g_source_mode = m; modelock_open(m); }
+        if(m == 2){ g_source_mode = 2; bt_rx_enter(); }
+        else if(m == 1 || m == 3){ g_source_mode = m; modelock_open(m); }
     } else if(boot_sm == 1 || boot_sm == 3){
         g_source_mode = boot_sm;
         modelock_open(boot_sm);
@@ -5498,9 +5589,7 @@ int main(int argc, char **argv){
         if(ipc_take_reconnected()) player_reconnected();
         receiver_entry_tick();
         audio_restore_tick();
-#ifdef DISKOS_TEST_BT_PREPARE
         bt_prepare_tick();
-#endif
         route_resume_tick();
         ipc_bt_autonext_poll(lv_tick_get(),
             fw_os_ver() == 257 && g_route_mac[0] && ui_get_source_mode() == 0 &&
@@ -5527,7 +5616,7 @@ int main(int argc, char **argv){
                 last_activity = lv_tick_get();
                 if(screen_current()==SCR_SAVER) screen_back();
             }
-            if(modelock_is_active() && modelock_get_mode() == 2){
+            if(ui_get_source_mode() == 2){
                 bt_rx_sync_volume(st.volume);
             }
         }
@@ -6408,7 +6497,7 @@ int main(int argc, char **argv){
         }else if(playing && st.position_ms>0){
             wait=ui_deadline_min(wait,now,g_ps.change_tick+1600);
         }
-        if(g_rxsw.active || g_sender_pending ||
+        if(g_rxsw.active || g_sender_pending || bp_active(&g_bt_prepare) ||
            (aps_sender_active(&g_sender) && g_sender.phase!=APSS_RUNNING) ||
            (ho_get(&g_ho)!=HO_LOCAL && ho_get(&g_ho)!=HO_CASTING) ||
            g_pickreq.pend || g_sender_return.pending || g_cast_return.pending)

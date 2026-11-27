@@ -142,10 +142,10 @@ echo "   Integrity verified (remote md5 matches local: $REMOTE_MD5)"
 # 2. Deploy Web UI daemon and script if present
 if [ -n "$WEBD_BIN" ]; then
   echo ">> [2/4] Uploading diskos-webd daemon (/usr/data/bin/diskos-webd)..."
-  "${SSH[@]}" "root@$IP" 'cat > /usr/data/bin/diskos-webd && chmod 755 /usr/data/bin/diskos-webd' < "$WEBD_BIN"
+  "${SSH[@]}" "root@$IP" 'cat > /usr/data/bin/diskos-webd.new && chmod 755 /usr/data/bin/diskos-webd.new && mv -f /usr/data/bin/diskos-webd.new /usr/data/bin/diskos-webd' < "$WEBD_BIN"
 fi
 if [ -n "$WEBSH_BIN" ]; then
-  "${SSH[@]}" "root@$IP" 'cat > /usr/data/bin/diskos-web.sh && chmod 755 /usr/data/bin/diskos-web.sh' < "$WEBSH_BIN"
+  "${SSH[@]}" "root@$IP" 'cat > /usr/data/bin/diskos-web.sh.new && chmod 755 /usr/data/bin/diskos-web.sh.new && mv -f /usr/data/bin/diskos-web.sh.new /usr/data/bin/diskos-web.sh' < "$WEBSH_BIN"
 fi
 
 # 3. Deploy Web static assets if present
@@ -161,7 +161,7 @@ if [ -n "$BLUEALSA_BIN" ]; then
 fi
 if [ -n "$BLUEALSA_CUSTOM_BIN" ]; then
   echo ">> [3c/4] Uploading bluealsa-custom binary (/usr/data/bin/bluealsa-custom)..."
-  "${SSH[@]}" "root@$IP" 'cat > /usr/data/bin/bluealsa-custom && chmod 755 /usr/data/bin/bluealsa-custom' < "$BLUEALSA_CUSTOM_BIN"
+  "${SSH[@]}" "root@$IP" 'cat > /usr/data/bin/bluealsa-custom.new && chmod 755 /usr/data/bin/bluealsa-custom.new && mv -f /usr/data/bin/bluealsa-custom.new /usr/data/bin/bluealsa-custom' < "$BLUEALSA_CUSTOM_BIN"
 fi
 if [ -n "$AVRCPD_BIN" ]; then
   echo ">> [3d/4] Uploading diskos-avrcpd daemon (/usr/data/diskos-avrcpd)..."
@@ -181,11 +181,11 @@ echo ">> [4/4] Swapping in binary and hot-reloading UI & Web daemon..."
 echo "   [1/6] Staging binary (/usr/data/mq_ui.new -> /usr/data/mq_ui)..."
 mv -f /usr/data/mq_ui.new /usr/data/mq_ui || { echo "ERROR: could not swap in the new binary" >&2; exit 1; }
 
-echo "   [2/6] Stopping previous mq_ui..."
-killall -9 mq_ui diskos-avrcpd 2>/dev/null
-
-echo "   [3/6] Launching /usr/data/mq_ui..."
+echo "   [2/6] Launching /usr/data/mq_ui and stopping previous mq_ui (zero-gap so fiio_init watchdog stays idle)..."
+old_ui="$(pidof mq_ui 2>/dev/null || true)"
 setsid /usr/data/mq_ui </dev/null >/usr/data/diskos_boot.log 2>&1 &
+[ -n "$old_ui" ] && kill -9 $old_ui 2>/dev/null || true
+killall -9 diskos-avrcpd 2>/dev/null || true
 
 # poll up to ~10s. Sleep FIRST, then check, so a check is always the last action before we decide
 echo "   [4/6] Waiting for /usr/data/mq_ui to initialize..."
@@ -240,11 +240,7 @@ if [ -x /usr/data/bin/diskos-web.sh ]; then
 fi
 
 if [ -x /usr/data/bluealsa ] && [ -e /opt/diskos/bin/bluealsa ]; then
-  mount -o bind /usr/data/bluealsa /opt/diskos/bin/bluealsa 2>/dev/null || true
-fi
-if pidof bluealsa bluealsa-custom >/dev/null 2>&1; then
-  echo "   [+] Refreshing BlueALSA daemon..."
-  killall -9 bluealsa bluealsa-custom 2>/dev/null || true
+  grep -q " /opt/diskos/bin/bluealsa " /proc/mounts || mount -o bind /usr/data/bluealsa /opt/diskos/bin/bluealsa 2>/dev/null || true
 fi
 
 player_pid="$(pidof mq_player 2>/dev/null || true)"

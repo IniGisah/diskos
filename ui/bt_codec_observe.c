@@ -70,7 +70,8 @@ int bc_parse(const char *text, size_t len, const char *mac, bc_snapshot *out){
     }
     if(seen != (1u << 9) - 1) return BC_MISSING;
     unsigned adapter; char other[18];
-    if(!endpoint(s.pcm, "/org/bluealsa/hci", "/a2dpsrc/sink", &s.adapter, s.mac) ||
+    if((!endpoint(s.pcm, "/org/bluealsa/hci", "/a2dpsrc/sink", &s.adapter, s.mac) &&
+        !endpoint(s.pcm, "/org/bluealsa/hci", "/a2dp-source/sink", &s.adapter, s.mac)) ||
        !endpoint(device, "/org/bluez/hci", "", &adapter, other) || adapter != s.adapter ||
        strcmp(s.mac, other) || strcmp(s.mac, expected)) return BC_MISMATCH;
     s.codec = !strcmp(s.codec_name, "SBC") ? BC_CODEC_SBC :

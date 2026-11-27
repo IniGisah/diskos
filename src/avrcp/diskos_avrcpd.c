@@ -19,9 +19,17 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <dbus/dbus.h>
+#include "../../ui/bt_avrcp_proto.h"
 
+#ifndef SOCKET_PATH
 #define SOCKET_PATH "/tmp/.diskos-avrcp.sock"
+#endif
+#ifndef AVRCP_RX_MARKER_PATH
+#define AVRCP_RX_MARKER_PATH "/tmp/.diskos_bt_rx"
+#endif
+
 #define PLAYER_PATH "/org/mpris/MediaPlayer2"
+#define HCI0_PATH   "/org/bluez/hci0"
 #define MPRIS_IFACE "org.mpris.MediaPlayer2"
 #define PLAYER_IFACE "org.mpris.MediaPlayer2.Player"
 #define PROPS_IFACE "org.freedesktop.DBus.Properties"
@@ -31,6 +39,8 @@ static DBusConnection *g_conn = NULL;
 static int g_registered = 0;
 static int g_server_fd = -1;
 static int g_client_fd = -1;
+static int g_rx_suppressed = 0;
+static avrcp_linebuf_t g_client_lb;
 
 /* Playback State */
 static char g_playback_status[32] = "Paused";
@@ -49,7 +59,12 @@ static uint64_t now_ms(void) {
     return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-/* Direct fallback to /player message queue if mq_ui is not connected */
+static int rx_mode_active(void) {
+    return g_rx_suppressed || access(AVRCP_RX_MARKER_PATH, F_OK) == 0;
+}
+
+/* Direct fallback to /player message queue if mq_ui is not connected (suppressed in RX mode) */
+#ifndef DISKOS_AVRCPD_TEST
 static int send_player_cmd_mqueue(const char *cmd) {
     mqd_t q = mq_open("/player", O_WRONLY | O_NONBLOCK);
     if (q == (mqd_t)-1) {
@@ -59,25 +74,102 @@ static int send_player_cmd_mqueue(const char *cmd) {
     mq_close(q);
     return rc;
 }
+#else
+static int g_test_mqueue_sent = 0;
+static char g_test_last_mq_cmd[32] = "";
+static int send_player_cmd_mqueue(const char *cmd) {
+    g_test_mqueue_sent++;
+    snprintf(g_test_last_mq_cmd, sizeof(g_test_last_mq_cmd), "%s", cmd ? cmd : "");
+    return 0;
+}
+#endif
 
 static void forward_cmd(const char *cmd_name, const char *mq_cmd) {
+    if (rx_mode_active()) {
+        fprintf(stderr, "[diskos-avrcp] Suppressed AVRCP cmd in RX mode: %s\n", cmd_name);
+        return;
+    }
     if (g_client_fd >= 0) {
         char buf[64];
         int n = snprintf(buf, sizeof(buf), "%s\n", cmd_name);
-        ssize_t w = write(g_client_fd, buf, n);
-        if (w > 0) {
+        ssize_t w = write(g_client_fd, buf, (size_t)n);
+        if (w == n) {
             fprintf(stderr, "[diskos-avrcp] Forwarded to mq_ui: %s\n", cmd_name);
             return;
         }
-        /* Write failed, client disconnected */
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            return;
+        }
+        /* Write failed or partial, client disconnected */
         close(g_client_fd);
         g_client_fd = -1;
+        avrcp_linebuf_init(&g_client_lb);
     }
     /* Fallback directly to /player */
-    if (mq_cmd) {
+    if (mq_cmd && !rx_mode_active()) {
         fprintf(stderr, "[diskos-avrcp] Fallback mqueue cmd: %s\n", mq_cmd);
         send_player_cmd_mqueue(mq_cmd);
     }
+}
+
+static void append_metadata_variant(DBusMessageIter *parent_iter) {
+    DBusMessageIter val, meta_dict, m_entry, m_val_iter, arr_iter;
+    dbus_message_iter_open_container(parent_iter, DBUS_TYPE_VARIANT, "a{sv}", &val);
+    dbus_message_iter_open_container(&val, DBUS_TYPE_ARRAY, "{sv}", &meta_dict);
+
+    /* mpris:trackid */
+    const char *m_key = "mpris:trackid";
+    const char *m_val = "/org/diskos/track/0";
+    dbus_message_iter_open_container(&meta_dict, DBUS_TYPE_DICT_ENTRY, NULL, &m_entry);
+    dbus_message_iter_append_basic(&m_entry, DBUS_TYPE_STRING, &m_key);
+    dbus_message_iter_open_container(&m_entry, DBUS_TYPE_VARIANT, "o", &m_val_iter);
+    dbus_message_iter_append_basic(&m_val_iter, DBUS_TYPE_OBJECT_PATH, &m_val);
+    dbus_message_iter_close_container(&m_entry, &m_val_iter);
+    dbus_message_iter_close_container(&meta_dict, &m_entry);
+
+    /* xesam:title */
+    m_key = "xesam:title";
+    m_val = g_track_title;
+    dbus_message_iter_open_container(&meta_dict, DBUS_TYPE_DICT_ENTRY, NULL, &m_entry);
+    dbus_message_iter_append_basic(&m_entry, DBUS_TYPE_STRING, &m_key);
+    dbus_message_iter_open_container(&m_entry, DBUS_TYPE_VARIANT, "s", &m_val_iter);
+    dbus_message_iter_append_basic(&m_val_iter, DBUS_TYPE_STRING, &m_val);
+    dbus_message_iter_close_container(&m_entry, &m_val_iter);
+    dbus_message_iter_close_container(&meta_dict, &m_entry);
+
+    /* xesam:artist */
+    m_key = "xesam:artist";
+    const char *artist_arr[] = { g_track_artist };
+    dbus_message_iter_open_container(&meta_dict, DBUS_TYPE_DICT_ENTRY, NULL, &m_entry);
+    dbus_message_iter_append_basic(&m_entry, DBUS_TYPE_STRING, &m_key);
+    dbus_message_iter_open_container(&m_entry, DBUS_TYPE_VARIANT, "as", &m_val_iter);
+    dbus_message_iter_open_container(&m_val_iter, DBUS_TYPE_ARRAY, "s", &arr_iter);
+    dbus_message_iter_append_basic(&arr_iter, DBUS_TYPE_STRING, &artist_arr[0]);
+    dbus_message_iter_close_container(&m_val_iter, &arr_iter);
+    dbus_message_iter_close_container(&m_entry, &m_val_iter);
+    dbus_message_iter_close_container(&meta_dict, &m_entry);
+
+    /* xesam:album */
+    m_key = "xesam:album";
+    m_val = g_track_album;
+    dbus_message_iter_open_container(&meta_dict, DBUS_TYPE_DICT_ENTRY, NULL, &m_entry);
+    dbus_message_iter_append_basic(&m_entry, DBUS_TYPE_STRING, &m_key);
+    dbus_message_iter_open_container(&m_entry, DBUS_TYPE_VARIANT, "s", &m_val_iter);
+    dbus_message_iter_append_basic(&m_val_iter, DBUS_TYPE_STRING, &m_val);
+    dbus_message_iter_close_container(&m_entry, &m_val_iter);
+    dbus_message_iter_close_container(&meta_dict, &m_entry);
+
+    dbus_message_iter_close_container(&val, &meta_dict);
+    dbus_message_iter_close_container(parent_iter, &val);
+}
+
+static void append_dict_metadata(DBusMessageIter *dict) {
+    const char *key = "Metadata";
+    DBusMessageIter entry;
+    dbus_message_iter_open_container(dict, DBUS_TYPE_DICT_ENTRY, NULL, &entry);
+    dbus_message_iter_append_basic(&entry, DBUS_TYPE_STRING, &key);
+    append_metadata_variant(&entry);
+    dbus_message_iter_close_container(dict, &entry);
 }
 
 /* Emit D-Bus PropertiesChanged signal for org.mpris.MediaPlayer2.Player */
@@ -111,65 +203,11 @@ static void emit_properties_changed(DBusConnection *conn, int changed_status, in
     }
 
     if (changed_meta) {
-        const char *key = "Metadata";
-        DBusMessageIter entry, val, meta_dict;
-        dbus_message_iter_open_container(&dict, DBUS_TYPE_DICT_ENTRY, NULL, &entry);
-        dbus_message_iter_append_basic(&entry, DBUS_TYPE_STRING, &key);
-        dbus_message_iter_open_container(&entry, DBUS_TYPE_VARIANT, "a{sv}", &val);
-        dbus_message_iter_open_container(&val, DBUS_TYPE_ARRAY, "{sv}", &meta_dict);
-
-        // mpris:trackid
-        const char *m_key = "mpris:trackid";
-        const char *m_val = "/org/diskos/track/0";
-        DBusMessageIter m_entry, m_val_iter;
-        dbus_message_iter_open_container(&meta_dict, DBUS_TYPE_DICT_ENTRY, NULL, &m_entry);
-        dbus_message_iter_append_basic(&m_entry, DBUS_TYPE_STRING, &m_key);
-        dbus_message_iter_open_container(&m_entry, DBUS_TYPE_VARIANT, "o", &m_val_iter);
-        dbus_message_iter_append_basic(&m_val_iter, DBUS_TYPE_OBJECT_PATH, &m_val);
-        dbus_message_iter_close_container(&m_entry, &m_val_iter);
-        dbus_message_iter_close_container(&meta_dict, &m_entry);
-
-        // xesam:title
-        m_key = "xesam:title";
-        m_val = g_track_title;
-        dbus_message_iter_open_container(&meta_dict, DBUS_TYPE_DICT_ENTRY, NULL, &m_entry);
-        dbus_message_iter_append_basic(&m_entry, DBUS_TYPE_STRING, &m_key);
-        dbus_message_iter_open_container(&m_entry, DBUS_TYPE_VARIANT, "s", &m_val_iter);
-        dbus_message_iter_append_basic(&m_val_iter, DBUS_TYPE_STRING, &m_val);
-        dbus_message_iter_close_container(&m_entry, &m_val_iter);
-        dbus_message_iter_close_container(&meta_dict, &m_entry);
-
-        // xesam:artist
-        m_key = "xesam:artist";
-        const char *artist_arr[] = { g_track_artist };
-        dbus_message_iter_open_container(&meta_dict, DBUS_TYPE_DICT_ENTRY, NULL, &m_entry);
-        dbus_message_iter_append_basic(&m_entry, DBUS_TYPE_STRING, &m_key);
-        dbus_message_iter_open_container(&m_entry, DBUS_TYPE_VARIANT, "as", &m_val_iter);
-        DBusMessageIter arr_iter;
-        dbus_message_iter_open_container(&m_val_iter, DBUS_TYPE_ARRAY, "s", &arr_iter);
-        dbus_message_iter_append_basic(&arr_iter, DBUS_TYPE_STRING, &artist_arr[0]);
-        dbus_message_iter_close_container(&m_val_iter, &arr_iter);
-        dbus_message_iter_close_container(&m_entry, &m_val_iter);
-        dbus_message_iter_close_container(&meta_dict, &m_entry);
-
-        // xesam:album
-        m_key = "xesam:album";
-        m_val = g_track_album;
-        dbus_message_iter_open_container(&meta_dict, DBUS_TYPE_DICT_ENTRY, NULL, &m_entry);
-        dbus_message_iter_append_basic(&m_entry, DBUS_TYPE_STRING, &m_key);
-        dbus_message_iter_open_container(&m_entry, DBUS_TYPE_VARIANT, "s", &m_val_iter);
-        dbus_message_iter_append_basic(&m_val_iter, DBUS_TYPE_STRING, &m_val);
-        dbus_message_iter_close_container(&m_entry, &m_val_iter);
-        dbus_message_iter_close_container(&meta_dict, &m_entry);
-
-        dbus_message_iter_close_container(&val, &meta_dict);
-        dbus_message_iter_close_container(&entry, &val);
-        dbus_message_iter_close_container(&dict, &entry);
+        append_dict_metadata(&dict);
     }
 
     dbus_message_iter_close_container(&iter, &dict);
 
-    // invalidated_properties = empty array
     DBusMessageIter inval_arr;
     dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY, "s", &inval_arr);
     dbus_message_iter_close_container(&iter, &inval_arr);
@@ -204,6 +242,7 @@ static DBusHandlerResult handle_get_all(DBusConnection *conn, DBusMessage *msg) 
     DBusError err;
     dbus_error_init(&err);
     if (!dbus_message_get_args(msg, &err, DBUS_TYPE_STRING, &iface, DBUS_TYPE_INVALID)) {
+        dbus_error_free(&err);
         return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
     }
 
@@ -223,6 +262,7 @@ static DBusHandlerResult handle_get_all(DBusConnection *conn, DBusMessage *msg) 
 
     if (!strcmp(iface, PLAYER_IFACE) || !strcmp(iface, "")) {
         append_dict_string(&dict, "PlaybackStatus", g_playback_status);
+        append_dict_metadata(&dict);
         append_dict_bool(&dict, "CanControl", TRUE);
         append_dict_bool(&dict, "CanPlay", TRUE);
         append_dict_bool(&dict, "CanPause", TRUE);
@@ -231,7 +271,7 @@ static DBusHandlerResult handle_get_all(DBusConnection *conn, DBusMessage *msg) 
     }
 
     dbus_message_iter_close_container(&iter, &dict);
-    dbus_connection_send(conn, reply, NULL);
+    if (conn) dbus_connection_send(conn, reply, NULL);
     dbus_message_unref(reply);
     return DBUS_HANDLER_RESULT_HANDLED;
 }
@@ -241,6 +281,7 @@ static DBusHandlerResult handle_get(DBusConnection *conn, DBusMessage *msg) {
     DBusError err;
     dbus_error_init(&err);
     if (!dbus_message_get_args(msg, &err, DBUS_TYPE_STRING, &iface, DBUS_TYPE_STRING, &prop, DBUS_TYPE_INVALID)) {
+        dbus_error_free(&err);
         return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
     }
 
@@ -250,19 +291,29 @@ static DBusHandlerResult handle_get(DBusConnection *conn, DBusMessage *msg) {
     DBusMessageIter iter, val;
     dbus_message_iter_init_append(reply, &iter);
 
-    if (!strcmp(prop, "PlaybackStatus")) {
+    int match_player = (!iface || !iface[0] || !strcmp(iface, PLAYER_IFACE));
+    int match_mpris  = (!iface || !iface[0] || !strcmp(iface, MPRIS_IFACE));
+
+    if (match_player && !strcmp(prop, "PlaybackStatus")) {
         const char *v = g_playback_status;
         dbus_message_iter_open_container(&iter, DBUS_TYPE_VARIANT, "s", &val);
         dbus_message_iter_append_basic(&val, DBUS_TYPE_STRING, &v);
         dbus_message_iter_close_container(&iter, &val);
-    } else if (!strcmp(prop, "Identity")) {
+    } else if (match_player && !strcmp(prop, "Metadata")) {
+        append_metadata_variant(&iter);
+    } else if (match_mpris && !strcmp(prop, "Identity")) {
         const char *v = "diskOS";
         dbus_message_iter_open_container(&iter, DBUS_TYPE_VARIANT, "s", &val);
         dbus_message_iter_append_basic(&val, DBUS_TYPE_STRING, &v);
         dbus_message_iter_close_container(&iter, &val);
-    } else if (!strcmp(prop, "CanControl") || !strcmp(prop, "CanPlay") ||
+    } else if (match_mpris && (!strcmp(prop, "CanQuit") || !strcmp(prop, "CanRaise") || !strcmp(prop, "HasTrackList"))) {
+        dbus_bool_t b = FALSE;
+        dbus_message_iter_open_container(&iter, DBUS_TYPE_VARIANT, "b", &val);
+        dbus_message_iter_append_basic(&val, DBUS_TYPE_BOOLEAN, &b);
+        dbus_message_iter_close_container(&iter, &val);
+    } else if (match_player && (!strcmp(prop, "CanControl") || !strcmp(prop, "CanPlay") ||
                !strcmp(prop, "CanPause") || !strcmp(prop, "CanGoNext") ||
-               !strcmp(prop, "CanGoPrevious")) {
+               !strcmp(prop, "CanGoPrevious"))) {
         dbus_bool_t b = TRUE;
         dbus_message_iter_open_container(&iter, DBUS_TYPE_VARIANT, "b", &val);
         dbus_message_iter_append_basic(&val, DBUS_TYPE_BOOLEAN, &b);
@@ -270,12 +321,14 @@ static DBusHandlerResult handle_get(DBusConnection *conn, DBusMessage *msg) {
     } else {
         dbus_message_unref(reply);
         DBusMessage *err_reply = dbus_message_new_error(msg, "org.freedesktop.DBus.Error.UnknownProperty", "Unknown property");
-        dbus_connection_send(conn, err_reply, NULL);
-        dbus_message_unref(err_reply);
+        if (err_reply) {
+            if (conn) dbus_connection_send(conn, err_reply, NULL);
+            dbus_message_unref(err_reply);
+        }
         return DBUS_HANDLER_RESULT_HANDLED;
     }
 
-    dbus_connection_send(conn, reply, NULL);
+    if (conn) dbus_connection_send(conn, reply, NULL);
     dbus_message_unref(reply);
     return DBUS_HANDLER_RESULT_HANDLED;
 }
@@ -336,9 +389,11 @@ static DBusHandlerResult player_filter(DBusConnection *conn, DBusMessage *msg, v
             "  </interface>\n"
             "</node>\n";
         DBusMessage *reply = dbus_message_new_method_return(msg);
-        dbus_message_append_args(reply, DBUS_TYPE_STRING, &xml, DBUS_TYPE_INVALID);
-        dbus_connection_send(conn, reply, NULL);
-        dbus_message_unref(reply);
+        if (reply) {
+            dbus_message_append_args(reply, DBUS_TYPE_STRING, &xml, DBUS_TYPE_INVALID);
+            dbus_connection_send(conn, reply, NULL);
+            dbus_message_unref(reply);
+        }
         return DBUS_HANDLER_RESULT_HANDLED;
     }
 
@@ -374,8 +429,45 @@ static DBusHandlerResult player_filter(DBusConnection *conn, DBusMessage *msg, v
     return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 }
 
+static int hci0_adapter_exists(DBusConnection *conn) {
+    if (!conn) return 0;
+    DBusError err;
+    dbus_error_init(&err);
+
+    DBusMessage *msg = dbus_message_new_method_call(
+        "org.bluez",
+        HCI0_PATH,
+        PROPS_IFACE,
+        "Get"
+    );
+    if (!msg) return 0;
+
+    const char *iface = "org.bluez.Adapter1";
+    const char *prop = "Address";
+    dbus_message_append_args(msg,
+        DBUS_TYPE_STRING, &iface,
+        DBUS_TYPE_STRING, &prop,
+        DBUS_TYPE_INVALID);
+
+    DBusMessage *reply = dbus_connection_send_with_reply_and_block(conn, msg, 1000, &err);
+    dbus_message_unref(msg);
+
+    if (!reply) {
+        dbus_error_free(&err);
+        return 0;
+    }
+    int ok = (dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_METHOD_RETURN);
+    dbus_message_unref(reply);
+    return ok;
+}
+
 static int try_register_player(DBusConnection *conn) {
     if (!conn) return -1;
+
+    if (!hci0_adapter_exists(conn)) {
+        g_registered = 0;
+        return -1;
+    }
 
     DBusError err;
     dbus_error_init(&err);
@@ -383,7 +475,7 @@ static int try_register_player(DBusConnection *conn) {
     const char *player_path = PLAYER_PATH;
     DBusMessage *msg = dbus_message_new_method_call(
         "org.bluez",
-        "/org/bluez/hci0",
+        HCI0_PATH,
         "org.bluez.Media1",
         "RegisterPlayer"
     );
@@ -395,6 +487,7 @@ static int try_register_player(DBusConnection *conn) {
     dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY, "{sv}", &dict);
 
     append_dict_string(&dict, "PlaybackStatus", g_playback_status);
+    append_dict_metadata(&dict);
     append_dict_bool(&dict, "CanControl", TRUE);
     append_dict_bool(&dict, "CanPlay", TRUE);
     append_dict_bool(&dict, "CanPause", TRUE);
@@ -407,15 +500,17 @@ static int try_register_player(DBusConnection *conn) {
     dbus_message_unref(msg);
 
     if (!reply) {
-        fprintf(stderr, "[diskos-avrcp] RegisterPlayer failed: %s: %s\n", err.name, err.message);
+        fprintf(stderr, "[diskos-avrcp] RegisterPlayer failed: %s: %s\n",
+                err.name ? err.name : "", err.message ? err.message : "");
         dbus_error_free(&err);
         g_registered = 0;
         return -1;
     }
 
     dbus_message_unref(reply);
-    fprintf(stderr, "[diskos-avrcp] RegisterPlayer SUCCESS on /org/bluez/hci0\n");
+    fprintf(stderr, "[diskos-avrcp] RegisterPlayer SUCCESS on %s\n", HCI0_PATH);
     g_registered = 1;
+    emit_properties_changed(conn, 1, 1);
     return 0;
 }
 
@@ -431,11 +526,32 @@ static DBusHandlerResult signal_filter(DBusConnection *conn, DBusMessage *msg, v
                 fprintf(stderr, "[diskos-avrcp] BlueZ owner changed: %s -> %s\n",
                         old_owner ? old_owner : "", new_owner ? new_owner : "");
                 if (new_owner && new_owner[0] != '\0') {
-                    // BlueZ started or restarted
                     try_register_player(conn);
                 } else {
                     g_registered = 0;
                 }
+            }
+        }
+    } else if (dbus_message_is_signal(msg, "org.freedesktop.DBus.ObjectManager", "InterfacesAdded")) {
+        const char *obj_path = NULL;
+        DBusMessageIter iter;
+        if (dbus_message_iter_init(msg, &iter) &&
+            dbus_message_iter_get_arg_type(&iter) == DBUS_TYPE_OBJECT_PATH) {
+            dbus_message_iter_get_basic(&iter, &obj_path);
+            if (obj_path && !strcmp(obj_path, HCI0_PATH)) {
+                fprintf(stderr, "[diskos-avrcp] hci0 InterfacesAdded -> registering player\n");
+                try_register_player(conn);
+            }
+        }
+    } else if (dbus_message_is_signal(msg, "org.freedesktop.DBus.ObjectManager", "InterfacesRemoved")) {
+        const char *obj_path = NULL;
+        DBusMessageIter iter;
+        if (dbus_message_iter_init(msg, &iter) &&
+            dbus_message_iter_get_arg_type(&iter) == DBUS_TYPE_OBJECT_PATH) {
+            dbus_message_iter_get_basic(&iter, &obj_path);
+            if (obj_path && !strcmp(obj_path, HCI0_PATH)) {
+                fprintf(stderr, "[diskos-avrcp] hci0 InterfacesRemoved -> marking unregistered\n");
+                g_registered = 0;
             }
         }
     }
@@ -452,12 +568,13 @@ static int init_server_socket(void) {
     }
 
     int flags = fcntl(fd, F_GETFL, 0);
-    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
 
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path) - 1);
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", SOCKET_PATH);
 
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         perror("bind");
@@ -476,59 +593,82 @@ static int init_server_socket(void) {
     return fd;
 }
 
-static void handle_client_data(DBusConnection *conn) {
-    char buf[512];
-    ssize_t n = read(g_client_fd, buf, sizeof(buf) - 1);
-    if (n <= 0) {
-        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
-            return;
-        }
-        /* Client disconnected */
-        close(g_client_fd);
-        g_client_fd = -1;
+typedef struct {
+    int status_changed;
+    int meta_changed;
+} client_batch_t;
+
+static void handle_client_line(const char *line, void *ctx) {
+    client_batch_t *b = (client_batch_t *)ctx;
+    if (!strcmp(line, "SUSPEND") || !strcmp(line, "MODE:RX")) {
+        g_rx_suppressed = 1;
         return;
     }
-
-    buf[n] = '\0';
-    char *line = strtok(buf, "\r\n");
-    int status_changed = 0;
-    int meta_changed = 0;
-
-    while (line) {
-        if (!strncmp(line, "STATUS:", 7)) {
-            const char *st = line + 7;
-            if (strcmp(g_playback_status, st) != 0) {
-                strncpy(g_playback_status, st, sizeof(g_playback_status) - 1);
-                status_changed = 1;
-                fprintf(stderr, "[diskos-avrcp] Status updated: %s\n", g_playback_status);
-            }
-        } else if (!strncmp(line, "TITLE:", 6)) {
-            const char *t = line + 6;
-            if (strcmp(g_track_title, t) != 0) {
-                strncpy(g_track_title, t, sizeof(g_track_title) - 1);
-                meta_changed = 1;
-            }
-        } else if (!strncmp(line, "ARTIST:", 7)) {
-            const char *a = line + 7;
-            if (strcmp(g_track_artist, a) != 0) {
-                strncpy(g_track_artist, a, sizeof(g_track_artist) - 1);
-                meta_changed = 1;
-            }
-        } else if (!strncmp(line, "ALBUM:", 6)) {
-            const char *alb = line + 6;
-            if (strcmp(g_track_album, alb) != 0) {
-                strncpy(g_track_album, alb, sizeof(g_track_album) - 1);
-                meta_changed = 1;
-            }
-        }
-        line = strtok(NULL, "\r\n");
+    if (!strcmp(line, "MODE:TX")) {
+        g_rx_suppressed = 0;
+        return;
     }
-
-    if (status_changed || meta_changed) {
-        emit_properties_changed(conn, status_changed, meta_changed);
+    if (!strncmp(line, "STATUS:", 7)) {
+        const char *st = line + 7;
+        g_rx_suppressed = 0;
+        if (strcmp(g_playback_status, st) != 0) {
+            snprintf(g_playback_status, sizeof(g_playback_status), "%s", st);
+            b->status_changed = 1;
+            fprintf(stderr, "[diskos-avrcp] Status updated: %s\n", g_playback_status);
+        }
+    } else if (!strncmp(line, "TITLE:", 6)) {
+        const char *t = line + 6;
+        g_rx_suppressed = 0;
+        if (strcmp(g_track_title, t) != 0) {
+            snprintf(g_track_title, sizeof(g_track_title), "%s", t);
+            b->meta_changed = 1;
+        }
+    } else if (!strncmp(line, "ARTIST:", 7)) {
+        const char *a = line + 7;
+        g_rx_suppressed = 0;
+        if (strcmp(g_track_artist, a) != 0) {
+            snprintf(g_track_artist, sizeof(g_track_artist), "%s", a);
+            b->meta_changed = 1;
+        }
+    } else if (!strncmp(line, "ALBUM:", 6)) {
+        const char *alb = line + 6;
+        g_rx_suppressed = 0;
+        if (strcmp(g_track_album, alb) != 0) {
+            snprintf(g_track_album, sizeof(g_track_album), "%s", alb);
+            b->meta_changed = 1;
+        }
     }
 }
 
+static void handle_client_data(DBusConnection *conn) {
+    client_batch_t batch = {0, 0};
+    for (;;) {
+        char buf[512];
+        ssize_t n = read(g_client_fd, buf, sizeof(buf));
+        if (n > 0) {
+            avrcp_linebuf_feed(&g_client_lb, buf, (size_t)n, handle_client_line, &batch);
+            continue;
+        }
+        if (n == 0) {
+            close(g_client_fd);
+            g_client_fd = -1;
+            avrcp_linebuf_init(&g_client_lb);
+            break;
+        }
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+        close(g_client_fd);
+        g_client_fd = -1;
+        avrcp_linebuf_init(&g_client_lb);
+        break;
+    }
+
+    if ((batch.status_changed || batch.meta_changed) && conn) {
+        emit_properties_changed(conn, batch.status_changed, batch.meta_changed);
+    }
+}
+
+#ifndef DISKOS_AVRCPD_TEST
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
@@ -540,6 +680,7 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
 
+    avrcp_linebuf_init(&g_client_lb);
     fprintf(stderr, "[diskos-avrcp] Starting diskos-avrcpd...\n");
 
     g_server_fd = init_server_socket();
@@ -552,7 +693,8 @@ int main(int argc, char **argv) {
 
     g_conn = dbus_bus_get(DBUS_BUS_SYSTEM, &err);
     while (!g_conn && g_running) {
-        fprintf(stderr, "[diskos-avrcp] Waiting for D-Bus system bus: %s\n", err.message);
+        fprintf(stderr, "[diskos-avrcp] Waiting for D-Bus system bus: %s\n",
+                err.message ? err.message : "unknown");
         dbus_error_free(&err);
         sleep(2);
         g_conn = dbus_bus_get(DBUS_BUS_SYSTEM, &err);
@@ -580,6 +722,12 @@ int main(int argc, char **argv) {
     dbus_bus_add_match(g_conn,
         "type='signal',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0='org.bluez'",
         NULL);
+    dbus_bus_add_match(g_conn,
+        "type='signal',sender='org.bluez',interface='org.freedesktop.DBus.ObjectManager',member='InterfacesAdded'",
+        NULL);
+    dbus_bus_add_match(g_conn,
+        "type='signal',sender='org.bluez',interface='org.freedesktop.DBus.ObjectManager',member='InterfacesRemoved'",
+        NULL);
     dbus_connection_add_filter(g_conn, signal_filter, NULL, NULL);
 
     try_register_player(g_conn);
@@ -587,12 +735,10 @@ int main(int argc, char **argv) {
     uint64_t last_reg_attempt = now_ms();
 
     while (g_running) {
-        // D-Bus dispatch
         while (dbus_connection_get_dispatch_status(g_conn) == DBUS_DISPATCH_DATA_REMAINS) {
             dbus_connection_dispatch(g_conn);
         }
 
-        // Retry player registration if BlueZ became available
         if (!g_registered && (now_ms() - last_reg_attempt >= 3000)) {
             last_reg_attempt = now_ms();
             try_register_player(g_conn);
@@ -601,7 +747,6 @@ int main(int argc, char **argv) {
         struct pollfd fds[4];
         int nfds = 0;
 
-        // D-Bus socket descriptor
         int dbus_fd = -1;
         dbus_connection_get_unix_fd(g_conn, &dbus_fd);
         if (dbus_fd >= 0) {
@@ -610,14 +755,12 @@ int main(int argc, char **argv) {
             nfds++;
         }
 
-        // UNIX server socket
         if (g_server_fd >= 0) {
             fds[nfds].fd = g_server_fd;
             fds[nfds].events = POLLIN;
             nfds++;
         }
 
-        // UNIX client socket
         if (g_client_fd >= 0) {
             fds[nfds].fd = g_client_fd;
             fds[nfds].events = POLLIN;
@@ -637,8 +780,10 @@ int main(int argc, char **argv) {
                         if (client >= 0) {
                             if (g_client_fd >= 0) close(g_client_fd);
                             int flags = fcntl(client, F_GETFL, 0);
-                            fcntl(client, F_SETFL, flags | O_NONBLOCK);
+                            if (flags >= 0) fcntl(client, F_SETFL, flags | O_NONBLOCK);
+                            fcntl(client, F_SETFD, FD_CLOEXEC);
                             g_client_fd = client;
+                            avrcp_linebuf_init(&g_client_lb);
                             fprintf(stderr, "[diskos-avrcp] Client connected from mq_ui\n");
                         }
                     } else if (fds[i].fd == g_client_fd) {
@@ -647,7 +792,6 @@ int main(int argc, char **argv) {
                 }
             }
         } else if (ret == 0) {
-            // timeout
             if (dbus_fd >= 0) {
                 dbus_connection_read_write_dispatch(g_conn, 0);
             }
@@ -668,3 +812,4 @@ int main(int argc, char **argv) {
 
     return 0;
 }
+#endif

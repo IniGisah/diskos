@@ -53,10 +53,8 @@ static unsigned g_generation = 0; /* [g_recov_mu] bumps each time /ui is (re)att
 /* Complete A2 evidence, separate from presentation and position updates. */
 static track_state_t g_a2_report;
 static unsigned g_a2_serial, g_a2_playing_report;
-#ifdef DISKOS_TEST_BT_PREPARE
 static unsigned g_prepare_playing_frames;
-#endif
-static int g_a2_stopped, g_a2_candidate_unloaded;
+static int g_a2_stopped, g_a2_candidate_unloaded, g_a2_candidate_state_only;
 static uint64_t g_a2_report_ms;  /* [g_recov_mu] monotonic receipt time of g_a2_report */
 static int g_a2_report_unloaded; /* [g_recov_mu] g_a2_report had a present but empty song: nothing loaded */
 /* Main-thread send evidence only; no command or player-state mutation. */
@@ -772,6 +770,7 @@ static int parse_a2(const char*payload,int len){
     int song_val=find_val(payload,tk,nt,"song");
     g_a2_candidate_unloaded = song_val>=0 && tk[song_val].type==JSMN_STRING &&
                              tk[song_val].end-tk[song_val].start<=2;
+    g_a2_candidate_state_only = (song_val < 0 && n2 <= 0);
     g_a2_candidate = g_state;
     if(accepted) g_a2_candidate.state=(int)tok_long(payload,&tk[state_val]);
     /* Short state-only replies cannot establish that a session is loaded. */
@@ -986,6 +985,7 @@ static void parse_frame(const char*buf,int n){
             pthread_mutex_unlock(&g_recov_mu); return;
         }
         if(g_local_publication.state!=LOCAL_OPEN){
+            fprintf(stderr, "ipc %c%c%c%c blocked by pub=%d\n", buf[0], buf[1], buf[2], buf[3], g_local_publication.state);
             char lh[5]={buf[4],buf[5],buf[6],buf[7],0};
             if(receiver_owned_locked() && !memcmp(buf,"a202",4) && all_hex(lh,4) && (int)strtol(lh,0,16)==n)
                 receiver_parse(buf+8,n-8);
@@ -1032,17 +1032,30 @@ static void parse_frame(const char*buf,int n){
         pthread_mutex_unlock(&g_recov_mu);
         int accepted=parse_a2(buf+8, n-8);
         pthread_mutex_lock(&g_recov_mu);
+        if(!g_confirmed){
+            fprintf(stderr, "ipc a2: n=%d comp=%d acc=%d pend=%d gen=%u/%u pub=%d payload='%.*s'\n",
+                    n, complete, accepted, pending, generation, g_generation, g_local_publication.state,
+                    n - 8 > 160 ? 160 : (n - 8), buf + 8);
+        }
         if(complete && accepted && !pending && !g_rx_reopen && generation==g_generation){
             g_confirmed=1;
             pthread_mutex_lock(&g_mu);
             /* An edge belongs to one loaded identity, even between UI ticks. */
             if(g_a2_candidate.playback_token != g_a2_report.playback_token)
                 g_a2_playing_report=0;
+            /* Preserve an already-confirmed loaded track across short state-only updates
+             * (e.g. {"state":1} replies to 02020008); never promote an unconfirmed session. */
+            if(g_a2_candidate_state_only && !g_a2_candidate_unloaded &&
+               g_a2_report.have_track && g_a2_report.player_confirmed && !g_a2_report.provisional &&
+               g_a2_report.player_generation == g_a2_candidate.player_generation &&
+               g_a2_report.playback_token == g_a2_candidate.playback_token &&
+               g_state.have_track && g_state.player_confirmed && !g_state.provisional &&
+               g_state.playback_token == g_a2_candidate.playback_token){
+                g_a2_candidate.have_track = 1;
+            }
             g_a2_report=g_a2_candidate;
             g_a2_serial++;
-#ifdef DISKOS_TEST_BT_PREPARE
             if(g_a2_report.state == 0) g_prepare_playing_frames++;
-#endif
             if(g_a2_stopped && g_a2_report.have_track && g_a2_report.state==0)
                 g_a2_playing_report=g_a2_serial;
             /* A state-only playing report is not an unloaded session. */
@@ -1881,7 +1894,6 @@ int ipc_seek_if_current(long ms, unsigned generation, uint64_t token){
     pthread_mutex_unlock(&g_recov_mu);
     return rc;
 }
-#ifdef DISKOS_TEST_BT_PREPARE
 int ipc_prepare_snapshot(track_state_t *out, unsigned *serial, unsigned *playing_frames){
     pthread_mutex_lock(&g_recov_mu);
     *out = g_a2_report; *serial = g_a2_serial; *playing_frames = g_prepare_playing_frames;
@@ -1907,7 +1919,6 @@ int ipc_prepare_send(const char *frame, unsigned generation, uint64_t token, uns
         rc = ipc_send_internal(frame, SEND_AUTOMATIC, generation);
     pthread_mutex_unlock(&g_mu); pthread_mutex_unlock(&g_recov_mu); return rc;
 }
-#endif
 /* 1 once the /ui receive queue is open (i.e. ipc_start() succeeded). */
 int ipc_is_ready(void){
     pthread_mutex_lock(&g_recov_mu); int r=g_rx_ready; pthread_mutex_unlock(&g_recov_mu); return r;

@@ -192,6 +192,8 @@ void bt_info_refresh(void);
 extern const char *const BT_CODEC_LABEL[BT_CODEC_N];
 int ui_bt_codec_frame(const char *mac, char *out, int cap); /* legacy route frame */
 int ui_bt_codec_set(int value);   /* explicit Settings action only; stock saves and applies it */
+void ui_bt_live_codec_observe(const char *mac, int codec_family, int rate_hz);
+void ui_bt_codec_sync_after_route(const char *mac, int choice);
 void bt_show_codec_dialog(void);
 void bt_rx_low_latency_apply(int enable);
 int  bt_rx_low_latency_enabled(void);
@@ -200,6 +202,8 @@ void bt_boot_restore(void);   /* at startup: re-enable BT + arm auto-route if it
 void bt_output_suspend_for_rx(const char *active_route_mac);
 void bt_output_resume_after_rx(int allow_bt_output);
 void bt_notify_player_restart(void);   /* player restarted: forget stale auto-route so the poll re-routes */
+void bt_note_routed(const char *mac);  /* bt_prepare finished routing -> latch autoroute MAC */
+int  bt_note_route_failed(const char *mac); /* bt_prepare failed -> return 1 if toast should be suppressed */
 int  ui_player_settling(void);         /* 1 while the player is still in its post-restart late-init settle window */
 void library_open_album(const char *name);
 void library_open_artist(const char *name);
@@ -267,6 +271,7 @@ int  ui_route_bt(const char *mac);   /* route player audio to a connected BT spe
 int  ui_route_bt_loss_accepted(void); /* outstanding local-output recovery tail */
 int  ui_route_bt_lost(int fresh);         /* confirmed sink loss: automatic local recovery, no resume */
 int  ui_route_analog(void);          /* route player audio back to the local DAC */
+int  ui_route_analog_pause(void);    /* unroute BT -> local DAC without resuming playback */
 void ui_set_dac_filter(int idx);
 void ui_set_replay_gain(int v);   /* 0=Off 1=Track 2=Album */
 void ui_set_gapless(int on);

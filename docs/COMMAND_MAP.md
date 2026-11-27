@@ -92,17 +92,15 @@ SD card, and trigger an MCU reboot. `06b3` also requires `06c1` initialization t
 finish. Play with `0100...` after routing. Return to local output with
 `0666000C0006` followed by `0657000C0008` (`ui_route_analog()`).
 
-diskOS starts BlueALSA via the `/opt/diskos/bin/bluealsa` interceptor wrapper (which resolves ahead of `/usr/bin/bluealsa`), delegating to `bluealsa-custom` (or stock `/usr/bin/bluealsa` as fail-closed fallback):
+diskOS starts BlueALSA via the `/opt/diskos/bin/bluealsa` interceptor wrapper (which resolves ahead of `/usr/bin/bluealsa`), delegating to the first executable `bluealsa-custom` in `/usr/data/bin/bluealsa-custom`, `/usr/data/bluealsa-custom`, or `/opt/diskos/bin/bluealsa-custom` (or stock `/usr/bin/bluealsa` as fail-closed fallback):
 - **Supported Codecs**: `SBC`, `AAC`, `aptX`, `aptX-HD`, and `LDAC` on both **A2DP-source** (transmitting to headphones/speakers) and **A2DP-sink** (Bluetooth Receiver mode from smartphones/PCs).
 - **Dynamic Linking**: `bluealsa-custom` links dynamically against stock `/usr/lib/libaptx.so`, `/usr/lib/libaptxHD.so`, and `/usr/lib/libldacBT_enc.so.2` on the Disc's read-only rootfs, utilizing the device's pre-licensed Qualcomm and Sony decoders.
-- **Low Latency Mode**: When `/usr/data/bt_rx_ll` is set to `1` (via **Settings > Bluetooth > Low Latency Mode**), the wrapper passes `--codec=sbc --codec=-aac --codec=-aptX --codec=-aptX-HD --codec=-ldac` to lock receiving to SBC-only, eliminating buffer lag (~80-120ms total latency) for video and mobile gaming.
-- **Live Codec Observation**: `ui/bt_codec_observe.c` queries BlueALSA over D-Bus to display the active transport codec on Song Info and Mode Lockdown screens.
-- **Receiver Device Management & Connection Commands**:
-  - *List paired audio sources*: `bluetoothctl paired-devices`, cross-referenced with `bluetoothctl info <mac>` to verify `Audio Source` UUID (`0000110a`) and `Icon: phone|computer|tablet`, excluding pure audio sinks (headphones/speakers).
-  - *Force-Connect to target phone*: `( bluetoothctl disconnect <old_mac> 2>/dev/null; sleep 0.2; bluetoothctl connect <target_mac> 2>/dev/null ) &` (asynchronous, bounded).
-  - *Disconnect*: BlueZ D-Bus `org.bluez.Device1.Disconnect` + `bluetoothctl disconnect <mac>`, followed by re-enabling discoverability (`bluetoothctl discoverable on; hciconfig hci0 piscan`).
-  - *Forget paired device*: `bluetoothctl remove <mac>`.
-  - *Force Pairing Mode*: `bluetoothctl discoverable on; bluetoothctl pairable on; hciconfig hci0 piscan`.
+- **Low Latency Mode**: When `/usr/data/bt_rx_ll` is set to `1` (via **Settings > Bluetooth > Low Latency Mode**), the wrapper locks receiving to `--codec=sbc` (all other codecs explicitly disabled), eliminating buffer lag (~80-120ms total latency) for video and mobile gaming. Codec fallback metadata reads `/usr/data/bt_rx_codec` when live `bluealsa-cli info` is unavailable.
+- **Live Codec Observation & Non-Blocking Negotiation**: `ui/bt_codec_observe.c` and `ui/bt_prepare.c` probe BlueALSA capabilities off-thread, invoke `bluealsa-cli codec` when switching source codecs (with graceful fallback to the best supported codec), and send matching `06b3001D<idx><MAC>` frames (for SBC/AAC/LDAC) without blocking the LVGL thread. Persistent pairing uses daemonized `bt-agent -c NoInputNoOutput -d`.
+- **Receiver Device Management & Control Commands**:
+  - *Connection reconciliation & UI*: Mode 2 renders on `SCR_NOWPLAYING` (`bt_view_tick` in `ui/ui.c`) backed by `ui/modelock.c` and `ui/bt_rx_logic.h`, reconciling live BlueALSA `/a2dpsnk/` or `/a2dp-sink/` PCMs, `hcitool con` ACL handles, and BlueZ `Device1.Connected` (ignoring stale `/usr/data/fiio/bt_state`).
+  - *Single-path AVRCP control*: Transport buttons dispatch once per tap asynchronously via `org.bluez.MediaControl1` (falling back to `MediaPlayer1`, and only to `0201000C0000..0002` `/player` IPC if D-Bus fails). In TX mode, `diskos-avrcpd` suppresses `/player` mqueue fallbacks whenever `/tmp/.diskos_bt_rx` or `SUSPEND`/`MODE:RX` is active.
+  - *Force-Connect / Disconnect / Forget / Pairing*: Non-blocking background `dbus-send` / `bluetoothctl` / `hciconfig` sequences managed via `rx_bg_system()`, filtering paired sources via `Audio Source` UUID (`0000110a`) and `Class`.
 
 ## USB DAC OUTPUT (transmit digital audio to an external USB DAC) - [verified] WORKING (2026-09-29)
 Reverse-engineered from stock V2.40/V2.57 firmware (`mq_ui` and `mq_player` host mode handler). In stock firmware this is named "USB AUDIO" under Working Mode. In diskOS this is exposed as "USB Audio" (mode 4 under Working Mode).

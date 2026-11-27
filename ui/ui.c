@@ -3777,6 +3777,13 @@ static void bt_view_create(lv_obj_t *root){
     receiver_show(g_bt_view, 0);
 }
 
+void bt_rx_ui_cleanup(void){
+    bt_disc_spin_set(0);
+    if(s_bt_tag_dlg){ lv_obj_delete_async(s_bt_tag_dlg); s_bt_tag_dlg = NULL; }
+    if(s_bt_dev_dlg){ lv_obj_delete_async(s_bt_dev_dlg); s_bt_dev_dlg = NULL; }
+    if(s_bt_codec_dlg){ lv_obj_delete_async(s_bt_codec_dlg); s_bt_codec_dlg = NULL; }
+}
+
 static void bt_view_tick(void){
     static char s_bt_last_title[128] = {0};
     static char s_bt_last_artist[128] = {0};
@@ -3796,16 +3803,14 @@ static void bt_view_tick(void){
             g_seek_hold_until = 0; g_np_curpath[0] = 0; g_favp_active = 0;
             if(screen_current() == SCR_WORKMODE) screen_show(SCR_NOWPLAYING);
         } else {
-            bt_disc_spin_set(0);
-            if(s_bt_tag_dlg){ lv_obj_delete_async(s_bt_tag_dlg); s_bt_tag_dlg = NULL; }
-            if(s_bt_dev_dlg){ lv_obj_delete_async(s_bt_dev_dlg); s_bt_dev_dlg = NULL; }
-            if(s_bt_codec_dlg){ lv_obj_delete_async(s_bt_codec_dlg); s_bt_codec_dlg = NULL; }
+            bt_rx_ui_cleanup();
             s_bt_last_connected = -1;
             s_bt_last_playing = -1;
             s_bt_last_title[0] = 0;
             s_bt_last_artist[0] = 0;
             home_release_receiver();
             if(!ui_receiver_active()) receiver_show(g_local_view, 1);
+            quicksettings_refresh(ui_transport_playing());
             return;
         }
     }
@@ -3834,7 +3839,7 @@ static void bt_view_tick(void){
             receiver_show(g_bt_btn_devices, 0);
         } else {
             receiver_show(g_bt_ctrl_row, 0);
-            receiver_show(g_bt_btn_devices, 1);
+            receiver_show(g_bt_btn_devices, st.ready);
         }
     }
 
@@ -3848,6 +3853,8 @@ static void bt_view_tick(void){
             set_label_text_changed(g_bt_title, st.dev_name[0] ? st.dev_name : "Connected Device");
         } else if(bt_rx_is_pairing()){
             set_label_text_changed(g_bt_title, tr("Pairing Mode"));
+        } else if(!st.ready){
+            set_label_text_changed(g_bt_title, tr("Turning on Bluetooth..."));
         } else {
             set_label_text_changed(g_bt_title, tr("Ready to Connect"));
         }
@@ -3869,6 +3876,8 @@ static void bt_view_tick(void){
             const char *bname = st.local_name[0] ? st.local_name : "SNOWSKY DISC";
             snprintf(sub, sizeof sub, "%s: '%s'", tr("Pairing Mode"), bname);
             set_label_text_changed(g_bt_sub, sub);
+        } else if(!st.ready){
+            set_label_text_changed(g_bt_sub, "");
         } else {
             char sub[128];
             const char *bname = st.local_name[0] ? st.local_name : "SNOWSKY DISC";

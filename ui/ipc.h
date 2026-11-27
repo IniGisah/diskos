@@ -110,14 +110,12 @@ int  ipc_confirmed_snapshot(unsigned *generation); /* atomic current-generation 
 int  ipc_send_automatic(const char *frame, unsigned generation); /* 0=queued, -1=failed, 1=deferred */
 /* Seek frame sent only while the current track is still the confirmed one with this token; 0=queued, 1=deferred/refused */
 int  ipc_seek_if_current(long ms, unsigned generation, uint64_t token);
-#ifdef DISKOS_TEST_BT_PREPARE
 int ipc_prepare_snapshot(track_state_t *, unsigned *serial, unsigned *playing_frames);
 /* Queue only while the preparation still owns this generation, track token
  * and main-thread transport epoch. Release additionally requires the exact
  * latest complete paused A2; RX cannot change it between the check and send. */
 int ipc_prepare_send(const char *, unsigned generation, uint64_t token, unsigned transport,
                      unsigned report, unsigned playing_frames, int held, int release, unsigned poweroff);
-#endif
 int  ipc_is_ready(void);               /* 1 once the /ui receive queue is open */
 int  ipc_take_send_error(void);        /* 1 (and clears) if a recent send failed */
 void ipc_health_check(void);           /* ~30s: detect player-restart queue recreation (fstat identity) */
