@@ -4,20 +4,27 @@ All notable changes to diskOS are documented here.
 
 Entries follow the Keep a Changelog format, with Added, Changed, and Fixed categories where applicable.
 
-## [1.7.1] - 2026-11-25
+## [1.7.1] - 2026-11-27
 
-Maintenance release fixing Wi-Fi DHCP lease deadlocks and Broadcom power management, A2DP Bluetooth codec negotiation/persistence, and Bluetooth Receiver (Mode 2) handoff and discovery reliability, plus an expanded Wi-Fi UI and on-screen keyboard password visibility toggle.
+Maintenance release fixing Wi-Fi DHCP lease deadlocks and Broadcom power management, A2DP Bluetooth TX/RX state switching, codec sync, and Bluetooth Receiver (Mode 2) readiness and handoff reliability, pointing in-app **Update diskOS** to `IniGisah/diskos`, and expanding Wi-Fi and host unit tests.
 
 ### Added
 
 - **On-Screen Keyboard Password Visibility Toggle** (`ui/kbinput.c`): Eye toggle button between Cancel and Save in password mode with a 1200ms character preview window.
 - **Wi-Fi UI Expansion & Host Unit Tests** (`ui/wifi.c`, `ui/wifi_logic.h`, `ui/tests/wifi_test.c`): Hidden-network join, disconnect, saved-network connect, change-password flow, scrollable network details screen (`SCR_WIFI_INFO`), rescan spinner feedback, and deterministic host unit tests for DHCP lease transitions and Broadcom PM policy.
+- **OTA Release Tooling & Host Bluetooth Tests** (`tools/diskos-ota-release.sh`, `ui/tests/bt_test.c`, `ui/tests/avrcp_test.c`): Added signed 6-asset GitHub OTA bundle generator/verifier (`diskos-ota-*`), `bt_tx_logic.h`/`bt_rx_logic.h`/`bt_avrcp_proto.h`, and deterministic host C tests for A2DP codec/prepare state and AVRCP IPC suppression.
+
+### Changed
+
+- **In-App OTA Update Source** (`ui/ota.h`, `ui/system.h`, `ui/system.c`, `ui/i18n/strings.tsv`): Pointed **Update diskOS** checks and downloads from upstream to `IniGisah/diskos`.
+- **Clean Exit from Bluetooth Receiving** (`ui/main.c`, `ui/bt.c`): Switching from Bluetooth Receiving (Mode 2) back to Local Playback or other sources no longer auto-restores Bluetooth TX output, leaving Bluetooth off until re-enabled by the user.
 
 ### Fixed
 
 - **Wi-Fi DHCP Lease Deadlocks & Broadcom AP6212 Power Management** (`ui/wifi_logic.h`, `ui/wifi.c`, `ui/main.c`): Extracted deterministic DHCP lease state machine to avoid `udhcpc` `SIGUSR2` deadlocks when `wlan0` has no IP, preserve valid boot IPs, enforce a single `udhcpc` instance, and apply Broadcom PM 2 only when screen is dark, idle, and lease-settled.
-- **Bluetooth A2DP Codec Negotiation & Persistence** (`payload/bluealsa`, `ui/bt.c`, `ui/settings.c`, `tests/test_bt_codec.py`): Scoped low-latency SBC-only restriction to receiver mode (`HAS_SOURCE=0`), added aptX-HD/aptX -> AAC -> SBC fallback, switched sink capability probing to synchronous `bt_capture_wait()` with retry and device-limit fallback toast, persisted LDAC quality to `/usr/data/bt_ldac_quality`, and seeded `bt_codec` once from stock `SYSCONFIG` instead of deleting saved `0..4` values on startup.
-- **Bluetooth Receiver (Mode 2) Handoff, Discovery & Source Isolation** (`ui/modelock.c`, `ui/bt.c`, `ui/bt_avrcp.c`, `ui/main.c`, `ui/quicksettings.c`, `ui/ui.c`): Added explicit `bt_rx_enter`/`bt_rx_prepare_exit` and `bt_output_suspend_for_rx`/`bt_output_resume_after_rx` handoff hooks, interlaced inquiry/page scan tuning and ISCAN self-healing for BCM43438, strict A2DP sink PCM filtering, mode-2 guards on AVRCP/BT ops/Quick Settings (allowing BT long-press for paired devices in RX mode), and dialog cleanup on view exit.
+- **Bluetooth TX State Switching, Codec Sync & Route Cleanup** (`ui/bt.c`, `ui/bt_prepare.c`, `ui/bt_prepare.h`, `ui/main.c`, `ui/screens.h`, `ui/bt_codec_observe.c`): Replaced racing async shell teardown with synchronous `rfkill` resets and two-stage `mq_player` `06c1` bring-up, fixed `bt_prepare` route/codec verification stalls with immediate live codec propagation to `SCR_BT`, and paused local playback cleanly via `ui_route_analog_pause()` when Bluetooth is turned off or drops while playing.
+- **Bluetooth A2DP Codec Negotiation & Persistence** (`payload/bluealsa`, `ui/bt.c`, `ui/settings.c`, `tests/test_bt_codec.py`): Scoped low-latency SBC-only restriction to receiver mode (`HAS_SOURCE=0`), added `--profile=a2dp-source` injection only when neither source nor sink is explicit so sink mode stays clean, added aptX-HD/aptX -> AAC -> SBC fallback, switched sink capability probing to synchronous `bt_capture_wait()`, and preserved `bt_codec` settings across startups.
+- **Bluetooth Receiver (Mode 2) Handoff, Readiness & Discovery** (`ui/modelock.c`, `ui/modelock.h`, `ui/bt_avrcp.c`, `src/avrcp/diskos_avrcpd.c`, `ui/ui.c`, `ui/quicksettings.c`): Added `ready` tracking to `bt_rx_state_t` so Mode 2 shows `"Turning on Bluetooth..."` until `bluetoothd --mode=sink`, `bluealsa`, and discoverable/pairable `Adapter1` are live, kept `brcm_patchram_plus`/`hci0` warm on TX -> RX and `!btd_sink` recovery for faster switching, replaced blocking `bluetoothctl` calls with bounded `dbus-send`, debounced transient D-Bus dips, and tightened RX PCM/AVRCP/dialog isolation.
 
 ## [1.7-custom] - 2026-11-19
 
