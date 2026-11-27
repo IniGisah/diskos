@@ -434,10 +434,10 @@ static void bt_ensure_services(void){
         "if ! pidof bluealsa bluealsa-custom >/dev/null 2>&1; then "
         "  BA=bluealsa; [ -x /opt/diskos/bin/bluealsa ] && BA=/opt/diskos/bin/bluealsa; "
         "  \"$BA\" -S --device=hci0 --profile=a2dp-source --sbc-quality=medium "
-        "    --ldac-abr --ldac-quality=standard --codec=sbc --initial-volume=48 >/tmp/bluealsa.log 2>&1 & "
+        "    --ldac-abr --ldac-quality=standard --codec=sbc --initial-volume=48 >/dev/null 2>&1 & "
         "fi; "
         "if command -v bt-agent >/dev/null 2>&1; then "
-        "  pidof bt-agent fiio_bluetoothctl >/dev/null 2>&1 || bt-agent -c NoInputNoOutput -d >/tmp/bt-agent.log 2>&1 & "
+        "  pidof bt-agent fiio_bluetoothctl >/dev/null 2>&1 || bt-agent -c NoInputNoOutput -d >/dev/null 2>&1 & "
         "fi");
 }
 /* Stock V2.57 codec menu: mq_ui 0x455bd0, payloadless VALUE1 0..4.
@@ -573,7 +573,7 @@ int ui_bt_codec_set(int value){
                  "  if [ \"$active\" -eq 0 ] && hciconfig hci0 2>/dev/null | grep -q RUNNING; then "
                  "    killall -9 bluealsa bluealsa-custom 2>/dev/null; "
                  "    sleep 0.2; "
-                 "    /opt/diskos/bin/bluealsa -S --device=hci0 --profile=a2dp-sink -p hfp-ag >/tmp/bluealsa.log 2>&1 & "
+                 "    /opt/diskos/bin/bluealsa -S --device=hci0 --profile=a2dp-sink -p hfp-ag >/dev/null 2>&1 & "
                  "  fi ) >/dev/null 2>&1 &",
                  codec_arg);
         bg_system(cmd);
@@ -628,7 +628,7 @@ void bt_rx_low_latency_apply(int enable){
                   "  if [ \"$active\" -eq 0 ] && hciconfig hci0 2>/dev/null | grep -q RUNNING && pidof bluealsa bluealsa-custom >/dev/null 2>&1; then "
                   "    killall -9 bluealsa bluealsa-custom 2>/dev/null; "
                   "    sleep 0.2; "
-                  "    /opt/diskos/bin/bluealsa -S --device=hci0 --profile=a2dp-sink -p hfp-ag >/tmp/bluealsa.log 2>&1 & "
+                  "    /opt/diskos/bin/bluealsa -S --device=hci0 --profile=a2dp-sink -p hfp-ag >/dev/null 2>&1 & "
                   "  fi ) >/dev/null 2>&1 &");
     } else {
         bg_system("( pidof bluetoothd >/dev/null 2>&1 || exit 0; "
@@ -639,7 +639,7 @@ void bt_rx_low_latency_apply(int enable){
                   "  if [ \"$active\" -eq 0 ] && hciconfig hci0 2>/dev/null | grep -q RUNNING && pidof bluealsa bluealsa-custom >/dev/null 2>&1; then "
                   "    killall -9 bluealsa bluealsa-custom 2>/dev/null; "
                   "    sleep 0.2; "
-                  "    /opt/diskos/bin/bluealsa -S --device=hci0 --profile=a2dp-sink -p hfp-ag >/tmp/bluealsa.log 2>&1 & "
+                  "    /opt/diskos/bin/bluealsa -S --device=hci0 --profile=a2dp-sink -p hfp-ag >/dev/null 2>&1 & "
                   "  fi ) >/dev/null 2>&1 &");
     }
 }
@@ -1062,7 +1062,7 @@ static void bt_enable(void){
         "  rfkill block bluetooth; sleep 0.3; ok || exit; "
         "  rfkill unblock bluetooth; sleep 0.3; ok || exit; "
         "  brcm_patchram_plus --enable_lpm --enable_hci --no2bytes --tosleep 200000 --baudrate 3000000 "
-        "    --patchram /lib/firmware/bt_bcm/BCM4343A1_001.002.009.1026.1055.hcd /dev/ttyS0 >/tmp/patchram.log 2>&1 & "
+        "    --patchram /lib/firmware/bt_bcm/BCM4343A1_001.002.009.1026.1055.hcd /dev/ttyS0 >/dev/null 2>&1 & "
         "  HCI_OK=0; i=0; while [ \"$i\" -lt 24 ]; do ok || exit; "
         "    hciconfig hci0 up 2>/dev/null; "
         "    if hciconfig hci0 2>/dev/null | grep -q RUNNING; then HCI_OK=1; break; fi; "
@@ -1084,7 +1084,7 @@ static void bt_enable(void){
         "    ok || exit; "
         "  fi; "
         "  if [ \"$READY\" -eq 0 ]; then "
-        "    pidof bluetoothd >/dev/null 2>&1 || /usr/project/bluetoothd --noplugin=sap --plugin=a2dp,avrcp --mode=source >/tmp/btd.log 2>&1 & "
+        "    pidof bluetoothd >/dev/null 2>&1 || /usr/project/bluetoothd --noplugin=sap --plugin=a2dp,avrcp --mode=source >/dev/null 2>&1 & "
         "    j=0; while [ \"$j\" -lt 40 ]; do ok || exit; "
         "      dbus-send --system --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus "
         "        org.freedesktop.DBus.NameHasOwner string:org.bluez 2>/dev/null | grep -q 'boolean true' && "
@@ -1099,11 +1099,11 @@ static void bt_enable(void){
         "    if ! pidof bluealsa bluealsa-custom >/dev/null 2>&1; then "
         "      BA=bluealsa; [ -x /opt/diskos/bin/bluealsa ] && BA=/opt/diskos/bin/bluealsa; "
         "      \"$BA\" -S --device=hci0 --profile=a2dp-source --sbc-quality=medium "
-        "        --ldac-abr --ldac-quality=standard --codec=sbc --initial-volume=48 >/tmp/bluealsa.log 2>&1 & "
+        "        --ldac-abr --ldac-quality=standard --codec=sbc --initial-volume=48 >/dev/null 2>&1 & "
         "    fi; "
         "    if ! pidof bt-agent fiio_bluetoothctl >/dev/null 2>&1; then "
         "      if command -v bt-agent >/dev/null 2>&1; then "
-        "        bt-agent -c NoInputNoOutput -d >/tmp/bt-agent.log 2>&1 & "
+        "        bt-agent -c NoInputNoOutput -d >/dev/null 2>&1 & "
         "      else "
         "        bluetoothctl agent on >/dev/null 2>&1; bluetoothctl default-agent >/dev/null 2>&1; "
         "      fi; "
@@ -1111,8 +1111,8 @@ static void bt_enable(void){
         "  fi; "
         "  bluetoothctl pairable on >/dev/null 2>&1; "
         "  pidof diskos-avrcpd >/dev/null 2>&1 || ("
-        "    if [ -x /opt/diskos/bin/diskos-avrcpd ]; then /opt/diskos/bin/diskos-avrcpd >/tmp/avrcpd.log 2>&1 & "
-        "    elif [ -x /usr/data/diskos-avrcpd ]; then /usr/data/diskos-avrcpd >/tmp/avrcpd.log 2>&1 & fi"
+        "    if [ -x /opt/diskos/bin/diskos-avrcpd ]; then /opt/diskos/bin/diskos-avrcpd >/dev/null 2>&1 & "
+        "    elif [ -x /usr/data/diskos-avrcpd ]; then /usr/data/diskos-avrcpd >/dev/null 2>&1 & fi"
         "  ); "
         "  [ \"$(cat /tmp/.diskos_bt_op 2>/dev/null)\" = \"%u\" ] && rm -f /tmp/bt_enabling /tmp/.diskos_bt_hci_up "
         ") >/dev/null 2>&1 &",
@@ -1212,7 +1212,6 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
             }
             if(absent_polls < 10) absent_polls++;
             if(disconnected < 0){
-                fprintf(stderr, "bt autoroute: link_pending=1 disconnected=%d absent=%u\n", disconnected, absent_polls);
                 misses = 0;
                 if(absent_polls < 10){
                     if(t) lv_timer_resume(t);
@@ -1226,7 +1225,6 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
             if(misses == 2){
                 ui_bt_route_prepare_cancel();
                 int rc = ui_route_bt_lost(!recovery_started && !loss_accepted);
-                fprintf(stderr, "bt autoroute: ui_route_bt_lost -> rc=%d (routed='%s')\n", rc, ui_route_mac());
                 recovery_started = 1;
                 if(rc == 0){
                     g_bt_autorouted[0] = 0; misses = absent_polls = 0; missing[0] = 0;
@@ -1268,11 +1266,6 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
     g_autoroute_dirty = 0;
     char *done = strstr(path, "\nDISKOS_LIST_DONE\n");
     if(!done || done[strlen("\nDISKOS_LIST_DONE\n")]){
-        static uint32_t bad_log;
-        if(!bad_log || lv_tick_elaps(bad_log) >= 10000){
-            bad_log = lv_tick_get();
-            fprintf(stderr, "bt autoroute: list-pcms incomplete result=%d len=%zu\n", result, strlen(path));
-        }
         if(misses < 2) misses = 0;
         absent_polls = 0;
         if(t)lv_timer_resume(t);
@@ -1363,7 +1356,6 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
             return;
         }
         int rrc = ui_route_bt_automatic(mac);
-        fprintf(stderr, "bt autoroute: auto(%s) -> %d (routed='%s')\n", mac, rrc, ui_route_mac());
         if(rrc == 0){
             if(!strcasecmp(ui_route_mac(), mac)){
                 bt_note_routed(mac);
@@ -1375,7 +1367,6 @@ static void bt_autoroute_poll_cb(lv_timer_t *t){
 
 static void bt_autoroute_start(void){
     if(g_bt_autoroute_timer) return;
-    fprintf(stderr, "bt autoroute: start (routed='%s')\n", ui_route_mac());
     g_bt_autoroute_timer = lv_timer_create(bt_autoroute_poll_cb, 2000, NULL);
     if(g_bt_autoroute_timer) lv_timer_ready(g_bt_autoroute_timer);
 }
@@ -2661,7 +2652,6 @@ static void bootrestore_poll_cb(lv_timer_t *t){
     bt_stage2_poke();
     if(bt_on()){
         bootrestore_cancel();
-        fprintf(stderr, "bt bootrestore: ready -> ensure services & autoroute\n");
         bt_ensure_services();
         bt_autoroute_start();          /* speaker auto-reconnects -> auto-route routes it */
         ui_status_refresh();
@@ -2684,14 +2674,12 @@ static void bootrestore_poll_cb(lv_timer_t *t){
     }
     if(g_bootrestore_observe && !g_bt_probe_pending){
         g_bootrestore_observe=0;
-        fprintf(stderr, "bt bootrestore: bt_on=0 -> calling bt_enable()\n");
         bt_enable(); /* cancels this observer before starting bring-up */
         g_bootrestore_start=lv_tick_get();
         g_bootrestore_timer=lv_timer_create(bootrestore_poll_cb,500,NULL);
         return;
     }
     if(lv_tick_elaps(g_bootrestore_start) > 32000){       /* patchram + power-on settle */
-        fprintf(stderr, "bt bootrestore: timed out waiting for bt_on()\n");
         bootrestore_cancel();
     }
 }
@@ -2710,7 +2698,6 @@ void bt_boot_restore(void){
     }
     if(bt_on()){ bt_ensure_services(); bt_autoroute_start(); return; }   /* already up (UI restart) */
     g_bootrestore_observe=g_bt_probe_pending;
-    fprintf(stderr, "bt bootrestore: init observe=%d\n", g_bootrestore_observe);
     if(!g_bootrestore_observe)bt_enable();
     g_bootrestore_start = lv_tick_get();
     if(g_bootrestore_timer) lv_timer_del(g_bootrestore_timer);

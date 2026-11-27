@@ -107,8 +107,7 @@ static void spawn_avrcpd(void) {
             for (int fd = 3; fd < 256; fd++) close(fd);
             int in_fd = open("/dev/null", O_RDONLY);
             if (in_fd >= 0) { dup2(in_fd, STDIN_FILENO); if (in_fd > 2) close(in_fd); }
-            int log_fd = open("/tmp/avrcpd.log", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (log_fd < 0) log_fd = open("/dev/null", O_WRONLY);
+            int log_fd = open("/dev/null", O_WRONLY);
             if (log_fd >= 0) {
                 dup2(log_fd, STDOUT_FILENO);
                 dup2(log_fd, STDERR_FILENO);

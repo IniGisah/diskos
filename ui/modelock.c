@@ -591,7 +591,7 @@ static void bt_rx_stack_heal(uint64_t now_ms){
             "rfkill block bluetooth 2>/dev/null; sleep 0.2; "
             "rfkill unblock bluetooth 2>/dev/null; sleep 0.2; "
             "brcm_patchram_plus --enable_lpm --enable_hci --no2bytes --tosleep 200000 --baudrate 3000000 "
-            "  --patchram /lib/firmware/bt_bcm/BCM4343A1_001.002.009.1026.1055.hcd /dev/ttyS0 >/tmp/patchram.log 2>&1 & "
+            "  --patchram /lib/firmware/bt_bcm/BCM4343A1_001.002.009.1026.1055.hcd /dev/ttyS0 >/dev/null 2>&1 & "
             "i=0; while [ \"$i\" -lt 25 ]; do "
             "  [ -e /tmp/.diskos_bt_rx ] || exit 0; "
             "  hciconfig hci0 up 2>/dev/null; "
@@ -621,7 +621,7 @@ static void bt_rx_stack_heal(uint64_t now_ms){
         diskos_trace("bt_rx_stack_heal: restarting bluealsa sink without interrupting bluetoothd");
         rx_bg_system(
             "BA=/opt/diskos/bin/bluealsa; [ -x /usr/data/bluealsa ] && BA=/usr/data/bluealsa; "
-            "$BA -S --device=hci0 --profile=a2dp-sink -p hfp-ag >/tmp/bluealsa.log 2>&1 & "
+            "$BA -S --device=hci0 --profile=a2dp-sink -p hfp-ag >/dev/null 2>&1 & "
             "sleep 0.5; "
             BT_RX_ENABLE_DISCOVERY_SH);
     }

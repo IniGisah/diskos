@@ -1050,11 +1050,6 @@ static void bt_prepare_tick(void){
        !strcmp(g_route_mac, g_bt_prepare.mac)){
         ui_bt_live_codec_observe(g_bt_prepare.mac, (int)g_bt_prepare.observed_codec, 0);
     }
-    if(before != g_bt_prepare.phase) fprintf(stderr,
-        "bt prepare %llu phase=%d->%d gen=%u tx=%u token=%llu pos_seq=%u state=%d report=%u playing=%u\n",
-        (unsigned long long)g_bt_prepare.attempt, before, g_bt_prepare.phase, i.current.player_generation,
-        i.transport, (unsigned long long)i.current.playback_token, i.current.pos_seq,
-        i.report.state, i.report_serial, i.playing_frames);
     if(g_bt_prepare.phase == BP_DONE){
         route_loss_invalidate_seek();
         route_loss_reset(); route_state_save(g_bt_prepare.mac); g_startup_route_checked = 1;
